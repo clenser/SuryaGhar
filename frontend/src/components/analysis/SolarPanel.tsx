@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
-import { analyzeSolar, type SolarResult } from "../../services/analysis";
+import { analyzeSolar, compassDirection, type SolarResult } from "../../services/analysis";
+
+function compassFor(azimuth: number | string | undefined): string {
+  const n = Number(azimuth);
+  return Number.isFinite(n) ? compassDirection(n) : "—";
+}
 
 interface SolarPanelProps {
   latitude: number;
@@ -54,8 +59,19 @@ export function SolarPanel({ latitude, longitude, capacityKwp, onContinue }: Sol
               </span>
             </div>
           )}
+          <dl className="metric-list" aria-label="Recommended orientation">
+            <div>
+              <dt>Recommended orientation</dt>
+              <dd>
+                {compassFor(state.result.selected.azimuth_deg)} · {state.result.selected.azimuth_deg}°
+              </dd>
+            </div>
+            <div>
+              <dt>Recommended tilt</dt>
+              <dd>{state.result.selected.tilt_deg}°</dd>
+            </div>
+          </dl>
           <p className="result-note">
-            Best configuration: tilt {state.result.selected.tilt_deg}°, azimuth {state.result.selected.azimuth_deg}° ·{" "}
             Confidence: {state.result.confidence} · Source: {state.result.resource_provider}
           </p>
           {state.result.candidates.length > 0 && (

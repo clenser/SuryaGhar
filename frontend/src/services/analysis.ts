@@ -45,9 +45,52 @@ export interface PanelLayoutResult {
   capacity_kwp: number;
   usable_area_m2: number;
   total_area_m2: number;
+  occupied_area_m2?: number | null;
+  excluded_area_m2?: number | null;
   footprints: GeoJSON.Feature[];
-  assumptions: Record<string, number | string>;
+  assumptions: Record<string, number | string | boolean | null>;
   warnings: string[];
+  optimization_metadata?: Record<string, number | string | boolean | number[] | null>;
+  panel?: { width_m: number; height_m: number; wattage_w: number } | null;
+  layout?: {
+    panel_count: number;
+    installed_capacity_kwp: number;
+    panels: GeoJSON.Feature[];
+    usable_area_m2: number;
+    occupied_area_m2: number | null;
+  } | null;
+  orientation?: { tilt_deg: number; azimuth_deg: number; compass_direction: string } | null;
+  solar?: {
+    annual_generation_kwh: number | null;
+    specific_yield_kwh_kwp: number | null;
+    optimization_method: string;
+    resource_provider: string;
+    confidence: string;
+  } | null;
+}
+
+export const PANEL_PRESETS = [
+  { id: "standard", name: "Standard residential", wattage_w: 550, width_m: 2.28, height_m: 1.13, note: "550 W · 2.28 × 1.13 m" },
+  { id: "compact", name: "Compact residential", wattage_w: 450, width_m: 2.1, height_m: 1.05, note: "450 W · ~2.10 × 1.05 m" },
+  { id: "higheff", name: "High-efficiency residential", wattage_w: 580, width_m: 2.28, height_m: 1.13, note: "580 W · ~2.28 × 1.13 m" },
+  { id: "custom", name: "Custom (advanced)", wattage_w: 550, width_m: 2.28, height_m: 1.13, note: "Enter exact dimensions" },
+] as const;
+
+export type PanelPresetId = (typeof PANEL_PRESETS)[number]["id"];
+
+export const CAPACITY_PRESETS: Array<{ id: string; label: string; kwp: number | null }> = [
+  { id: "auto", label: "Auto / Best fit", kwp: null },
+  { id: "1kw", label: "1 kW", kwp: 1 },
+  { id: "2kw", label: "2 kW", kwp: 2 },
+  { id: "3kw", label: "3 kW", kwp: 3 },
+  { id: "5kw", label: "5 kW", kwp: 5 },
+  { id: "custom", label: "Custom", kwp: null },
+];
+
+export function compassDirection(azimuthDeg: number): string {
+  const names = ["North", "North-East", "East", "South-East", "South", "South-West", "West", "North-West"];
+  const idx = Math.round(((azimuthDeg % 360) + 360) % 360 / 45) % 8;
+  return names[idx];
 }
 
 export interface SolarResult {
@@ -139,7 +182,16 @@ export function validateSurface(vertices: LngLat[], signal?: AbortSignal): Promi
 
 export function computePanelLayout(
   vertices: LngLat[],
-  spec: { panel_width_m: number; panel_height_m: number; wattage_w: number; row_spacing_m: number; setback_m: number; tilt_deg: number; azimuth_deg: number },
+  spec: {
+    panel_width_m: number;
+    panel_height_m: number;
+    wattage_w: number;
+    row_spacing_m: number | null;
+    setback_m: number;
+    tilt_deg: number | null;
+    azimuth_deg: number | null;
+    target_capacity_kwp?: number | null;
+  },
   signal?: AbortSignal,
 ): Promise<PanelLayoutResult> {
   return post("/panel-layout", { geometry: polygonGeometry(vertices), ...spec }, signal);

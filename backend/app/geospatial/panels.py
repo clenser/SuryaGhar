@@ -28,20 +28,66 @@ from app.geospatial.geometry import (
 from app.geospatial.metrics import analyze_polygon
 
 
+COMPASS_16 = [
+    "North", "North-North-East", "North-East", "East-North-East",
+    "East", "East-South-East", "South-East", "South-South-East",
+    "South", "South-South-West", "South-West", "West-South-West",
+    "West", "West-North-West", "North-West", "North-North-West",
+]
+
+COMPASS_8 = [
+    "North", "North-East", "East", "South-East",
+    "South", "South-West", "West", "North-West",
+]
+
+
+def compass_direction(azimuth_deg: float, detail: bool = False) -> str:
+    """Convert an azimuth (degrees from north) to a compass direction."""
+    names = COMPASS_16 if detail else COMPASS_8
+    idx = int(round((float(azimuth_deg) % 360.0) / (360.0 / len(names)))) % len(names)
+    return names[idx]
+
+
+def derive_row_spacing_m(panel_height_m: float, tilt_deg: float, minimum_m: float = 0.3) -> float:
+    """Derive a sensible inter-row spacing from panel geometry and tilt.
+
+    Uses the tilted plan fall length plus a shade-avoidance allowance that
+    grows with tilt, instead of a blind fixed 0.6 m for every roof.
+    """
+    import math as _math
+
+    fall = float(panel_height_m) * max(_math.cos(_math.radians(float(tilt_deg))), 0.35)
+    spacing = 0.25 + fall * (0.25 + 0.9 * _math.sin(_math.radians(min(max(float(tilt_deg), 0.0), 45.0))))
+    return round(max(spacing, minimum_m), 2)
+
+
+def recommend_orientation(latitude: float) -> dict:
+    """Recommend tilt/azimuth from site latitude (northern hemisphere faces south).
+
+    This is the planning default used when the caller requests AUTO; the full
+    pvlib solar optimisation (estimate_solar) remains authoritative for yield.
+    """
+    lat = float(latitude)
+    tilt = round(min(max(abs(lat) * 0.9 + 2.0, 5.0), 30.0))
+    azimuth = 180.0 if lat >= 0 else 0.0
+    return {"tilt_deg": tilt, "azimuth_deg": azimuth, "method": "latitude_default"}
+
+
 @dataclass
 class PanelConfig:
     """Configuration for panel layout."""
-    width_m: float = 2.0
-    height_m: float = 1.1
-    wattage_w: float = 430.0
+    width_m: float = 2.28
+    height_m: float = 1.13
+    wattage_w: float = 550.0
     setback_m: float = 0.5
     row_spacing_m: float = 0.6
-    min_panel_spacing_m: float = 0.02
+    min_panel_spacing_m: float = 0.03
     orientation: str = "optimize"  # "landscape" | "portrait" | "optimize"
     azimuth_deg: float = 180.0
     tilt_deg: float = 18.0
     maintenance_corridor_m: float = 0.0
     exclusion_zones: list[dict] = field(default_factory=list)  # GeoJSON polygons
+    target_capacity_kwp: float | None = None
 
 
 @dataclass
@@ -245,17 +291,18 @@ def _apply_maintenance_corridor(
 
 def compute_panel_layout(
     geometry: dict,
-    panel_width_m: float = 2.0,
-    panel_height_m: float = 1.1,
-    wattage_w: float = 430.0,
-    row_spacing_m: float = 0.6,
+    panel_width_m: float = 2.28,
+    panel_height_m: float = 1.13,
+    wattage_w: float = 550.0,
+    row_spacing_m: float | None = 0.6,
     setback_m: float = 0.5,
-    tilt_deg: float = 18.0,
-    azimuth_deg: float = 180.0,
-    min_panel_spacing_m: float = 0.02,
+    tilt_deg: float | None = 18.0,
+    azimuth_deg: float | None = 180.0,
+    min_panel_spacing_m: float = 0.03,
     orientation: str = "optimize",
     maintenance_corridor_m: float = 0.0,
     exclusion_zones: Optional[list[dict]] = None,
+    target_capacity_kwp: float | None = None,
 ) -> PanelLayoutResult:
     """Compute optimal panel layout for a polygon.
 
@@ -353,6 +400,23 @@ def compute_panel_layout(
     usable_area = sum(p.area for p in usable_polygons)
     excluded_area = total_area - usable_area
 
+    # AUTO defaults: latitude-based tilt/azimuth when the caller requests AUTO
+    # (None), and derived row spacing when not explicitly provided.
+    _lat = centroid[1]
+    if tilt_deg is None:
+        tilt_deg = recommend_orientation(_lat)["tilt_deg"]
+        tilt_auto = True
+    else:
+        tilt_auto = False
+    if azimuth_deg is None:
+        azimuth_deg = recommend_orientation(_lat)["azimuth_deg"]
+        azimuth_auto = True
+    else:
+        azimuth_auto = False
+    row_spacing_auto = row_spacing_m is None
+    if row_spacing_auto:
+        row_spacing_m = derive_row_spacing_m(panel_height_m, tilt_deg)
+
     config = PanelConfig(
         width_m=panel_width_m,
         height_m=panel_height_m,
@@ -365,6 +429,7 @@ def compute_panel_layout(
         tilt_deg=tilt_deg,
         maintenance_corridor_m=maintenance_corridor_m,
         exclusion_zones=exclusion_zones,
+        target_capacity_kwp=target_capacity_kwp,
     )
 
     # Determine azimuths to test
@@ -405,6 +470,22 @@ def compute_panel_layout(
     else:
         warnings = []
 
+    # Deterministic ordering (south rows first) so target-capacity trimming is stable.
+    verified_panels.sort(key=lambda p: (round(p.centroid.y, 3), round(p.centroid.x, 3)))
+
+    # Target capacity is a planning target, never forced: trim only, never invent panels.
+    target_panels: int | None = None
+    if target_capacity_kwp is not None and wattage_w > 0:
+        target_panels = max(0, int(round(float(target_capacity_kwp) * 1000.0 / float(wattage_w))))
+        if target_panels > 0 and len(verified_panels) > target_panels:
+            verified_panels = verified_panels[:target_panels]
+        elif target_panels > 0 and len(verified_panels) < target_panels:
+            warnings.append(
+                f"Roof geometry fits {len(verified_panels)} panels "
+                f"({round(len(verified_panels) * wattage_w / 1000.0, 2)} kWp); "
+                f"the {float(target_capacity_kwp):g} kW target cannot be fully met here."
+            )
+
     occupied_area = float(unary_union(verified_panels).area) if verified_panels else 0.0
     count = len(verified_panels)
     capacity = count * wattage_w / 1000.0
@@ -421,6 +502,7 @@ def compute_panel_layout(
         warnings.append("Only the first 400 panel outlines are drawn on the map.")
 
     packing_efficiency = occupied_area / usable_area if usable_area > 0 else 0.0
+    _final_az = float(best_metadata.get("azimuth_deg", azimuth_deg))
 
     best_metadata.update({
         "tested_azimuths": test_azimuths,
@@ -429,8 +511,15 @@ def compute_panel_layout(
         "excluded_area_m2": round(excluded_area, 1),
         "setback_m": setback_m,
         "row_spacing_m": row_spacing_m,
+        "row_spacing_auto": row_spacing_auto,
         "min_panel_spacing_m": min_panel_spacing_m,
         "tilt_deg": tilt_deg,
+        "tilt_auto": tilt_auto,
+        "azimuth_auto": azimuth_auto,
+        "compass_direction": compass_direction(_final_az),
+        "compass_direction_detail": compass_direction(_final_az, detail=True),
+        "target_capacity_kwp": target_capacity_kwp,
+        "target_panel_count": target_panels,
     })
 
     return PanelLayoutResult(

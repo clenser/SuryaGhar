@@ -52,13 +52,16 @@ class ValidateResponse(BaseModel):
 
 class PanelLayoutRequest(BaseModel):
     geometry: GeometryInput
-    panel_width_m: float = Field(default=2.0, ge=0.3, le=4.0)
-    panel_height_m: float = Field(default=1.1, ge=0.3, le=3.0)
-    wattage_w: float = Field(default=430.0, ge=100, le=800)
-    row_spacing_m: float = Field(default=0.6, ge=0.0, le=5.0)
+    panel_width_m: float = Field(default=2.28, ge=0.3, le=4.0)
+    panel_height_m: float = Field(default=1.13, ge=0.3, le=3.0)
+    wattage_w: float = Field(default=550.0, ge=100, le=800)
+    # None = AUTO (derived from tilt/panel geometry); explicit 0+ allowed otherwise.
+    row_spacing_m: float | None = Field(default=None, ge=0.0, le=5.0)
     setback_m: float = Field(default=0.5, ge=0.0, le=10.0)
-    tilt_deg: float = Field(default=18.0, ge=0, le=90)
-    azimuth_deg: float = Field(default=180.0, ge=0, le=360)
+    # None = AUTO (latitude default, refined by solar optimisation where available).
+    tilt_deg: float | None = Field(default=None, ge=0, le=90)
+    azimuth_deg: float | None = Field(default=None, ge=0, le=360)
+    target_capacity_kwp: float | None = Field(default=None, ge=0.2, le=1000)
 
 
 class PanelLayoutResponse(BaseModel):
@@ -72,6 +75,10 @@ class PanelLayoutResponse(BaseModel):
     footprints: list[dict]
     assumptions: dict
     warnings: list[str]
+    panel: dict | None = None
+    layout: dict | None = None
+    orientation: dict | None = None
+    solar: dict | None = None
 
 
 class SolarRequest(BaseModel):

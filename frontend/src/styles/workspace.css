@@ -937,20 +937,23 @@
   }
 }
 
-/* ---------- Stage workspace panel ---------- */
+/* ---------- Stage workspace panel ----------
+   Single vertical scroll surface: header/workflow/tabs stay visible, the
+   stage card content scrolls, and bottom actions remain reachable. */
 .stage-panel {
   position: absolute;
   top: var(--space-4);
   left: var(--space-4);
+  bottom: var(--space-4);
   width: 300px;
   max-width: calc(100vw - 2 * var(--space-4));
-  max-height: calc(100vh - var(--status-height) - 2 * var(--space-4));
-  max-height: calc(100dvh - var(--status-height) - 2 * var(--space-4));
+  max-height: calc(100% - 2 * var(--space-4));
   z-index: 9;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
   min-height: 0;
+  height: auto;
 }
 
 .stage-panel > .stage-tabs {
@@ -966,6 +969,44 @@
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
+  padding-bottom: calc(var(--space-4) + env(safe-area-inset-bottom, 0px));
+}
+
+.stage-card__actions {
+  position: sticky;
+  bottom: calc(-1 * var(--space-4));
+  padding: var(--space-2) 0 calc(var(--space-2) + env(safe-area-inset-bottom, 0px));
+  background: linear-gradient(to top, var(--color-map-chrome) 78%, transparent);
+}
+
+/* Compass + map legend overlays (map-native, subtle). */
+.map-legend {
+  position: absolute;
+  left: var(--space-3);
+  top: var(--space-3);
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.map-legend__north,
+.map-legend__azimuth {
+  background: var(--color-map-chrome);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  box-shadow: var(--shadow-float);
+}
+
+.compass {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-2) 0;
 }
 
 .stage-card {
@@ -1251,7 +1292,9 @@
     right: var(--space-3);
     bottom: calc(var(--status-height) + var(--space-3));
     width: auto;
-    max-height: min(52dvh, 52vh);
-    padding-bottom: env(safe-area-inset-bottom);
+    height: auto;
+    max-height: 62dvh;
+    max-height: 62vh;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 }

@@ -28,6 +28,8 @@ interface MapViewProps {
   selectionMode?: SelectionMode;
   vertices?: LngLat[];
   panelFootprints?: FeatureCollection | null;
+  orientation?: { tilt_deg: number; azimuth_deg: number } | null;
+  selectionCentroid?: LngLat | null;
   shadowFC?: FeatureCollection | null;
   onAddVertex?: (point: LngLat) => void;
   onFinishDrawing?: () => void;
@@ -44,7 +46,7 @@ const SOURCE_ERROR_KIND: Record<string, MapErrorEntry["kind"]> = {
 };
 
 export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
-  { layers, onViewChange, onMapError, onReady, selectionMode = "idle", vertices = [], panelFootprints = null, shadowFC = null, onAddVertex, onFinishDrawing, onBeginDrag, onMoveVertex, onDeleteVertex },
+  { layers, onViewChange, onMapError, onReady, selectionMode = "idle", vertices = [], panelFootprints = null, orientation = null, selectionCentroid = null, shadowFC = null, onAddVertex, onFinishDrawing, onBeginDrag, onMoveVertex, onDeleteVertex },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -105,18 +107,38 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
           "circle-stroke-width": 2.5,
         },
       });
+      // Dark PV modules with a thin light frame + small inter-module separation
+      // (separation comes from the min_panel_spacing_m packing gap).
       map.addLayer({
         id: "panel-fill",
         type: "fill",
         source: "panel-footprints",
-        paint: { "fill-color": "#1f3a93", "fill-opacity": 0.55 },
+        paint: { "fill-color": "#101c38", "fill-opacity": 0.88 },
+      });
+      map.addLayer({
+        id: "panel-cell-lines",
+        type: "line",
+        source: "panel-footprints",
+        paint: { "line-color": "#3d5a99", "line-width": 0.4, "line-opacity": 0.5 },
       });
       map.addLayer({
         id: "panel-outline",
         type: "line",
         source: "panel-footprints",
-        paint: { "line-color": "#0d1f4d", "line-width": 1.2 },
+        paint: { "line-color": "#c8d4f0", "line-width": 0.8 },
       });
+      // Recommended azimuth direction arrow (subtle, map-native).
+      if (!map.getSource("orientation-arrow")) {
+        map.addSource("orientation-arrow", { type: "geojson", data: emptyFC() });
+      }
+      if (!map.getLayer("orientation-arrow")) {
+        map.addLayer({
+          id: "orientation-arrow",
+          type: "line",
+          source: "orientation-arrow",
+          paint: { "line-color": "#ffb300", "line-width": 2.5, "line-opacity": 0.9 },
+        });
+      }
       map.addLayer({
         id: "sel-shadows-fill",
         type: "fill",
@@ -149,6 +171,19 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
     const source = map.getSource("sel-shadows") as maplibregl.GeoJSONSource | undefined;
     if (source) source.setData(shadowFC ?? emptyFC());
   }, [shadowFC, loaded]);
+
+  // Recommended azimuth arrow from the panel-field centroid.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !loaded) return;
+    const source = map.getSource("orientation-arrow") as maplibregl.GeoJSONSource | undefined;
+    if (!source) return;
+    if (!orientation || !selectionCentroid || !panelFootprints?.features?.length) {
+      source.setData(emptyFC());
+      return;
+    }
+    source.setData(azimuthArrowFC(selectionCentroid, orientation.azimuth_deg));
+  }, [orientation, selectionCentroid, panelFootprints, loaded]);
 
   // Drawing interactions.
   useEffect(() => {
@@ -355,9 +390,41 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
     <div className="map-view" role="application" aria-label="Satellite map of India. Use mouse, touch, or keyboard arrows to navigate.">
       <div ref={containerRef} className="map-view__canvas" data-mode={selectionMode} />
       {!loaded && <div className="map-view__loading" aria-live="polite">Loading map</div>}
+      <div className="map-legend" aria-hidden="true">
+        <span className="map-legend__north" title="North">N ↑</span>
+        {orientation && panelFootprints?.features?.length ? (
+          <span className="map-legend__azimuth">Panels face {compassShort(orientation.azimuth_deg)} · {Math.round(orientation.azimuth_deg)}°</span>
+        ) : null}
+      </div>
     </div>
   );
 });
+
+function azimuthArrowFC(center: LngLat, azimuthDeg: number): FeatureCollection {
+  // ~25 m arrow extending from the panel-field centroid toward the azimuth.
+  const rad = (azimuthDeg * Math.PI) / 180;
+  const latM = 111320;
+  const lngM = 111320 * Math.max(Math.cos((center.lat * Math.PI) / 180), 0.2);
+  const lenM = 25;
+  const dx = (Math.sin(rad) * lenM) / lngM;
+  const dy = (Math.cos(rad) * lenM) / latM;
+  return {
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        properties: {},
+        geometry: { type: "LineString", coordinates: [[center.lng, center.lat], [center.lng + dx, center.lat + dy]] },
+      },
+    ],
+  };
+}
+
+function compassShort(azimuthDeg: number): string {
+  const names = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+  const idx = Math.round((((azimuthDeg % 360) + 360) % 360) / 45) % 8;
+  return names[idx];
+}
 
 function emptyFC(): FeatureCollection {
   return { type: "FeatureCollection", features: [] };

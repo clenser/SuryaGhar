@@ -68,34 +68,28 @@ export function ValidatePanel({ vertices, onContinue, onRedraw }: ValidatePanelP
             </div>
           )}
 
-          {state.result.evidence && (
+          {state.result.evidence && semanticAvailable(state.result) && (
             <dl className="metric-list" aria-label="Evidence">
               <div>
+                <dt>AI assessment</dt>
+                <dd>{labelFor(state.result.classification)}</dd>
+              </div>
+              <div>
                 <dt>Building evidence</dt>
-                <dd>{Math.round((state.result.evidence.hotosm_building_fraction ?? 0) * 100)}% (HOTOSM)</dd>
+                <dd>{Math.round((state.result.evidence.hotosm_building_fraction ?? 0) * 100)}%</dd>
               </div>
-              <div>
-                <dt>OSM overlap</dt>
-                <dd>
-                  {state.result.evidence.osm?.available
-                    ? `${Math.round((state.result.evidence.osm.overlap_fraction ?? 0) * 100)}%`
-                    : "unavailable"}
-                </dd>
-              </div>
-              <div>
-                <dt>OSM height</dt>
-                <dd>
-                  {state.result.evidence.osm?.median_height_m != null
-                    ? `${state.result.evidence.osm.median_height_m} m`
-                    : state.result.evidence.osm?.available
-                      ? "not tagged"
-                      : "unavailable"}
-                </dd>
-              </div>
-              <div>
-                <dt>Semantic assessment</dt>
-                <dd>{aiValidationLabel(state.result.providers?.vision)}</dd>
-              </div>
+              {state.result.evidence.osm?.available && state.result.evidence.osm.overlap_fraction != null && (
+                <div>
+                  <dt>OSM overlap</dt>
+                  <dd>{Math.round((state.result.evidence.osm.overlap_fraction ?? 0) * 100)}%</dd>
+                </div>
+              )}
+              {state.result.evidence.osm?.median_height_m != null && (
+                <div>
+                  <dt>OSM height</dt>
+                  <dd>{state.result.evidence.osm.median_height_m} m</dd>
+                </div>
+              )}
             </dl>
           )}
 
@@ -110,9 +104,16 @@ export function ValidatePanel({ vertices, onContinue, onRedraw }: ValidatePanelP
           {state.result.components && Object.keys(state.result.components).length > 0 && (
             <details>
               <summary className="result-note" style={{ cursor: "pointer" }}>
-                Technical diagnostics ({state.result.providers?.segmentation ?? "heuristic"})
+                Technical diagnostics · Building segmentation evidence ({state.result.providers?.segmentation ?? "heuristic"})
               </summary>
-              <div className="bar-list" aria-label="Area composition">
+              <p className="result-note">
+                Building segmentation evidence (supporting only — the AI assessment above is authoritative).
+                {state.result.evidence?.osm
+                  ? ` OSM: ${state.result.evidence.osm.available ? `overlap ${Math.round((state.result.evidence.osm.overlap_fraction ?? 0) * 100)}%` : "unavailable"} · `
+                  : " "}
+                {aiValidationLabel(state.result.providers?.vision)} · Segmentation: {state.result.providers?.segmentation ?? "heuristic"}
+              </p>
+              <div className="bar-list" aria-label="Building segmentation evidence">
                 {Object.entries(state.result.components).map(([name, fraction]) => (
                   <div className="bar-list__row" key={name}>
                     <span>{name}</span>

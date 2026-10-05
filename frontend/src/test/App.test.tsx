@@ -37,10 +37,11 @@ describe("App workspace", () => {
     Object.values(mapInstance).forEach((v) => typeof v === "function" && "mockClear" in v && (v as unknown as { mockClear: () => void }).mockClear());
   });
 
-  it("opens to a map-first workspace with the onboarding prompt and search", () => {
+  it("opens to a map-first workspace with the workflow stepper and search", () => {
     render(<App />);
     expect(screen.getByRole("application", { name: /Satellite map of India/ })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Find a property to begin" })).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Analysis workflow" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Find a property to begin" })).not.toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Search location" })).toBeInTheDocument();
     expect(document.querySelector(".status-bar")).toBeTruthy();
   });
@@ -91,6 +92,6 @@ describe("App workspace", () => {
     await userEvent.click(within(testSites).getByRole("button", { name: /Kalna/ }));
     expect(mapInstance.flyTo).toHaveBeenCalled();
     expect(screen.getByRole("region", { name: "Selected location" })).toHaveTextContent("Kalna");
-    expect(document.querySelector(".onboarding")).not.toHaveClass("is-visible");
+    expect(document.querySelector(".onboarding")).toBeNull();
   });
 });

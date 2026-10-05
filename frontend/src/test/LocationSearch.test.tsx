@@ -51,7 +51,7 @@ describe("LocationSearch", () => {
     ));
     render(<LocationSearch onSelect={onSelect} />);
     const input = screen.getByRole("combobox");
-    await userEvent.type(input, "ab");
+    await userEvent.type(input, "abc");
     await screen.findAllByRole("option", {}, { timeout: 2000 });
 
     fireEvent.keyDown(input, { key: "ArrowDown" });

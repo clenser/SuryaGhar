@@ -93,22 +93,98 @@ async def selection_validate(body: ValidateRequest):
 
 @router.post("/panel-layout", response_model=PanelLayoutResponse)
 async def panel_layout(body: PanelLayoutRequest):
-    from app.geospatial.panels import compute_panel_layout
+    from app.geospatial.panels import compute_panel_layout, compass_direction
+    from app.solar.engine import estimate_solar
 
     try:
+        geometry = body.geometry.model_dump()
+        # Resolve AUTO orientation from the solar engine when the caller did not
+        # provide explicit tilt/azimuth. estimate_solar is authoritative for the
+        # recommended angles; the latitude default inside compute_panel_layout
+        # is only the fallback when solar data is unavailable.
+        tilt = body.tilt_deg
+        azimuth = body.azimuth_deg
+        optimization_method = "manual"
+        solar_payload: dict | None = None
+        if tilt is None or azimuth is None:
+            try:
+                from app.geospatial.metrics import analyze_polygon
+
+                metrics = analyze_polygon(geometry)
+                lng, lat = metrics.centroid_lnglat
+                # Probe with 1 kWp; selected angles do not depend on capacity.
+                probe = estimate_solar(lat, lng, 1.0)
+                if probe.selected.get("tilt_deg") is not None:
+                    if tilt is None:
+                        tilt = float(probe.selected["tilt_deg"])
+                    if azimuth is None:
+                        azimuth = float(probe.selected.get("azimuth_deg", 180.0))
+                    optimization_method = (
+                        "pvlib_pvgis" if probe.confidence == "medium" else "benchmark_latitude"
+                    )
+                else:
+                    optimization_method = "latitude_default"
+            except Exception:
+                optimization_method = "latitude_default"
         result = compute_panel_layout(
-            body.geometry.model_dump(),
+            geometry,
             panel_width_m=body.panel_width_m,
             panel_height_m=body.panel_height_m,
             wattage_w=body.wattage_w,
             row_spacing_m=body.row_spacing_m,
             setback_m=body.setback_m,
-            tilt_deg=body.tilt_deg,
-            azimuth_deg=body.azimuth_deg,
+            tilt_deg=tilt if tilt is not None else 18.0,
+            azimuth_deg=azimuth if azimuth is not None else 180.0,
+            target_capacity_kwp=body.target_capacity_kwp,
         )
+        final_tilt = float(result.assumptions.get("tilt_deg", tilt or 18.0))
+        final_az = float(result.assumptions.get("azimuth_deg", azimuth or 180.0))
+        result.optimization_metadata = {
+            **(result.optimization_metadata or {}),
+            "optimization_method": optimization_method,
+        }
+        # Yield estimate for the realised capacity (not the probe).
+        try:
+            from app.geospatial.metrics import analyze_polygon as _metrics
+
+            _m = _metrics(geometry)
+            _lng, _lat = _m.centroid_lnglat
+            if result.capacity_kwp > 0:
+                est = estimate_solar(
+                    _lat, _lng, result.capacity_kwp,
+                    tilts=[final_tilt], azimuths=[final_az],
+                )
+                solar_payload = {
+                    "annual_generation_kwh": est.annual_kwh,
+                    "specific_yield_kwh_kwp": est.specific_yield_kwh_kwp,
+                    "optimization_method": optimization_method,
+                    "resource_provider": est.resource_provider,
+                    "confidence": est.confidence,
+                }
+        except Exception:
+            solar_payload = None
     except ValueError as exc:
         return JSONResponse(status_code=422, content={"error": "invalid_geometry", "detail": str(exc)})
-    return PanelLayoutResponse(**vars(result))
+    payload = vars(result)
+    payload["panel"] = {
+        "width_m": body.panel_width_m,
+        "height_m": body.panel_height_m,
+        "wattage_w": body.wattage_w,
+    }
+    payload["layout"] = {
+        "panel_count": result.panel_count,
+        "installed_capacity_kwp": result.capacity_kwp,
+        "panels": result.footprints,
+        "usable_area_m2": result.usable_area_m2,
+        "occupied_area_m2": result.occupied_area_m2,
+    }
+    payload["orientation"] = {
+        "tilt_deg": final_tilt,
+        "azimuth_deg": final_az,
+        "compass_direction": compass_direction(final_az),
+    }
+    payload["solar"] = solar_payload
+    return PanelLayoutResponse(**payload)
 
 
 @router.post("/solar-analysis", response_model=SolarResponse)

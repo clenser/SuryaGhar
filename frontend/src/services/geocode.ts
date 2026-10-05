@@ -47,11 +47,11 @@ export async function searchLocations(query: string, signal?: AbortSignal): Prom
   }
   if (response.status === 429) {
     console.error(`[API] /geocode 429`, await response.json().catch(() => null));
-    throw new GeocodeError("Location search is temporarily rate-limited. Please try again in a moment.", "server");
+    throw new GeocodeError("Location search is temporarily unavailable.", "server");
   }
   if (response.status >= 500) {
     console.error(`[API] /geocode HTTP ${response.status}`, await response.json().catch(() => null));
-    throw new GeocodeError("Location search failed on the server.", "server");
+    throw new GeocodeError("Location search is temporarily unavailable.", "server");
   }
   if (!response.ok) {
     console.error(`[API] /geocode HTTP ${response.status}`, await response.json().catch(() => null));

@@ -32,6 +32,7 @@ export default function App() {
   const [panelFootprints, setPanelFootprints] = useState<GeoJSON.FeatureCollection | null>(null);
   const [shadowFC, setShadowFC] = useState<GeoJSON.FeatureCollection | null>(null);
   const [capacityKwp, setCapacityKwp] = useState(0);
+  const [designOrientation, setDesignOrientation] = useState<{ tilt_deg: number; azimuth_deg: number } | null>(null);
 
   // Selection cleared -> reset overlays, capacity, and the current stage so the UI never
   // shows a dead-end stage panel.
@@ -41,9 +42,12 @@ export default function App() {
       setPanelFootprints(null);
       setShadowFC(null);
       setCapacityKwp(0);
+      setDesignOrientation(null);
     }
   }, [selection.mode]);
 
+  // Location search only updates the selected place + camera. SEARCHING is not a
+  // workflow stage: selecting/closing the search popup must never mutate `stage`.
   const handleSelectPlace = useCallback((next: LocationResult) => {
     setPlace(next);
     if (next.bounds && next.bounds.north - next.bounds.south > 0.02) {
@@ -52,6 +56,14 @@ export default function App() {
       mapRef.current?.flyToPlace(next.longitude, next.latitude, next.locality ? 15.5 : 15);
     }
   }, []);
+
+  const handleLayoutResult = useCallback(
+    (footprints: GeoJSON.FeatureCollection | null, orientation?: { tilt_deg: number; azimuth_deg: number } | null) => {
+      setPanelFootprints(footprints);
+      setDesignOrientation(orientation ?? null);
+    },
+    [],
+  );
 
   // Advanced controls and diagnostics live in the layers panel, so turning advanced on also opens it.
   const handleAdvancedToggle = useCallback(() => {
@@ -83,7 +95,8 @@ export default function App() {
 
   const showBanner = imageryFailed && !bannerDismissed;
 
-  // Workflow progress: stages before the current one are marked complete.
+  // Workflow progress derives from explicit app state only (place + selection +
+  // stage). Transient search-popup state (open/closed, Escape/X) never feeds it.
   const stageOrder: Stage[] = ["select", "validate", "design", "solar", "site"];
   const workflowStep = !place
     ? 0
@@ -113,6 +126,12 @@ export default function App() {
           selectionMode={selection.mode}
           vertices={selection.vertices}
           panelFootprints={panelFootprints}
+          orientation={designOrientation}
+          selectionCentroid={
+            selection.metrics
+              ? { lng: selection.metrics.centroid.lng, lat: selection.metrics.centroid.lat }
+              : null
+          }
           shadowFC={shadowFC}
           onAddVertex={selection.addVertex}
           onFinishDrawing={selection.finishDrawing}
@@ -159,7 +178,7 @@ export default function App() {
           {stage === "design" && selection.vertices.length >= 3 && (
             <DesignPanel
               vertices={selection.vertices}
-              onResult={setPanelFootprints}
+              onResult={handleLayoutResult}
               onContinue={(kwp) => {
                 setCapacityKwp(kwp);
                 setStage("solar");
