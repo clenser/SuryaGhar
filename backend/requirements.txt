@@ -13,3 +13,5 @@ google-genai==2.25.0
 
 affine==3.0.1
 onnxruntime==1.23.2
+Pillow==11.3.0
+numpy==2.2.6
