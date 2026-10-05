@@ -8,7 +8,9 @@ interface ValidatePanelProps {
   onRedraw: () => void;
 }
 
-/** Stage 2: surface validation (segmentation + optional Groq review). */
+/** Stage 2: surface assessment. Single card: classification, analysis
+ *  confidence, building evidence, site interpretation, imagery, actions.
+ *  Provider/model terminology stays out of the primary UI. */
 export function ValidatePanel({ vertices, onContinue, onRedraw }: ValidatePanelProps) {
   const [state, setState] = useState<
     { kind: "loading" } | { kind: "error"; message: string } | { kind: "ok"; result: ValidationResult }
@@ -53,65 +55,56 @@ export function ValidatePanel({ vertices, onContinue, onRedraw }: ValidatePanelP
       {state.kind === "ok" && (
         <>
           {semanticAvailable(state.result) ? (
-            <div className="result-hero">
-              <span className="result-hero__value">{labelFor(state.result.classification)}</span>
-              <span className="result-hero__label">
-                AI assessment · {Math.round(state.result.confidence * 100)}% confidence
-                {state.result.confidence_detail?.overall_level ? ` (${String(state.result.confidence_detail.overall_level)})` : ""} ·{" "}
-                {Math.round(state.result.coverage * 100)}% looks suitable for solar
-              </span>
-            </div>
+            <>
+              <div className="result-hero">
+                <span className="result-hero__value">{labelFor(state.result.classification)}</span>
+                <span className="result-hero__label">
+                  Analysis confidence · {Math.round(state.result.confidence * 100)}%
+                </span>
+                {isSuitable(state.result.classification) && (
+                  <span className="result-hero__label">Suitable for solar installation</span>
+                )}
+              </div>
+
+              <dl className="metric-list" aria-label="Assessment metrics">
+                <div>
+                  <dt>Surface</dt>
+                  <dd>{labelFor(state.result.classification)}</dd>
+                </div>
+                <div>
+                  <dt title="Estimated proportion of the selected area identified as building footprint.">
+                    Building evidence
+                  </dt>
+                  <dd title="Estimated proportion of the selected area identified as building footprint.">
+                    {Math.round((state.result.evidence?.hotosm_building_fraction ?? 0) * 100)}%
+                  </dd>
+                </div>
+              </dl>
+
+              {state.result.evidence?.vision?.reason && (
+                <p className="stage-card__body">{state.result.evidence.vision.reason}</p>
+              )}
+            </>
           ) : (
             <div className="stage-card__warning" role="status">
-              <strong>Surface assessment unavailable.</strong> AI semantic validation did not complete, so this
-              selection has not been classified. Pixel and building-model data below are diagnostics only.
+              <strong>Surface assessment unavailable.</strong> The selected area could not be
+              classified, so no suitability result is shown.
             </div>
-          )}
-
-          {state.result.evidence && semanticAvailable(state.result) && (
-            <dl className="metric-list" aria-label="Evidence">
-              <div>
-                <dt>AI assessment</dt>
-                <dd>{labelFor(state.result.classification)}</dd>
-              </div>
-              <div>
-                <dt>Building evidence</dt>
-                <dd>{Math.round((state.result.evidence.hotosm_building_fraction ?? 0) * 100)}%</dd>
-              </div>
-              {state.result.evidence.osm?.available && state.result.evidence.osm.overlap_fraction != null && (
-                <div>
-                  <dt>OSM overlap</dt>
-                  <dd>{Math.round((state.result.evidence.osm.overlap_fraction ?? 0) * 100)}%</dd>
-                </div>
-              )}
-              {state.result.evidence.osm?.median_height_m != null && (
-                <div>
-                  <dt>OSM height</dt>
-                  <dd>{state.result.evidence.osm.median_height_m} m</dd>
-                </div>
-              )}
-            </dl>
-          )}
-
-          {state.result.evidence?.vision?.reason && (
-            <p className="result-note">{state.result.evidence.vision.reason}</p>
-          )}
-
-          {state.result.evidence?.supporting?.note && (
-            <p className="result-note">Supporting evidence: {state.result.evidence.supporting.note}</p>
           )}
 
           {state.result.components && Object.keys(state.result.components).length > 0 && (
             <details>
               <summary className="result-note" style={{ cursor: "pointer" }}>
-                Technical diagnostics · Building segmentation evidence ({state.result.providers?.segmentation ?? "heuristic"})
+                Technical details
               </summary>
               <p className="result-note">
-                Building segmentation evidence (supporting only — the AI assessment above is authoritative).
-                {state.result.evidence?.osm
-                  ? ` OSM: ${state.result.evidence.osm.available ? `overlap ${Math.round((state.result.evidence.osm.overlap_fraction ?? 0) * 100)}%` : "unavailable"} · `
-                  : " "}
-                {aiValidationLabel(state.result.providers?.vision)} · Segmentation: {state.result.providers?.segmentation ?? "heuristic"}
+                Building segmentation evidence (supporting only — the classification above is
+                authoritative and is never derived from these pixel shares).
+                {state.result.evidence?.osm?.available &&
+                  state.result.evidence.osm.overlap_fraction != null &&
+                  ` Map building overlap: ${Math.round((state.result.evidence.osm.overlap_fraction ?? 0) * 100)}%.`}
+                {state.result.evidence?.osm?.median_height_m != null &&
+                  ` Map building height: ${state.result.evidence.osm.median_height_m} m.`}
               </p>
               <div className="bar-list" aria-label="Building segmentation evidence">
                 {Object.entries(state.result.components).map(([name, fraction]) => (
@@ -124,12 +117,19 @@ export function ValidatePanel({ vertices, onContinue, onRedraw }: ValidatePanelP
                 </div>
               ))}
               </div>
+              {state.result.providers && (
+                <p className="result-note">
+                  Segmentation: {state.result.providers.segmentation ?? "heuristic"}
+                  {state.result.providers.segmentation_model ? ` (${state.result.providers.segmentation_model})` : ""} ·
+                  Imagery: {state.result.providers.imagery}
+                </p>
+              )}
             </details>
           )}
 
           {state.result.images && (
             <>
-              <div className="stage-tabs" role="tablist" aria-label="Imagery views">
+              <div className="stage-tabs stage-tabs--compact" role="tablist" aria-label="Imagery views">
                 {(["original", "overlay", "mask"] as const).map((v) => (
                   <button key={v} role="tab" aria-selected={view === v} className={view === v ? "is-active" : ""} onClick={() => setView(v)}>
                     {v === "original" ? "Original" : v === "overlay" ? "Overlay" : "Mask"}
@@ -144,24 +144,9 @@ export function ValidatePanel({ vertices, onContinue, onRedraw }: ValidatePanelP
             </>
           )}
 
-          {state.result.warnings.map((w) => (
+          {visibleWarnings(state.result).map((w) => (
             <p className="stage-card__warning" key={w}>{w}</p>
           ))}
-          {state.result.providers && (
-            <p className="result-note">
-              {aiValidationLabel(state.result.providers.vision)} · Imagery: {state.result.providers.imagery}
-            </p>
-          )}
-          {state.result.limitations && (
-            <details>
-              <summary className="result-note" style={{ cursor: "pointer" }}>Why this may be uncertain</summary>
-              <ul className="result-note">
-                {state.result.limitations.map((l) => (
-                  <li key={l}>{l}</li>
-                ))}
-              </ul>
-            </details>
-          )}
 
           <div className="stage-card__actions">
             <button type="button" className="btn" onClick={onRedraw}>Review selection</button>
@@ -178,10 +163,14 @@ function semanticAvailable(result: ValidationResult): boolean {
   return result.providers?.vision === "groq" || result.providers?.vision === "gemini_fallback";
 }
 
-function aiValidationLabel(vision: string | undefined): string {
-  if (vision === "groq") return "AI validation: Groq Vision";
-  if (vision === "gemini_fallback") return "AI validation: Gemini Vision (fallback)";
-  return "AI validation: unavailable (no surface classification made)";
+function isSuitable(classification: string): boolean {
+  return classification === "roof" || classification === "usable_ground";
+}
+
+/** Warnings exclude the site interpretation, which is already shown once above. */
+function visibleWarnings(result: ValidationResult): string[] {
+  const reason = result.evidence?.vision?.reason;
+  return result.warnings.filter((w) => !reason || w !== reason);
 }
 
 function labelFor(classification: string): string {

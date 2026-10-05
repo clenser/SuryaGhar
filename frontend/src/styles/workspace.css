@@ -1257,6 +1257,22 @@
   color: var(--color-text);
 }
 
+/* Compact, lighter variant for small segmented controls (e.g. imagery views). */
+.stage-tabs--compact {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border-radius: var(--radius-md);
+  box-shadow: none;
+}
+
+.stage-tabs--compact button {
+  flex: none;
+  height: 24px;
+  padding: 0 10px;
+  font-weight: 500;
+}
+
 /* Completed workflow steps stay visible but recede behind the current stage. */
 .stage-tabs button.is-complete {
   color: var(--color-text);

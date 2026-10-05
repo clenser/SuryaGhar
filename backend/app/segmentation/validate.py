@@ -168,6 +168,36 @@ def _overlay_mask_only(mask: np.ndarray, classes: list[str]) -> np.ndarray:
     return color
 
 
+def _polygon_building_fraction(seg_result, polygon_px: list, width: int, height: int) -> float:
+    """Share of building-mask pixels inside the selected polygon.
+
+    Falls back to the crop-wide class fraction only when the polygon cannot be
+    rasterized (too few points) or the mask has no building-like class.
+    """
+    classes = list(seg_result.classes or [])
+    target_idx = None
+    for name in ("building", "roof"):
+        if name in classes:
+            target_idx = classes.index(name)
+            break
+    if target_idx is None or len(polygon_px) < 3 or width <= 0 or height <= 0:
+        fractions = seg_result.class_fractions or {}
+        return float(fractions.get("building", fractions.get("roof", 0.0)))
+    try:
+        from PIL import Image as _Image
+        from PIL import ImageDraw as _ImageDraw
+
+        raster = _Image.new("L", (width, height), 0)
+        _ImageDraw.Draw(raster).polygon([(float(x), float(y)) for x, y in polygon_px], fill=1)
+        inside = np.asarray(raster, dtype=bool)
+        if not inside.any():
+            return 0.0
+        return float(np.mean(np.asarray(seg_result.mask)[inside] == target_idx))
+    except Exception:
+        fractions = seg_result.class_fractions or {}
+        return float(fractions.get("building", fractions.get("roof", 0.0)))
+
+
 async def validate_surface(geometry: dict) -> dict:
     """Returns the structured validation payload for the API and UI.
 
@@ -373,7 +403,10 @@ async def validate_surface(geometry: dict) -> dict:
     logger.info("validate: vision done provider=%s; building response", vision_label)
 
     # HOTOSM / OSM / pixel heuristics are supporting evidence only.
-    hotosm_building = seg_result.class_fractions.get("building", seg_result.class_fractions.get("roof", 0.0))
+    # Building evidence is the share of building-mask pixels *inside the selected
+    # polygon* (predicted_building_pixels_inside_polygon / polygon_pixels), not a
+    # crop-wide fraction and never inflated by vision/OSM/confidence signals.
+    hotosm_building = _polygon_building_fraction(seg_result, pts, w, h)
     osm_overlap = osm_evidence.get("overlap_fraction")
     supporting = {
         "hotosm_building_fraction": round(float(hotosm_building), 3),

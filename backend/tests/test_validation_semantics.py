@@ -105,7 +105,11 @@ def test_ai_confidence_is_not_raised_by_supporting_evidence(monkeypatch):
     result = asyncio.run(validate_module.validate_surface(SQUARE))
 
     assert result["confidence"] == 0.55
-    assert result["evidence"]["supporting"]["hotosm_building_fraction"] == 0.6
+    # Building evidence is restricted to the selected polygon: the stub mask is
+    # building-class across the whole polygon interior, so the fraction is 1.0
+    # (not the crop-wide 0.6), and it must not inflate the AI confidence above.
+    assert result["evidence"]["supporting"]["hotosm_building_fraction"] == 1.0
+    assert result["evidence"]["hotosm_building_fraction"] == 1.0
     assert result["evidence"]["supporting"]["osm_overlap_fraction"] == 0.9
 
 
@@ -122,6 +126,36 @@ def test_no_ai_providers_reports_unavailable_not_heuristic_class(monkeypatch):
     assert any("Semantic surface validation could not be completed" in w for w in result["warnings"])
     # Building pixels remain available as diagnostics.
     assert result["components"]["building"] == 0.6
+
+
+def test_building_evidence_measures_polygon_mask_overlap_only(monkeypatch):
+    """Building evidence must be ~0 when the polygon avoids building pixels,
+    even with a roof classification and strong OSM overlap: it must never be
+    inflated by vision results, OSM data, or classification confidence."""
+    _install_stubs(
+        monkeypatch,
+        {
+            "primary_class": "rooftop",
+            "confidence": 0.9,
+            "is_suitable_for_solar": True,
+            "reason": "Roof.",
+            "class_fractions": {"rooftop": 0.9},
+            "provider": "groq",
+            "model": "vision-model",
+        },
+    )
+    # Right-hand side of the stub crop: stub mask is non-building there.
+    elsewhere = {
+        "type": "Polygon",
+        "coordinates": [[[88.3685, 22.5726], [88.3695, 22.5726], [88.3695, 22.5731], [88.3685, 22.5731], [88.3685, 22.5726]]],
+    }
+
+    result = asyncio.run(validate_module.validate_surface(elsewhere))
+
+    assert result["classification"] == "roof"
+    assert result["confidence"] == 0.9
+    assert result["evidence"]["hotosm_building_fraction"] == 0.0
+    assert result["evidence"]["supporting"]["hotosm_building_fraction"] == 0.0
 
 
 def test_coverage_is_zero_without_ai_class_fractions(monkeypatch):
