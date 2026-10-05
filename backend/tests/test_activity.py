@@ -150,3 +150,110 @@ def test_resolve_activity_path_prefers_env(monkeypatch, tmp_path):
     monkeypatch.setenv("ACTIVITY_FILE", str(tmp_path / "custom.json"))
     assert resolve_activity_path() == tmp_path / "custom.json"
     assert resolve_activity_path(explicit="/x/y.json").name == "y.json"
+
+
+class FakeSSMClient:
+    """In-memory stand-in for the boto3 SSM client (no AWS, no network)."""
+
+    def __init__(self, fail: bool = False):
+        self.calls: list[dict] = []
+        self.fail = fail
+
+    def put_parameter(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.fail:
+            raise RuntimeError("ssm exploded")
+        return {"Version": 1}
+
+
+def _use_fake_ssm(monkeypatch, fake):
+    import app.core.activity as activity_module
+
+    monkeypatch.setattr(activity_module, "_get_ssm_client", lambda: fake)
+    return fake
+
+
+def test_tracked_request_updates_file_and_ssm(monkeypatch, tmp_path):
+    from app.core.activity import publish_activity_ssm
+
+    target = _use_tmp_file(monkeypatch, tmp_path)
+    fake = _use_fake_ssm(monkeypatch, FakeSSMClient())
+
+    r = client.post("/selection/metrics", json={"geometry": SQUARE})
+    assert r.status_code == 200
+
+    stored = read_last_activity()
+    assert stored is not None
+    assert len(fake.calls) == 1
+    call = fake.calls[0]
+    assert call["Name"] == "/suryaghar/last_activity"
+    assert call["Type"] == "String"
+    assert call["Overwrite"] is True
+    assert call["Value"] == stored.isoformat()
+    assert publish_activity_ssm(stored.isoformat()) is True
+
+
+def test_excluded_requests_touch_neither_file_nor_ssm(monkeypatch, tmp_path):
+    target = _use_tmp_file(monkeypatch, tmp_path)
+    fake = _use_fake_ssm(monkeypatch, FakeSSMClient())
+
+    assert client.get("/health").status_code == 200
+    assert client.get("/config").status_code == 200
+    client.options(
+        "/selection/validate",
+        headers={
+            "Origin": "https://surya-ghar.vercel.app",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert not target.exists()
+    assert fake.calls == []
+
+
+def test_ssm_failure_does_not_fail_request(monkeypatch, tmp_path):
+    target = _use_tmp_file(monkeypatch, tmp_path)
+    fake = _use_fake_ssm(monkeypatch, FakeSSMClient(fail=True))
+
+    r = client.post("/selection/metrics", json={"geometry": SQUARE})
+    assert r.status_code == 200
+    assert "area_m2" in r.json()
+    # File sink still written; SSM failure only logged.
+    assert read_last_activity() is not None
+    assert len(fake.calls) == 1
+
+
+def test_configured_ssm_parameter_name_respected(monkeypatch, tmp_path):
+    from app.core.activity import publish_activity_ssm, resolve_ssm_parameter
+
+    _use_tmp_file(monkeypatch, tmp_path)
+    fake = _use_fake_ssm(monkeypatch, FakeSSMClient())
+    monkeypatch.setenv("ACTIVITY_SSM_PARAMETER", "/custom/activity")
+
+    assert resolve_ssm_parameter() == "/custom/activity"
+    assert publish_activity_ssm("2026-01-01T00:00:00+00:00") is True
+    assert fake.calls[0]["Name"] == "/custom/activity"
+    assert publish_activity_ssm("x", parameter="/explicit/name") is True
+    assert fake.calls[1]["Name"] == "/explicit/name"
+
+
+def test_ssm_client_factory_handles_missing_boto3(monkeypatch):
+    """Without boto3 installed, the factory returns None (cached), never raises."""
+    import builtins
+    import app.core.activity as activity_module
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "boto3":
+            raise ImportError("No module named 'boto3'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    monkeypatch.setattr(activity_module, "_SSM_CLIENT", None)
+    monkeypatch.setattr(activity_module, "_SSM_CLIENT_READY", False)
+
+    from app.core.activity import _get_ssm_client, publish_activity_ssm
+
+    assert _get_ssm_client() is None
+    assert _get_ssm_client() is None  # cached, still no raise
+    assert publish_activity_ssm("2026-01-01T00:00:00+00:00") is False

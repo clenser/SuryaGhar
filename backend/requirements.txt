@@ -15,6 +15,9 @@ affine==3.0.1
 onnxruntime==1.23.2
 Pillow==11.3.0
 numpy==2.2.6
+# SSM activity publishing for EC2 auto-stop (boto3 is imported lazily; the
+# app starts and all tests run without it installed).
+boto3==1.43.108
 
 # SAM 2.1 Tiny debugging/comparison (optional at runtime: all imports are lazy,
 # the app starts without these installed). CPU-only wheels via the PyTorch CPU
