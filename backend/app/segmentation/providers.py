@@ -50,6 +50,67 @@ def container_memory_limit_mb() -> float | None:
     return None
 
 
+def host_total_memory_mb() -> float | None:
+    """Total physical system RAM in MB, or None when it cannot be determined.
+
+    Dependency-free (no psutil): Windows via GlobalMemoryStatusEx, Linux via
+    /proc/meminfo, macOS via sysctl. Used only when no container cap applies,
+    i.e. local development machines.
+    """
+    try:
+        import platform as _platform
+        import subprocess as _subprocess
+
+        system = _platform.system()
+        if system == "Windows":
+            import ctypes as _ctypes
+
+            class _MemStatus(_ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", _ctypes.c_ulong),
+                    ("dwMemoryLoad", _ctypes.c_ulong),
+                    ("ullTotalPhys", _ctypes.c_ulonglong),
+                    ("ullAvailPhys", _ctypes.c_ulonglong),
+                    ("ullTotalPageFile", _ctypes.c_ulonglong),
+                    ("ullAvailPageFile", _ctypes.c_ulonglong),
+                    ("ullTotalVirtual", _ctypes.c_ulonglong),
+                    ("ullAvailVirtual", _ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", _ctypes.c_ulonglong),
+                ]
+
+            status = _MemStatus()
+            status.dwLength = _ctypes.sizeof(_MemStatus)
+            if _ctypes.windll.kernel32.GlobalMemoryStatusEx(_ctypes.byref(status)):
+                return float(status.ullTotalPhys) / (1024 * 1024)
+            return None
+        if system == "Linux":
+            with open("/proc/meminfo", "r", encoding="utf-8") as fh:
+                for line in fh:
+                    if line.startswith("MemTotal:"):
+                        kb = float(line.split()[1])
+                        return kb / 1024
+            return None
+        if system == "Darwin":
+            out = _subprocess.check_output(["sysctl", "-n", "hw.memsize"], timeout=5).decode().strip()
+            return float(int(out)) / (1024 * 1024)
+    except Exception:
+        return None
+    return None  # non Windows/Linux/macOS platform
+
+
+def effective_memory_limit_mb() -> float | None:
+    """RAM available for the admission check, in MB.
+
+    Prefers the container cap when one applies (production guard); otherwise
+    falls back to total host RAM (local development). None only when neither
+    can be determined.
+    """
+    capped = container_memory_limit_mb()
+    if capped is not None:
+        return capped
+    return host_total_memory_mb()
+
+
 @dataclass(frozen=True)
 class SegmentationResult:
     """Result of a segmentation operation.

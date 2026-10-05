@@ -1,9 +1,10 @@
 import { useCallback, useState } from "react";
 import type { LayerSettings, MapErrorEntry, MapViewState } from "../types";
 
+/** Satellite-first defaults: imagery on, roads/labels and buildings off. */
 export const DEFAULT_LAYERS: LayerSettings = {
   satelliteOpacity: 1,
-  contextOpacity: 1,
+  contextOpacity: 0,
   buildings3d: false,
   terrain: false,
   terrainExaggeration: 1.2,

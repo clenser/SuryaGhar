@@ -9,6 +9,7 @@ const base = {
   layersOpen: false,
   terrainOn: false,
   buildingsOn: false,
+  onLocate: () => {},
   onZoomIn: () => {},
   onZoomOut: () => {},
   onResetNorth: () => {},
@@ -19,8 +20,10 @@ const base = {
 
 describe("MapControls", () => {
   it("wires every button to its handler", async () => {
-    const handlers = { onZoomIn: vi.fn(), onZoomOut: vi.fn(), onTogglePitch: vi.fn(), onToggleTerrain: vi.fn(), onToggleLayers: vi.fn() };
+    const handlers = { onLocate: vi.fn(), onZoomIn: vi.fn(), onZoomOut: vi.fn(), onTogglePitch: vi.fn(), onToggleTerrain: vi.fn(), onToggleLayers: vi.fn() };
     render(<MapControls {...base} {...handlers} />);
+    await userEvent.click(screen.getByRole("button", { name: "Current position" }));
+    expect(handlers.onLocate).toHaveBeenCalledTimes(1);
     await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
     await userEvent.click(screen.getByRole("button", { name: "Zoom out" }));
     await userEvent.click(screen.getByRole("button", { name: "Toggle 3D perspective" }));

@@ -97,6 +97,7 @@ export function LocationSearch({ onSelect }: LocationSearchProps) {
         <Search className="search__icon" size={16} aria-hidden="true" strokeWidth={1.75} />
         <input
           ref={inputRef}
+          id="location-search-input"
           className="search__input"
           type="search"
           inputMode="search"

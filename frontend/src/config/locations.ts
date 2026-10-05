@@ -13,3 +13,17 @@ export const INDIAN_TEST_SITES: Array<{ id: string; label: string; kind: string;
 ];
 
 export const INDIA_VIEW = { center: { lng: 82.5, lat: 22.5 }, zoom: 4.2, bearing: 0, pitch: 0 };
+
+/** Default initial view: Kolkata at neighbourhood zoom for rooftop work. */
+export const KOLKATA_VIEW = { center: { lng: 88.3639, lat: 22.5726 }, zoom: 12.5, bearing: 0, pitch: 0 };
+
+/** Default initial location (replaced as soon as the user searches elsewhere). */
+export const KOLKATA_PLACE: LocationResult = {
+  name: "Kolkata",
+  locality: null,
+  state: "West Bengal",
+  country: "India",
+  latitude: 22.5726,
+  longitude: 88.3639,
+  bounds: null,
+};

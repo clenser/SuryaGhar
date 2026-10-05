@@ -47,6 +47,9 @@ class ValidateResponse(BaseModel):
     warnings: list[str]
     limitations: list[str] | None = None
     providers: dict | None = None
+    # Segmentation benchmark block: which model ran, user-facing name, actual
+    # measured inference seconds (monotonic, inference only), actual device.
+    segmentation: dict | None = None
     ai: dict | None = None
     confidence_detail: dict | None = None
     legacy_confidence: float | None = None

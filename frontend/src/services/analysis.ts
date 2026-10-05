@@ -17,6 +17,12 @@ export interface ValidationResult {
   providers: { imagery: string; vision: string; segmentation?: string; segmentation_model?: string } | null;
   ai?: { provider: string | null; model: string | null; primary_class: string | null; is_suitable_for_solar: boolean | null } | null;
   confidence_detail?: { overall_level?: string; overall_score?: number; stages?: Array<Record<string, unknown>>; limitations?: string[] } | null;
+  segmentation?: {
+    model: string;
+    display_name: string;
+    inference_time_seconds: number;
+    device: string;
+  } | null;
 evidence?: {
       semantic_available?: boolean;
       hotosm_building_fraction?: number;
@@ -176,11 +182,12 @@ async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promi
   return response.json() as Promise<T>;
 }
 
-export type SegmentationModel = "hotosm_buildings" | "sam2_tiny";
+export type SegmentationModel = "hotosm_buildings" | "sam2_tiny" | "sam2_base_plus" | "sam2_large";
 
-export const SEGMENTATION_MODELS: Array<{ id: SegmentationModel; label: string }> = [
-  { id: "hotosm_buildings", label: "HOTOSM Buildings" },
-  { id: "sam2_tiny", label: "SAM 2.1 Tiny" },
+export const SEGMENTATION_MODELS: Array<{ id: SegmentationModel; label: string; hint: string }> = [
+  { id: "sam2_tiny", label: "Tiny model", hint: "Fastest · Lightweight" },
+  { id: "sam2_base_plus", label: "Base+ model", hint: "Balanced · Higher quality" },
+  { id: "sam2_large", label: "Large model", hint: "Highest quality · Slowest" },
 ];
 
 export function validateSurface(

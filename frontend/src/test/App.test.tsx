@@ -37,11 +37,11 @@ describe("App workspace", () => {
     Object.values(mapInstance).forEach((v) => typeof v === "function" && "mockClear" in v && (v as unknown as { mockClear: () => void }).mockClear());
   });
 
-  it("opens to a map-first workspace with the workflow stepper and search", () => {
+  it("opens to a map-first workspace with Kolkata location card and search", () => {
     render(<App />);
     expect(screen.getByRole("application", { name: /Satellite map of India/ })).toBeInTheDocument();
-    expect(screen.getByRole("list", { name: "Analysis workflow" })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Find a property to begin" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Analysis workflow" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Location" })).toHaveTextContent("Kolkata");
     expect(screen.getByRole("combobox", { name: "Search location" })).toBeInTheDocument();
     expect(document.querySelector(".status-bar")).toBeTruthy();
   });
@@ -51,6 +51,19 @@ describe("App workspace", () => {
     await userEvent.click(screen.getByRole("button", { name: /Advanced/ }));
     expect(screen.getByText(/Esri World Imagery · prototype/)).toBeInTheDocument();
     expect(screen.getByText(/Native max zoom/)).toBeInTheDocument();
+  });
+
+  it("starts satellite-first with roads and buildings off", async () => {
+    render(<App />);
+    await userEvent.click(screen.getByRole("button", { name: "Map layers" }));
+    expect(screen.getByRole("checkbox", { name: "Satellite imagery" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Roads and place names" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "3D buildings" })).not.toBeChecked();
+  });
+
+  it("shows a Reset action in the sidebar", () => {
+    render(<App />);
+    expect(screen.getByRole("button", { name: "Reset analysis" })).toBeInTheDocument();
   });
 
   it("opens the layers panel from the map controls and closes it with Escape", async () => {
@@ -85,13 +98,13 @@ describe("App workspace", () => {
     expect(screen.getByRole("heading", { name: "Test sites" })).toBeInTheDocument();
   });
 
-  it("selecting a test site from diagnostics flies the map and shows the place card", async () => {
+  it("selecting a test site from diagnostics flies the map and updates the sidebar location", async () => {
     render(<App />);
     await userEvent.click(screen.getByRole("button", { name: /Advanced/ }));
     const testSites = screen.getByRole("heading", { name: "Test sites" }).parentElement as HTMLElement;
     await userEvent.click(within(testSites).getByRole("button", { name: /Kalna/ }));
     expect(mapInstance.flyTo).toHaveBeenCalled();
-    expect(screen.getByRole("region", { name: "Selected location" })).toHaveTextContent("Kalna");
+    expect(screen.getByRole("region", { name: "Location" })).toHaveTextContent("Kalna");
     expect(document.querySelector(".onboarding")).toBeNull();
   });
 });

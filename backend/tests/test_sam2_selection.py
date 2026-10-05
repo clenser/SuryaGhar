@@ -71,7 +71,12 @@ def _install_crop_and_vision_stubs(monkeypatch):
 
 def test_supported_models_keep_hotosm_default():
     assert DEFAULT_SEGMENTATION_MODEL == "hotosm_buildings"
-    assert set(SUPPORTED_SEGMENTATION_MODELS) == {"hotosm_buildings", "sam2_tiny"}
+    assert set(SUPPORTED_SEGMENTATION_MODELS) == {
+        "hotosm_buildings",
+        "sam2_tiny",
+        "sam2_base_plus",
+        "sam2_large",
+    }
 
 
 def test_unknown_model_identifier_raises():
@@ -84,6 +89,24 @@ def test_hotosm_provider_still_resolves(monkeypatch):
     monkeypatch.setattr(HotosmBuildingsProvider, "is_available", lambda self: True)
     provider = resolve_segmentation_model("hotosm_buildings", SimpleNamespace())
     assert isinstance(provider, HotosmBuildingsProvider)
+
+
+def test_sam2_variant_configs_are_official():
+    """Each variant pairs its checkpoint with the official SAM 2.1 config."""
+    from app.segmentation.sam2_provider import SAM2_VARIANTS
+
+    assert SAM2_VARIANTS["sam2_tiny"]["config"] == "sam2.1_hiera_t.yaml"
+    assert SAM2_VARIANTS["sam2_base_plus"]["config"] == "sam2.1_hiera_b+.yaml"
+    assert SAM2_VARIANTS["sam2_large"]["config"] == "sam2.1_hiera_l.yaml"
+    assert SAM2_VARIANTS["sam2_base_plus"]["checkpoint"] == "sam2.1_hiera_base_plus.pt"
+    assert SAM2_VARIANTS["sam2_large"]["checkpoint"] == "sam2.1_hiera_large.pt"
+
+
+def test_sam2_unknown_variant_rejected():
+    from app.segmentation.sam2_provider import SAM2TinyProvider
+
+    with pytest.raises(ValueError, match="Unknown SAM2 variant"):
+        SAM2TinyProvider(variant="sam2_enormous")
 
 
 def test_sam2_missing_checkpoint_is_unavailable():
@@ -101,7 +124,7 @@ def test_heavy_models_refused_on_tiny_container(monkeypatch):
     not a worker-killing OOM (which surfaces as a headerless proxy 502)."""
     from app.segmentation import factory as factory_module
 
-    monkeypatch.setattr(factory_module, "container_memory_limit_mb", lambda: 512.0)
+    monkeypatch.setattr(factory_module, "effective_memory_limit_mb", lambda: 512.0)
     with pytest.raises(SegmentationModelUnavailableError, match="at least"):
         resolve_segmentation_model("sam2_tiny", SimpleNamespace(sam2_checkpoint_path=None))
     with pytest.raises(SegmentationModelUnavailableError, match="at least"):
@@ -112,7 +135,7 @@ def test_default_path_falls_back_on_tiny_container(monkeypatch):
     """The default (non-explicit) path degrades to heuristic instead of crashing."""
     from app.segmentation import factory as factory_module
 
-    monkeypatch.setattr(factory_module, "container_memory_limit_mb", lambda: 512.0)
+    monkeypatch.setattr(factory_module, "effective_memory_limit_mb", lambda: 512.0)
     provider = factory_module.get_segmentation_provider(SimpleNamespace(segmentation_provider="hotosm"))
     assert provider.name == "heuristic"
 
@@ -145,7 +168,7 @@ def test_default_validation_omits_model_selection(monkeypatch):
 def _adequate_container(monkeypatch):
     from app.segmentation import factory as factory_module
 
-    monkeypatch.setattr(factory_module, "container_memory_limit_mb", lambda: 4096.0)
+    monkeypatch.setattr(factory_module, "effective_memory_limit_mb", lambda: 4096.0)
 
 
 def test_omitted_model_runs_real_hotosm_default(monkeypatch):
@@ -347,13 +370,40 @@ async def test_geocode_responsive_during_slow_validation(monkeypatch):
         app.dependency_overrides.clear()
 
 
-def test_unknown_container_limit_refuses_heavy_models(monkeypatch):
-    """An undeterminable limit must refuse, never risk a crash loop."""
+def test_unknown_container_limit_allows_heavy_models(monkeypatch):
+    """No cgroup caps (desktop dev machines) means no constraint to enforce;
+    constrained containers always report a readable limit, which is enforced."""
     from app.segmentation import factory as factory_module
 
-    monkeypatch.setattr(factory_module, "container_memory_limit_mb", lambda: None)
-    with pytest.raises(SegmentationModelUnavailableError, match="could not be determined"):
-        resolve_segmentation_model("sam2_tiny", SimpleNamespace(sam2_checkpoint_path=None))
+    monkeypatch.setattr(factory_module, "effective_memory_limit_mb", lambda: None)
+    # Must not raise for the memory guard (checkpoint absence may still raise,
+    # so point at the real repo checkpoint explicitly).
+    from app.segmentation.sam2_provider import DEFAULT_CHECKPOINT
+
+    provider = resolve_segmentation_model(
+        "sam2_tiny", SimpleNamespace(sam2_checkpoint_path=str(DEFAULT_CHECKPOINT))
+    )
+    assert provider.name == "sam2_tiny"
+
+
+def test_host_ram_detected_for_local_guard():
+    """Local admission uses real host RAM (Windows/macOS/Linux, no psutil)."""
+    from app.segmentation.providers import host_total_memory_mb
+
+    total = host_total_memory_mb()
+    assert total is not None and total > 512
+
+
+def test_effective_limit_prefers_container_cap(monkeypatch):
+    """Capped containers are judged on the cap, dev machines on host RAM."""
+    import app.segmentation.providers as providers_module
+
+    monkeypatch.setattr(providers_module, "container_memory_limit_mb", lambda: 512.0)
+    monkeypatch.setattr(providers_module, "host_total_memory_mb", lambda: 16384.0)
+    assert providers_module.effective_memory_limit_mb() == 512.0
+
+    monkeypatch.setattr(providers_module, "container_memory_limit_mb", lambda: None)
+    assert providers_module.effective_memory_limit_mb() == 16384.0
 
 
 def test_explicit_sam2_reaches_sam2_provider(monkeypatch):
@@ -390,3 +440,90 @@ def test_explicit_sam2_reaches_sam2_provider(monkeypatch):
     assert body["providers"]["segmentation"] == "sam2_tiny"
     assert body["providers"]["segmentation_model"] == "sam2.1_hiera_tiny"
     assert set(body["components"]) == {"other", "building"}
+
+
+def test_missing_variant_checkpoint_returns_structured_422(monkeypatch):
+    """Base+/Large without their checkpoint: 422, never silent Tiny fallback."""
+    _adequate_container(monkeypatch)
+    monkeypatch.setenv("SAM2_BASE_PLUS_CHECKPOINT_PATH", "/nonexistent/base_plus.pt")
+    monkeypatch.setenv("SAM2_LARGE_CHECKPOINT_PATH", "/nonexistent/large.pt")
+    for variant in ("sam2_base_plus", "sam2_large"):
+        r = client.post("/selection/validate", json={"geometry": SQUARE, "segmentation_model": variant})
+        assert r.status_code == 422
+        assert r.json()["error"] == "segmentation_model_unavailable"
+        assert "checkpoint not found" in r.json()["detail"]
+
+
+def test_response_exposes_inference_time_and_device(monkeypatch):
+    """Segmentation block carries model, display name, measured seconds, device."""
+    from app.segmentation import sam2_provider as sam2_module
+
+    _adequate_container(monkeypatch)
+
+    def fake_segment(self, image, bounds, prompt_box=None):
+        import time as _time
+
+        _time.sleep(0.05)  # measurable but fast; never the real checkpoint
+        h, w = image.shape[:2]
+        mask = np.zeros((h, w), dtype=np.int8)
+        return SegmentationResult(
+            mask=mask,
+            classes=["other", "building"],
+            class_fractions={"other": 1.0, "building": 0.0},
+            confidence=0.5,
+            image_dims=(w, h),
+            transform=compute_affine_transform(bounds, w, h),
+            crs="EPSG:4326",
+            provider="sam2_base_plus",
+            model="sam2.1_hiera_base_plus",
+            limitations=[],
+        )
+
+    monkeypatch.setattr(sam2_module.SAM2TinyProvider, "segment", fake_segment)
+    monkeypatch.setattr(sam2_module.SAM2TinyProvider, "current_device", property(lambda self: "cuda"))
+    _install_crop_and_vision_stubs(monkeypatch)
+
+    r = client.post("/selection/validate", json={"geometry": SQUARE, "segmentation_model": "sam2_base_plus"})
+    assert r.status_code == 200
+    seg = r.json()["segmentation"]
+    assert seg["model"] == "sam2_base_plus"
+    assert seg["display_name"] == "SAM 2.1 Base+"
+    assert seg["inference_time_seconds"] >= 0.05
+    assert seg["device"] == "cuda"
+
+
+def test_variant_predictors_cached_and_released(monkeypatch):
+    """Each variant loads once; switching releases the previous resident."""
+    import app.segmentation.sam2_provider as sam2_module
+
+    builds: list[str] = []
+
+    class FakePredictor:
+        def set_image(self, image):
+            pass
+
+        def predict(self, box=None, multimask_output=True):
+            import numpy as _np
+
+            return _np.zeros((1, 8, 8), dtype=bool), _np.array([0.9]), None
+
+    def fake_build(config_file, checkpoint, device="cpu"):
+        builds.append(Path(checkpoint).name)
+        return object()
+
+    monkeypatch.setattr("sam2.build_sam.build_sam2", fake_build)
+    monkeypatch.setattr("sam2.sam2_image_predictor.SAM2ImagePredictor", lambda model: FakePredictor())
+    monkeypatch.setattr(sam2_module, "_PREDICTORS", {})
+    monkeypatch.setattr(sam2_module, "_PREDICTOR_DEVICES", {})
+
+    tiny = sam2_module.SAM2TinyProvider(variant="sam2_tiny")
+    tiny._ensure_loaded()
+    tiny._ensure_loaded()
+    assert builds.count("sam2.1_hiera_tiny.pt") == 1  # cached, not reloaded
+    assert set(sam2_module._PREDICTORS) == {"sam2_tiny"}
+
+    base = sam2_module.SAM2TinyProvider(variant="sam2_base_plus")
+    base._ensure_loaded()
+    assert builds.count("sam2.1_hiera_base_plus.pt") == 1
+    assert set(sam2_module._PREDICTORS) == {"sam2_base_plus"}  # tiny released
+    assert "sam2_tiny" not in sam2_module._PREDICTORS

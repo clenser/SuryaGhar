@@ -41,6 +41,12 @@ export function LayerPanel({ open, layers, advanced, errors, onChange, onAdvance
         <section className="layer-group" aria-labelledby="layers-heading">
           <h3 id="layers-heading" className="layer-group__title">Display</h3>
           <Toggle
+            label="Satellite imagery"
+            description="Primary base layer"
+            checked={layers.satelliteOpacity > 0}
+            onChange={(v) => onChange({ satelliteOpacity: v ? 1 : 0 })}
+          />
+          <Toggle
             label="Roads and place names"
             description="OpenStreetMap context over imagery"
             checked={layers.contextOpacity > 0}

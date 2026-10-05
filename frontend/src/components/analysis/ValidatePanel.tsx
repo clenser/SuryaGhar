@@ -1,88 +1,97 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { Check, Play } from "lucide-react";
 import {
   SEGMENTATION_MODELS,
-  validateSurface,
   type SegmentationModel,
   type ValidationResult,
 } from "../../services/analysis";
-import type { LngLat } from "../../lib/geo";
+import type { ValidationSnapshot } from "../../hooks/useValidation";
 
 interface ValidatePanelProps {
-  vertices: LngLat[];
+  /** Persisted validation state (owned by App, survives tab switches). */
+  snapshot: ValidationSnapshot;
+  /** Live wall-clock seconds while a request is in flight. */
+  elapsed: number;
   segmentationModel: SegmentationModel;
   onSegmentationModelChange: (model: SegmentationModel) => void;
+  onProceed: (model: SegmentationModel) => void;
   onContinue: () => void;
   onRedraw: () => void;
 }
 
-/** Stage 2: surface assessment. Single card: classification, analysis
- *  confidence, building evidence, site interpretation, imagery, actions.
- *  Provider/model terminology stays out of the primary UI, except the
- *  debugging segmentation-model switcher and its diagnostics label. */
+/** Stage 2: surface assessment. Pure view over persisted validation state:
+ *  the user picks a model, then explicitly clicks "Proceed with analysis".
+ *  Changing the selection alone never triggers a request, and unmounting
+ *  (tab switch) never loses the result. */
 export function ValidatePanel({
-  vertices,
+  snapshot: state,
+  elapsed,
   segmentationModel,
   onSegmentationModelChange,
+  onProceed,
   onContinue,
   onRedraw,
 }: ValidatePanelProps) {
-  const [state, setState] = useState<
-    { kind: "loading" } | { kind: "error"; message: string } | { kind: "ok"; result: ValidationResult }
-  >({ kind: "loading" });
+  // Draft selection only; committed to App on Proceed so it survives remounts.
+  const [draft, setDraft] = useState<SegmentationModel>(segmentationModel);
   const [view, setView] = useState<"original" | "overlay" | "mask">("overlay");
-  const [retryKey, setRetryKey] = useState(0);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    setState({ kind: "loading" });
-    // The default model is conveyed by OMISSION: the backend default path
-    // resolves HOTOSM on capable hosts and degrades to labeled heuristic on
-    // hosts too small to survive heavy inference. Only an explicit non-default
-    // choice (SAM 2.1 Tiny) is sent, and it is never silently replaced.
-    validateSurface(vertices, segmentationModel === "hotosm_buildings" ? undefined : segmentationModel, controller.signal)
-      .then((result) => setState({ kind: "ok", result }))
-      .catch((err) => {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        setState({ kind: "error", message: err instanceof Error ? err.message : "Validation failed" });
-      });
-    return () => controller.abort();
-  }, [vertices, segmentationModel, retryKey]);
+  const proceed = () => {
+    onSegmentationModelChange(draft);
+    onProceed(draft);
+  };
 
-  const onRetry = () => setRetryKey((k) => k + 1);
+  const loadingLabel =
+    state.kind === "loading" ? modelLabel(state.model) : modelLabel(draft);
+  const showTimer = state.kind === "loading";
 
   return (
     <div className="stage-card">
       <p className="stage-card__eyebrow">Stage 2 of 5</p>
       <h2 className="stage-card__title">Surface assessment</h2>
 
-      <div className="seg-switch" role="group" aria-label="Segmentation model (debugging)">
+      <div className="seg-switch" role="group" aria-label="Segmentation model">
         <span className="seg-switch__label">Segmentation model</span>
-        <div className="stage-tabs stage-tabs--compact" role="tablist" aria-label="Segmentation model options">
+        <div className="seg-options" role="radiogroup" aria-label="Segmentation model options">
           {SEGMENTATION_MODELS.map((m) => (
             <button
               key={m.id}
               type="button"
-              role="tab"
-              aria-selected={segmentationModel === m.id}
-              className={segmentationModel === m.id ? "is-active" : ""}
-              onClick={() => onSegmentationModelChange(m.id)}
+              role="radio"
+              aria-checked={draft === m.id}
+              className={`seg-option${draft === m.id ? " is-active" : ""}`}
+              onClick={() => setDraft(m.id)}
+              disabled={state.kind === "loading"}
             >
-              {m.label}
+              <span className="seg-option__label">{m.label}</span>
+              <span className="seg-option__hint">{m.hint}</span>
             </button>
           ))}
         </div>
       </div>
 
-      {state.kind === "loading" && (
+      <div className="stage-card__actions">
+        <button
+          type="button"
+          className="btn btn--primary btn--block"
+          onClick={proceed}
+          disabled={state.kind === "loading"}
+        >
+          <Play size={15} strokeWidth={2} aria-hidden="true" />
+          {state.kind === "loading" ? "Analyzing site..." : state.kind === "ok" ? "Re-analyze" : "Proceed with analysis"}
+        </button>
+      </div>
+
+      {showTimer && (
         <p className="stage-card__body" aria-live="polite">
-          <span className="spinner" aria-hidden="true" /> Analyzing selected surface…
+          <span className="spinner" aria-hidden="true" /> Analyzing with {loadingLabel}… Elapsed {elapsed.toFixed(1)} s
         </p>
       )}
       {state.kind === "error" && (
         <>
           <p className="stage-card__warning" role="alert">{state.message}</p>
           <div className="stage-card__actions">
-            <button type="button" className="btn" onClick={onRetry}>Retry</button>
+            <button type="button" className="btn" onClick={proceed}>Retry</button>
             <button type="button" className="btn" onClick={onRedraw}>Back to selection</button>
           </div>
         </>
@@ -90,10 +99,18 @@ export function ValidatePanel({
 
       {state.kind === "ok" && (
         <>
+          {state.result.segmentation && (
+            <p className="result-note" aria-live="polite">
+              Analysis completed in {state.result.segmentation.inference_time_seconds.toFixed(1)} s
+            </p>
+          )}
           {semanticAvailable(state.result) ? (
             <>
               <div className="result-hero">
-                <span className="result-hero__value">{labelFor(state.result.classification)}</span>
+                <span className="result-hero__value">
+                  <Check size={18} strokeWidth={2.5} aria-hidden="true" className="result-hero__check" />
+                  {labelFor(state.result.classification)}
+                </span>
                 <span className="result-hero__label">
                   Analysis confidence · {Math.round(state.result.confidence * 100)}%
                 </span>
@@ -113,6 +130,7 @@ export function ValidatePanel({
                   </dt>
                   <dd title="Estimated proportion of the selected area identified as building footprint.">
                     {Math.round((state.result.evidence?.hotosm_building_fraction ?? 0) * 100)}%
+                    <span className="metric-caption">Detected from segmentation</span>
                   </dd>
                 </div>
               </dl>
@@ -133,6 +151,26 @@ export function ValidatePanel({
               <summary className="result-note" style={{ cursor: "pointer" }}>
                 Technical details
               </summary>
+              <dl className="metric-list" aria-label="Model benchmark">
+                <div>
+                  <dt>Model</dt>
+                  <dd>{shortModelLabel(state.result.segmentation?.display_name ?? state.result.providers?.segmentation)}</dd>
+                </div>
+                <div>
+                  <dt>Device</dt>
+                  <dd>{(state.result.segmentation?.device ?? "cpu").toUpperCase()}</dd>
+                </div>
+                <div>
+                  <dt>Analysis time</dt>
+                  <dd>{state.result.segmentation ? `${state.result.segmentation.inference_time_seconds.toFixed(1)} s` : "—"}</dd>
+                </div>
+                <div>
+                  <dt title="Share of the selected area covered by the model mask. Not accuracy: no ground-truth labels exist yet.">
+                    Mask coverage
+                  </dt>
+                  <dd>{Math.round((state.result.evidence?.hotosm_building_fraction ?? 0) * 100)}%</dd>
+                </div>
+              </dl>
               <p className="result-note">
                 Building segmentation evidence (supporting only — the classification above is
                 authoritative and is never derived from these pixel shares).
@@ -162,20 +200,29 @@ export function ValidatePanel({
           )}
 
           {state.result.images && (
-            <>
-              <div className="stage-tabs stage-tabs--compact" role="tablist" aria-label="Imagery views">
+            <section aria-label="Visual results">
+              <h3 className="section-heading">Visual results</h3>
+              <div className="vis-thumbs" role="tablist" aria-label="Imagery views">
                 {(["original", "overlay", "mask"] as const).map((v) => (
-                  <button key={v} role="tab" aria-selected={view === v} className={view === v ? "is-active" : ""} onClick={() => setView(v)}>
-                    {v === "original" ? "Original" : v === "overlay" ? "Overlay" : "Mask"}
+                  <button
+                    key={v}
+                    role="tab"
+                    aria-selected={view === v}
+                    aria-label={`Show ${v} view`}
+                    className={`vis-thumb${view === v ? " is-active" : ""}`}
+                    onClick={() => setView(v)}
+                  >
+                    <img src={state.result.images![v]} alt="" aria-hidden="true" />
+                    <span>{v === "original" ? "Original" : v === "overlay" ? "Overlay" : "Mask"}</span>
                   </button>
                 ))}
               </div>
               <img
                 src={state.result.images[view]}
                 alt={`Imagery: ${view}`}
-                style={{ width: "100%", borderRadius: "var(--radius-md)", border: "1px solid var(--color-border)", marginTop: 8 }}
+                className="vis-preview"
               />
-            </>
+            </section>
           )}
 
           {visibleWarnings(state.result).map((w) => (
@@ -192,10 +239,26 @@ export function ValidatePanel({
   );
 }
 
+function modelLabel(model: SegmentationModel): string {
+  return SEGMENTATION_MODELS.find((m) => m.id === model)?.label ?? model;
+}
+
 function segmentationDisplayName(provider: string | undefined): string {
   if (provider === "hotosm_dinov3s_buildings") return "HOTOSM Buildings";
-  if (provider === "sam2_tiny") return "SAM 2.1 Tiny";
+  if (provider === "sam2_tiny") return "Tiny model";
+  if (provider === "sam2_base_plus") return "Base+ model";
+  if (provider === "sam2_large") return "Large model";
   return provider ?? "heuristic";
+}
+
+/** Backend display names are mapped to the short user-facing labels. */
+function shortModelLabel(name: string | undefined): string {
+  if (!name) return segmentationDisplayName(undefined);
+  const lower = name.toLowerCase();
+  if (lower.includes("base+")) return "Base+ model";
+  if (lower.includes("large")) return "Large model";
+  if (lower.includes("tiny")) return "Tiny model";
+  return segmentationDisplayName(name);
 }
 
 function semanticAvailable(result: ValidationResult): boolean {

@@ -2,14 +2,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { MapView, type MapViewHandle } from "./components/map/MapView";
 import { MapControls } from "./components/map/MapControls";
 import { Header } from "./components/workspace/Header";
-import { WorkflowStepper } from "./components/workspace/WorkflowStepper";
 import { StatusBar } from "./components/workspace/StatusBar";
 import { LayerPanel } from "./components/panels/LayerPanel";
-import { SelectedPlaceCard } from "./components/panels/SelectedPlaceCard";
-import { useMapState } from "./hooks/useMapState";
+import { LocationCard } from "./components/panels/LocationCard";
+import { DEFAULT_LAYERS, useMapState } from "./hooks/useMapState";
+import { ResetControl } from "./components/workspace/ResetControl";
 import { useSelection } from "./hooks/useSelection";
+import { useValidation } from "./hooks/useValidation";
 import { formatPlaceContext } from "./services/geocode";
 import { activeImageryProvider } from "./providers/imagery";
+import { KOLKATA_PLACE } from "./config/locations";
 import { SelectionPanel } from "./components/selection/SelectionPanel";
 import { ValidatePanel } from "./components/analysis/ValidatePanel";
 import { DesignPanel } from "./components/analysis/DesignPanel";
@@ -25,7 +27,9 @@ export default function App() {
   const { layers, updateLayers, view, setView, errors, recordError } = useMapState();
   const [advanced, setAdvanced] = useState(false);
   const [layersOpen, setLayersOpen] = useState(false);
-  const [place, setPlace] = useState<LocationResult | null>(null);
+  // Default initial location: Kolkata. Replaced as soon as the user searches
+  // elsewhere; never re-applied afterwards.
+  const [place, setPlace] = useState<LocationResult | null>(KOLKATA_PLACE);
   const [imageryFailed, setImageryFailed] = useState(false);
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const selection = useSelection();
@@ -33,10 +37,13 @@ export default function App() {
   const [panelFootprints, setPanelFootprints] = useState<GeoJSON.FeatureCollection | null>(null);
   const [shadowFC, setShadowFC] = useState<GeoJSON.FeatureCollection | null>(null);
   const [capacityKwp, setCapacityKwp] = useState(0);
-  // Debugging segmentation-model comparison (HOTOSM default). Persists across
-  // stages; the next validation request uses the selected model.
-  const [segmentationModel, setSegmentationModel] = useState<SegmentationModel>("hotosm_buildings");
+  // Segmentation model persists across stages; validation only runs when the
+  // user clicks "Proceed with analysis". Default: Tiny (sam2_tiny).
+  const [segmentationModel, setSegmentationModel] = useState<SegmentationModel>("sam2_tiny");
   const [designOrientation, setDesignOrientation] = useState<{ tilt_deg: number; azimuth_deg: number } | null>(null);
+  // Validation state lives here so tab switches (which unmount ValidatePanel)
+  // never lose the result. Reset is the explicit way to clear it.
+  const validation = useValidation();
 
   // Selection cleared -> reset overlays, capacity, and the current stage so the UI never
   // shows a dead-end stage panel.
@@ -49,6 +56,41 @@ export default function App() {
       setDesignOrientation(null);
     }
   }, [selection.mode]);
+
+  // Full workspace reset back to the clean initial state. Permanent app/API
+  // configuration (layers object shape, providers, thresholds) is untouched;
+  // only user session state is cleared and defaults restored.
+  const handleReset = useCallback(() => {
+    selection.clear();
+    validation.reset();
+    setPanelFootprints(null);
+    setShadowFC(null);
+    setCapacityKwp(0);
+    setDesignOrientation(null);
+    setSegmentationModel("sam2_tiny");
+    setStage("select");
+    setPlace(KOLKATA_PLACE);
+    updateLayers({ ...DEFAULT_LAYERS });
+    mapRef.current?.flyToPlace(KOLKATA_PLACE.longitude, KOLKATA_PLACE.latitude, 13);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selection, updateLayers]);
+
+  // A genuinely new polygon belongs to a new analysis: drop the old result.
+  // Tab switches alone never touch validation state (it lives above).
+  const verticesKey = JSON.stringify(selection.vertices);
+  useEffect(() => {
+    validation.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [verticesKey]);
+
+  const hasAnalysisData =
+    selection.vertices.length > 0 ||
+    validation.snapshot.kind !== "idle" ||
+    panelFootprints !== null ||
+    shadowFC !== null ||
+    capacityKwp > 0 ||
+    designOrientation !== null ||
+    stage !== "select";
 
   // Location search only updates the selected place + camera. SEARCHING is not a
   // workflow stage: selecting/closing the search popup must never mutate `stage`.
@@ -77,6 +119,19 @@ export default function App() {
     });
   }, []);
 
+  // Locate: fly to the browser geolocation, falling back to Kolkata.
+  const handleLocate = useCallback(() => {
+    if (!("geolocation" in navigator)) {
+      mapRef.current?.flyToPlace(KOLKATA_PLACE.longitude, KOLKATA_PLACE.latitude, 13);
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => mapRef.current?.flyToPlace(pos.coords.longitude, pos.coords.latitude, 15),
+      () => mapRef.current?.flyToPlace(KOLKATA_PLACE.longitude, KOLKATA_PLACE.latitude, 13),
+      { timeout: 8000 },
+    );
+  }, []);
+
   const handleMapError = useCallback(
     (entry: Parameters<typeof recordError>[0]) => {
       recordError(entry);
@@ -99,22 +154,9 @@ export default function App() {
 
   const showBanner = imageryFailed && !bannerDismissed;
 
-  // Workflow progress derives from explicit app state only (place + selection +
-  // stage). Transient search-popup state (open/closed, Escape/X) never feeds it.
+  // Sidebar stage navigation. The map stays clean: progress is communicated
+  // through the current stage panel, section headings and primary actions.
   const stageOrder: Stage[] = ["select", "validate", "design", "solar", "site"];
-  const workflowStep = !place
-    ? 0
-    : selection.mode !== "confirmed"
-      ? 1
-      : stage === "select"
-        ? 2
-        : stage === "validate"
-          ? 2
-          : stage === "design"
-            ? 3
-            : stage === "solar"
-              ? 4
-              : 5;
 
   return (
     <div className="app">
@@ -145,7 +187,14 @@ export default function App() {
         />
 
         <div className="stage-panel">
-          <WorkflowStepper step={workflowStep} />
+          {place ? (
+            <LocationCard
+              name={place.name}
+              context={formatPlaceContext(place)}
+              latitude={place.latitude}
+              longitude={place.longitude}
+            />
+          ) : null}
           <div className="stage-tabs" role="tablist" aria-label="Analysis stages">
             {stageOrder.map((s) => (
               <button
@@ -178,9 +227,11 @@ export default function App() {
           )}
           {stage === "validate" && selection.vertices.length >= 3 && (
             <ValidatePanel
-              vertices={selection.vertices}
+              snapshot={validation.snapshot}
+              elapsed={validation.elapsed}
               segmentationModel={segmentationModel}
               onSegmentationModelChange={setSegmentationModel}
+              onProceed={(model) => validation.proceed(selection.vertices, model)}
               onContinue={() => setStage("design")}
               onRedraw={() => setStage("select")}
             />
@@ -213,6 +264,8 @@ export default function App() {
               <button type="button" className="btn" onClick={() => setStage("select")}>Back to selection</button>
             </div>
           )}
+
+          <ResetControl hasData={hasAnalysisData} onReset={handleReset} />
         </div>
 
         {showBanner && (
@@ -230,6 +283,7 @@ export default function App() {
         <MapControls
           bearing={view?.bearing ?? 0}
           pitch={view?.pitch ?? 0}
+          onLocate={handleLocate}
           layersOpen={layersOpen}
           terrainOn={layers.terrain}
           buildingsOn={layers.buildings3d}
@@ -252,17 +306,6 @@ export default function App() {
           onJumpTo={handleSelectPlace}
         />
 
-        {place ? (
-          <SelectedPlaceCard
-            name={place.name}
-            context={formatPlaceContext(place)}
-            latitude={place.latitude}
-            longitude={place.longitude}
-            onClear={() => setPlace(null)}
-          />
-        ) : null}
-
-        {/* Workflow step is already summarized at the top of the left stage panel. */}
       </main>
 
       <StatusBar view={view} selectedName={place?.name ?? null} />

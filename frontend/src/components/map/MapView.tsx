@@ -4,7 +4,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { buildMapStyle, IMAGERY_LAYER_ID, TERRAIN_SOURCE_ID } from "./mapStyle";
 import type { FeatureCollection } from "geojson";
 import { BUILDINGS_LAYER_ID, LABEL_LAYER_ID, ROAD_LAYER_ID } from "../../providers/basemap";
-import { INDIA_VIEW } from "../../config/locations";
+import { KOLKATA_VIEW } from "../../config/locations";
 import type { BoundingBox, LayerSettings, MapErrorEntry, MapViewState } from "../../types";
 import { activeImageryProvider } from "../../providers/imagery";
 import { activeTerrainProvider } from "../../providers/terrain";
@@ -113,32 +113,48 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
         id: "panel-fill",
         type: "fill",
         source: "panel-footprints",
-        paint: { "fill-color": "#101c38", "fill-opacity": 0.88 },
-      });
-      map.addLayer({
-        id: "panel-cell-lines",
-        type: "line",
-        source: "panel-footprints",
-        paint: { "line-color": "#3d5a99", "line-width": 0.4, "line-opacity": 0.5 },
+        paint: { "fill-color": "#0b1526", "fill-opacity": 0.92 },
       });
       map.addLayer({
         id: "panel-outline",
         type: "line",
         source: "panel-footprints",
-        paint: { "line-color": "#c8d4f0", "line-width": 0.8 },
+        paint: { "line-color": "#d7e3f5", "line-width": 0.9, "line-opacity": 0.9 },
       });
-      // Recommended azimuth direction arrow (subtle, map-native).
-      if (!map.getSource("orientation-arrow")) {
-        map.addSource("orientation-arrow", { type: "geojson", data: emptyFC() });
+      // Cell/frame dividers derived from the real panel geometry (separate
+      // source so the texture follows panel rotation exactly).
+      map.addSource("panel-cells", { type: "geojson", data: emptyFC() });
+      map.addLayer({
+        id: "panel-cell-lines",
+        type: "line",
+        source: "panel-cells",
+        paint: { "line-color": "#8ea6c8", "line-width": 0.5, "line-opacity": 0.55 },
+      });
+      // Single compact orientation indicator at the panel-field centroid.
+      // Rotation is applied imperatively from the backend azimuth (not via a
+      // data expression) so the marker can never silently end up unrotated.
+      map.addSource("panel-direction", { type: "geojson", data: emptyFC() });
+      try {
+        if (!map.hasImage("dir-chevron")) {
+          map.addImage("dir-chevron", makeChevronImage(), { pixelRatio: 2 });
+        }
+      } catch {
+        // Canvas image generation unavailable; the textual legend still shows
+        // the facing direction. Never break the remaining layers.
       }
-      if (!map.getLayer("orientation-arrow")) {
-        map.addLayer({
-          id: "orientation-arrow",
-          type: "line",
-          source: "orientation-arrow",
-          paint: { "line-color": "#ffb300", "line-width": 2.5, "line-opacity": 0.9 },
-        });
-      }
+      map.addLayer({
+        id: "panel-direction",
+        type: "symbol",
+        source: "panel-direction",
+        layout: {
+          "icon-image": "dir-chevron",
+          "icon-size": 0.85,
+          "icon-allow-overlap": true,
+          "icon-ignore-placement": true,
+          "icon-rotate": 0,
+          "icon-rotation-alignment": "map",
+        },
+      });
       map.addLayer({
         id: "sel-shadows-fill",
         type: "fill",
@@ -163,6 +179,8 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
     if (!map || !loaded) return;
     const source = map.getSource("panel-footprints") as maplibregl.GeoJSONSource | undefined;
     if (source) source.setData(panelFootprints ?? emptyFC());
+    const cells = map.getSource("panel-cells") as maplibregl.GeoJSONSource | undefined;
+    if (cells) cells.setData(panelCellsFC(panelFootprints));
   }, [panelFootprints, loaded]);
 
   useEffect(() => {
@@ -172,17 +190,37 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
     if (source) source.setData(shadowFC ?? emptyFC());
   }, [shadowFC, loaded]);
 
-  // Recommended azimuth arrow from the panel-field centroid.
+  // Compact orientation indicator at the panel-field centroid, rotated to the
+  // actual backend azimuth. No annotation arrows across the map.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !loaded) return;
-    const source = map.getSource("orientation-arrow") as maplibregl.GeoJSONSource | undefined;
+    const source = map.getSource("panel-direction") as maplibregl.GeoJSONSource | undefined;
     if (!source) return;
     if (!orientation || !selectionCentroid || !panelFootprints?.features?.length) {
       source.setData(emptyFC());
       return;
     }
-    source.setData(azimuthArrowFC(selectionCentroid, orientation.azimuth_deg));
+    const az = ((orientation.azimuth_deg % 360) + 360) % 360;
+    source.setData({
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          properties: { azimuth: az },
+          geometry: { type: "Point", coordinates: [selectionCentroid.lng, selectionCentroid.lat] },
+        },
+      ],
+    });
+    // Imperative rotation from the SAME backend azimuth value used for the
+    // marker data and the legend text, so all three always agree.
+    try {
+      if (map.getLayer("panel-direction") && map.hasImage("dir-chevron")) {
+        map.setLayoutProperty("panel-direction", "icon-rotate", az);
+      }
+    } catch {
+      // Marker image missing (see setup guard); legend text still applies.
+    }
   }, [orientation, selectionCentroid, panelFootprints, loaded]);
 
   // Drawing interactions.
@@ -288,8 +326,8 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
     const map = new maplibregl.Map({
       container: containerRef.current,
       style: buildMapStyle(),
-      center: [INDIA_VIEW.center.lng, INDIA_VIEW.center.lat],
-      zoom: INDIA_VIEW.zoom,
+      center: [KOLKATA_VIEW.center.lng, KOLKATA_VIEW.center.lat],
+      zoom: KOLKATA_VIEW.zoom,
       bearing: 0,
       pitch: 0,
       maxPitch: 70,
@@ -393,34 +431,122 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
       <div className="map-legend" aria-hidden="true">
         <span className="map-legend__north" title="North">N ↑</span>
         {orientation && panelFootprints?.features?.length ? (
-          <span className="map-legend__azimuth">Panels face {compassShort(orientation.azimuth_deg)} · {Math.round(orientation.azimuth_deg)}°</span>
+          <span className="map-legend__azimuth">
+            Panels face {compassShort(orientation.azimuth_deg)} · {Math.round(((orientation.azimuth_deg % 360) + 360) % 360)}°
+          </span>
         ) : null}
       </div>
     </div>
   );
 });
 
-function azimuthArrowFC(center: LngLat, azimuthDeg: number): FeatureCollection {
-  // ~25 m arrow extending from the panel-field centroid toward the azimuth.
-  const rad = (azimuthDeg * Math.PI) / 180;
-  const latM = 111320;
-  const lngM = 111320 * Math.max(Math.cos((center.lat * Math.PI) / 180), 0.2);
-  const lenM = 25;
-  const dx = (Math.sin(rad) * lenM) / lngM;
-  const dy = (Math.cos(rad) * lenM) / latM;
-  return {
-    type: "FeatureCollection",
-    features: [
-      {
-        type: "Feature",
-        properties: {},
-        geometry: { type: "LineString", coordinates: [[center.lng, center.lat], [center.lng + dx, center.lat + dy]] },
-      },
-    ],
+/**
+ * Direction arrow badge (white halo, teal core): a real arrowhead on a
+ * visible shaft, pointing up (= north before map rotation is applied).
+ * Large enough to read the facing direction at a glance, small enough to
+ * stay subordinate to the panel layout itself.
+ */
+function makeChevronImage(): ImageData {
+  const size = 64;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d")!;
+  const draw = (scale: number, color: string) => {
+    const s = size / 2;
+    ctx.fillStyle = color;
+    // Shaft (tail): long, centered, from below-center up into the head.
+    const shaftHalf = 4.5 * scale;
+    ctx.fillRect(s - shaftHalf, s - 4 * scale, shaftHalf * 2, 24 * scale);
+    // Arrowhead.
+    ctx.beginPath();
+    ctx.moveTo(s, s - 22 * scale);
+    ctx.lineTo(s + 13 * scale, s + 2 * scale);
+    ctx.lineTo(s - 13 * scale, s + 2 * scale);
+    ctx.closePath();
+    ctx.fill();
   };
+  draw(1.4, "rgba(255,255,255,0.92)"); // halo for contrast on imagery
+  draw(1.0, "#0f6e7a"); // teal core
+  return ctx.getImageData(0, 0, size, size);
 }
 
-function compassShort(azimuthDeg: number): string {
+/**
+ * Cell/frame divider lines derived from real panel geometry. Each panel is a
+ * rotated rectangle: inset a frame, add a longitudinal center line and evenly
+ * spaced transverse dividers. Pure rendering — positions still come 1:1 from
+ * the backend footprints.
+ */
+export function panelCellsFC(panels: FeatureCollection | null): FeatureCollection {
+  const features: FeatureCollection["features"] = [];
+  if (!panels?.features) return { type: "FeatureCollection", features };
+  for (const feature of panels.features.slice(0, 400)) {
+    const geom = feature.geometry;
+    if (!geom || geom.type !== "Polygon") continue;
+    const ring = geom.coordinates[0];
+    if (!ring || ring.length < 4) continue;
+    const lines = panelCellLines(ring as Array<[number, number]>);
+    for (const line of lines) {
+      features.push({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: line } });
+    }
+  }
+  return { type: "FeatureCollection", features };
+}
+
+function panelCellLines(ring: Array<[number, number]>): Array<Array<[number, number]>> {
+  const pts = ring.slice(0, 4);
+  const latRef = pts.reduce((sum, p) => sum + p[1], 0) / pts.length;
+  const kx = 111320 * Math.max(Math.cos((latRef * Math.PI) / 180), 0.2);
+  const ky = 111320;
+  const toM = (p: [number, number]): [number, number] => [(p[0] - pts[0][0]) * kx, (p[1] - pts[0][1]) * ky];
+  const m = pts.map(toM);
+  const cx = m.reduce((s, p) => s + p[0], 0) / m.length;
+  const cy = m.reduce((s, p) => s + p[1], 0) / m.length;
+
+  // Long axis = longest edge direction.
+  const edges = [0, 1, 2, 3].map((i) => {
+    const a = m[i];
+    const b = m[(i + 1) % 4];
+    return { dx: b[0] - a[0], dy: b[1] - a[1], len: Math.hypot(b[0] - a[0], b[1] - a[1]) };
+  });
+  edges.sort((a, b) => b.len - a.len);
+  const long = edges[0];
+  if (long.len < 0.3) return [];
+  const ux = long.dx / long.len;
+  const uy = long.dy / long.len;
+  // Short axis = perpendicular; extents from corner projections (robust to
+  // vertex order and near-square panels).
+  const vx = -uy;
+  const vy = ux;
+  let hl = 0;
+  let hw = 0;
+  for (const p of m) {
+    hl = Math.max(hl, Math.abs((p[0] - cx) * ux + (p[1] - cy) * uy));
+    hw = Math.max(hw, Math.abs((p[0] - cx) * vx + (p[1] - cy) * vy));
+  }
+  if (hw < 0.15) return [];
+
+  const margin = Math.min(0.07, hl * 0.06, hw * 0.12);
+  const il = hl - margin;
+  const iw = hw - margin;
+  const toLngLat = (x: number, y: number): [number, number] => [pts[0][0] + (cx + x) / kx, pts[0][1] + (cy + y) / ky];
+  const corner = (a: number, b: number): [number, number] => toLngLat(a * ux + b * -uy, a * uy + b * ux);
+  const out: Array<Array<[number, number]>> = [];
+
+  // Frame.
+  out.push([corner(-il, -iw), corner(il, -iw), corner(il, iw), corner(-il, iw), corner(-il, -iw)]);
+  // Longitudinal center line.
+  out.push([corner(-il, 0), corner(il, 0)]);
+  // Transverse dividers (~6 cell rows).
+  const rows = 6;
+  for (let i = 1; i < rows; i++) {
+    const t = -il + (2 * il * i) / rows;
+    out.push([corner(t, -iw), corner(t, iw)]);
+  }
+  return out;
+}
+
+export function compassShort(azimuthDeg: number): string {
   const names = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
   const idx = Math.round((((azimuthDeg % 360) + 360) % 360) / 45) % 8;
   return names[idx];

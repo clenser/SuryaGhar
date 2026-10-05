@@ -32,7 +32,7 @@ def test_config_never_exposes_secrets():
         "available_segmentation_models",
     }
     models = {m["id"]: m for m in r.json()["available_segmentation_models"]}
-    assert set(models) == {"hotosm_buildings", "sam2_tiny"}
+    assert set(models) == {"hotosm_buildings", "sam2_tiny", "sam2_base_plus", "sam2_large"}
     assert models["hotosm_buildings"]["default"] is True
 
 

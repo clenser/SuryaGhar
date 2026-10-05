@@ -22,6 +22,7 @@ from app.geospatial.metrics import analyze_polygon
 from app.segmentation.factory import (
     SegmentationModelUnavailableError,
     UnknownSegmentationModelError,
+    display_name_for_provider,
     get_segmentation_provider,
     resolve_segmentation_model,
 )
@@ -308,6 +309,8 @@ async def validate_surface(geometry: dict, segmentation_model: str | None = None
     # Stage 3: Segmentation (explicit per-request model or configured default).
     # Blocking inference (notably CPU SAM2) runs in a worker thread so slow
     # validations never freeze /geocode, /health, or other endpoints.
+    import time as _time
+
     from starlette.concurrency import run_in_threadpool
 
     provider = selected_provider if selected_provider is not None else get_segmentation_provider(settings)
@@ -318,6 +321,9 @@ async def validate_surface(geometry: dict, segmentation_model: str | None = None
     if getattr(provider, "accepts_prompt_box", False):
         prompt_box = _polygon_bbox_px(geometry, crop_wgs84, w, h)
 
+    # Actual model-analysis time (monotonic): inference only, excluding
+    # imagery fetch, vision review, and response rendering.
+    _seg_start = _time.perf_counter()
     try:
         if prompt_box is not None:
             seg_result = await run_in_threadpool(provider.segment, image, bounds, prompt_box=prompt_box)
@@ -333,7 +339,14 @@ async def validate_surface(geometry: dict, segmentation_model: str | None = None
         logger.warning(f"Segmentation failed: {exc}, using heuristic fallback")
         from app.segmentation.heuristic import HeuristicSegmentationProvider
         fallback_provider = HeuristicSegmentationProvider()
+        provider = fallback_provider
         seg_result = await run_in_threadpool(fallback_provider.segment, image, bounds)
+    inference_time_seconds = round(_time.perf_counter() - _seg_start, 2)
+    logger.info(
+        "validate: segmentation done provider=%s inference_time_seconds=%.2f",
+        provider.name,
+        inference_time_seconds,
+    )
 
     overlay = _overlay(image, seg_result.mask, seg_result.classes)
     mask_only = _overlay_mask_only(seg_result.mask, seg_result.classes)
@@ -516,6 +529,12 @@ async def validate_surface(geometry: dict, segmentation_model: str | None = None
             "segmentation": seg_result.provider,
             "segmentation_model": seg_result.model,
             "vision": vision_label,
+        },
+        "segmentation": {
+            "model": seg_result.provider,
+            "display_name": display_name_for_provider(seg_result.provider),
+            "inference_time_seconds": inference_time_seconds,
+            "device": getattr(provider, "current_device", "cpu"),
         },
         "ai": {
             "provider": ai_result.get("provider") if ai_result else None,

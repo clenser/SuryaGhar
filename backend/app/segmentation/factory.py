@@ -11,7 +11,7 @@ from app.core.config import Settings
 from app.segmentation.providers import (
     HEAVY_MODEL_MIN_CONTAINER_MB,
     SegmentationProvider,
-    container_memory_limit_mb,
+    effective_memory_limit_mb,
 )
 from app.segmentation.heuristic import HeuristicSegmentationProvider
 from app.segmentation.hotosm_provider import HotosmBuildingsProvider
@@ -23,11 +23,28 @@ logger = logging.getLogger("solar_rooftop.segmentation.factory")
 
 #: Selectable segmentation models (per validation request). HOTOSM stays default.
 DEFAULT_SEGMENTATION_MODEL = "hotosm_buildings"
-SUPPORTED_SEGMENTATION_MODELS = ("hotosm_buildings", "sam2_tiny")
+SUPPORTED_SEGMENTATION_MODELS = ("hotosm_buildings", "sam2_tiny", "sam2_base_plus", "sam2_large")
 SEGMENTATION_MODEL_DISPLAY_NAMES = {
     "hotosm_buildings": "HOTOSM Buildings",
     "sam2_tiny": "SAM 2.1 Tiny",
+    "sam2_base_plus": "SAM 2.1 Base+",
+    "sam2_large": "SAM 2.1 Large",
 }
+SEGMENTATION_MODEL_TAGLINES = {
+    "hotosm_buildings": "Default",
+    "sam2_tiny": "Fastest · Lightweight",
+    "sam2_base_plus": "Balanced · Higher quality",
+    "sam2_large": "Highest quality · Slowest",
+}
+
+
+def display_name_for_provider(provider_name: str | None) -> str:
+    """User-facing model name for a provider name (never leaks internals)."""
+    if provider_name == "hotosm_dinov3s_buildings":
+        return SEGMENTATION_MODEL_DISPLAY_NAMES["hotosm_buildings"]
+    if provider_name in SEGMENTATION_MODEL_DISPLAY_NAMES:
+        return SEGMENTATION_MODEL_DISPLAY_NAMES[provider_name]
+    return "Heuristic"
 
 
 class UnknownSegmentationModelError(ValueError):
@@ -44,19 +61,15 @@ def _ensure_heavy_model_memory(model_id: str) -> None:
     A single 512 px HOTOSM inference peaks near ~450 MB above baseline and
     SAM2 needs a comparable spike; on a 512 MB container the worker is
     OOM-killed (surfacing as a proxy 502 with no CORS headers, and taking
-    every other endpoint down with it). An unknown limit is treated as
-    insufficient: a clear structured refusal keeps the service alive, while
-    proceeding blind risks a crash loop. cgroup limits are readable in all
-    standard container runtimes, so adequate hosts are unaffected.
+    every other endpoint down with it). The limit is the container cap when one
+    applies (production) and total host RAM otherwise (local development), so
+    laptops/desktops are judged on their real memory while small containers
+    stay guarded.
     """
-    limit = container_memory_limit_mb()
+    limit = effective_memory_limit_mb()
     if limit is None:
-        raise SegmentationModelUnavailableError(
-            f"Segmentation model '{model_id}' needs at least "
-            f"{HEAVY_MODEL_MIN_CONTAINER_MB} MB of container memory, but the "
-            f"container limit could not be determined. Refusing to risk an "
-            f"out-of-memory crash; use a larger service plan."
-        )
+        logger.info("Memory limit unknown; assuming adequate host for '%s'.", model_id)
+        return
     if limit < HEAVY_MODEL_MIN_CONTAINER_MB:
         raise SegmentationModelUnavailableError(
             f"Segmentation model '{model_id}' needs at least "
@@ -78,16 +91,19 @@ def resolve_segmentation_model(model_id: str | None, settings: Settings) -> Segm
             f"Unknown segmentation_model '{model_id}'. "
             f"Supported: {', '.join(SUPPORTED_SEGMENTATION_MODELS)}."
         )
-    if name == "sam2_tiny":
+    if name.startswith("sam2_"):
         from app.segmentation.sam2_provider import SAM2TinyProvider
 
-        provider = SAM2TinyProvider(checkpoint_path=getattr(settings, "sam2_checkpoint_path", None))
+        # The legacy single-checkpoint setting applies to Tiny only; Base+ and
+        # Large resolve via their own env vars or repo defaults (see provider).
+        override = getattr(settings, "sam2_checkpoint_path", None) if name == "sam2_tiny" else None
+        provider = SAM2TinyProvider(checkpoint_path=override, variant=name)
         if not provider.is_available():
             raise SegmentationModelUnavailableError(
-                f"SAM 2.1 Tiny is unavailable: {provider.unavailable_reason or 'unknown reason'}."
+                provider.unavailable_reason or f"{provider.display_name} is unavailable."
             )
-        _ensure_heavy_model_memory("sam2_tiny")
-        logger.info("Using SAM 2.1 Tiny provider (explicit selection)")
+        _ensure_heavy_model_memory(name)
+        logger.info("Using %s provider (explicit selection)", provider.display_name)
         return provider
     _ensure_heavy_model_memory("hotosm_buildings")
     provider = HotosmBuildingsProvider()
@@ -118,21 +134,32 @@ def segmentation_model_status(settings: Settings) -> list[dict]:
     try:
         from app.segmentation.sam2_provider import SAM2TinyProvider
 
-        sam2 = SAM2TinyProvider(checkpoint_path=getattr(settings, "sam2_checkpoint_path", None))
-        sam2_ok = sam2.is_available()
-        sam2_reason = None if sam2_ok else sam2.unavailable_reason
+        for variant in ("sam2_tiny", "sam2_base_plus", "sam2_large"):
+            override = getattr(settings, "sam2_checkpoint_path", None) if variant == "sam2_tiny" else None
+            sam2 = SAM2TinyProvider(checkpoint_path=override, variant=variant)
+            sam2_ok = sam2.is_available()
+            items.append(
+                {
+                    "id": variant,
+                    "display_name": SEGMENTATION_MODEL_DISPLAY_NAMES[variant],
+                    "tagline": SEGMENTATION_MODEL_TAGLINES[variant],
+                    "available": sam2_ok,
+                    "unavailable_reason": None if sam2_ok else sam2.unavailable_reason,
+                    "default": False,
+                }
+            )
     except Exception as exc:
-        sam2_ok = False
-        sam2_reason = str(exc)
-    items.append(
-        {
-            "id": "sam2_tiny",
-            "display_name": SEGMENTATION_MODEL_DISPLAY_NAMES["sam2_tiny"],
-            "available": sam2_ok,
-            "unavailable_reason": sam2_reason,
-            "default": False,
-        }
-    )
+        for variant in ("sam2_tiny", "sam2_base_plus", "sam2_large"):
+            items.append(
+                {
+                    "id": variant,
+                    "display_name": SEGMENTATION_MODEL_DISPLAY_NAMES[variant],
+                    "tagline": SEGMENTATION_MODEL_TAGLINES[variant],
+                    "available": False,
+                    "unavailable_reason": str(exc),
+                    "default": False,
+                }
+            )
     return items
 
 

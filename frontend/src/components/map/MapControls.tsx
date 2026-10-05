@@ -1,4 +1,4 @@
-import { Plus, Minus, Compass, Mountain, Layers } from "lucide-react";
+import { Plus, Minus, Compass, Mountain, Layers, LocateFixed } from "lucide-react";
 
 interface MapControlsProps {
   bearing: number;
@@ -6,6 +6,7 @@ interface MapControlsProps {
   layersOpen: boolean;
   terrainOn: boolean;
   buildingsOn: boolean;
+  onLocate: () => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onResetNorth: () => void;
@@ -21,6 +22,10 @@ export function MapControls(props: MapControlsProps) {
   return (
     <div className="map-controls" aria-label="Map controls">
       <div className="map-controls__group">
+        <button type="button" className="map-btn" onClick={props.onLocate} aria-label="Current position" title="Current position">
+          <LocateFixed size={17} strokeWidth={1.75} aria-hidden="true" />
+        </button>
+        <span className="map-controls__divider" aria-hidden="true" />
         <button type="button" className="map-btn" onClick={props.onZoomIn} aria-label="Zoom in" title="Zoom in">
           <Plus size={17} strokeWidth={1.75} aria-hidden="true" />
         </button>

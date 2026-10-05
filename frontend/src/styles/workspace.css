@@ -298,11 +298,11 @@
   color: var(--color-text-muted);
 }
 
-/* ---------- Map controls ---------- */
+/* ---------- Map controls (left edge; sidebar owns the right) ---------- */
 .map-controls {
   position: absolute;
   top: var(--space-4);
-  right: var(--space-4);
+  left: var(--space-4);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -681,54 +681,7 @@
 }
 
 /* ---------- Workflow stepper (inside the left stage panel) ---------- */
-.workflow {
-  list-style: none;
-  margin: 0;
-  padding: var(--space-2) var(--space-3);
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: var(--space-1);
-  background: var(--color-map-chrome);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-float);
-}
-
-.workflow__step {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-  font-size: 10px;
-  line-height: 1.2;
-  color: var(--color-text-faint);
-  border-top: 2px solid var(--color-border);
-  padding-top: 4px;
-}
-
-.workflow__label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workflow__step.is-current {
-  color: var(--color-primary);
-  border-top-color: var(--color-primary);
-  font-weight: 600;
-}
-
-.workflow__step.is-complete {
-  color: var(--color-text-muted);
-  border-top-color: var(--color-primary);
-}
-
-.workflow__index {
-  font-family: var(--font-mono);
-  font-size: 10px;
-}
-
-/* ---------- Selected place ---------- */
+/* ---------- Selected place (legacy overlay; location now lives in the sidebar) ---------- */
 .place-card {
   position: absolute;
   left: var(--space-4);
@@ -891,9 +844,10 @@
   }
 
   .map-controls {
-    top: auto;
-    bottom: calc(var(--status-height) + var(--space-4));
-    right: var(--space-3);
+    top: var(--space-3);
+    bottom: auto;
+    left: var(--space-3);
+    right: auto;
   }
 
   .layer-panel {
@@ -909,12 +863,6 @@
 
 .layer-panel.is-open {
     transform: none;
-  }
-
-  /* Keep the stepper inside the bottom sheet, one compact row. */
-  .workflow {
-    gap: 2px;
-    padding: var(--space-1) var(--space-2);
   }
 
   .place-card {
@@ -937,39 +885,107 @@
   }
 }
 
-/* ---------- Stage workspace panel ----------
-   Single vertical scroll surface: header/workflow/tabs stay visible, the
-   stage card content scrolls, and bottom actions remain reachable. */
+/* ---------- Analysis sidebar (right) ----------
+   Single vertical scroll surface: location card and stage tabs stay visible,
+   the stage card content scrolls, and bottom actions remain reachable. */
 .stage-panel {
   position: absolute;
   top: var(--space-4);
-  left: var(--space-4);
+  right: var(--space-4);
   bottom: var(--space-4);
-  width: 300px;
+  width: 360px;
   max-width: calc(100vw - 2 * var(--space-4));
   max-height: calc(100% - 2 * var(--space-4));
   z-index: 9;
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-3);
   min-height: 0;
   height: auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
+  padding: var(--space-4);
+  padding-bottom: calc(var(--space-4) + env(safe-area-inset-bottom, 0px));
 }
 
+.stage-panel > .location-card,
 .stage-panel > .stage-tabs {
   flex: 0 0 auto;
 }
 
-.stage-panel > .workflow {
+.stage-panel > .stage-card {
   flex: 0 0 auto;
+  min-height: 0;
+  overflow: visible;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
 }
 
-.stage-panel > .stage-card {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding-bottom: calc(var(--space-4) + env(safe-area-inset-bottom, 0px));
+/* ---------- Location card ---------- */
+.location-card {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--space-3);
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.location-card__icon {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-md);
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
+.location-card__text {
+  min-width: 0;
+  flex: 1;
+}
+
+.location-card__name {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.location-card__context {
+  margin: 2px 0 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.location-card__coords {
+  margin: 4px 0 0;
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+}
+
+.location-card__change {
+  margin-top: var(--space-2);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-primary);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.location-card__change:hover {
+  text-decoration: underline;
 }
 
 .stage-card__actions {
@@ -979,11 +995,13 @@
   background: linear-gradient(to top, var(--color-map-chrome) 78%, transparent);
 }
 
-/* Compass + map legend overlays (map-native, subtle). */
+/* Compass + map legend overlays (map-native, subtle). Bottom-left keeps the
+   top edge clean for controls and the right edge for the sidebar. */
 .map-legend {
   position: absolute;
-  left: var(--space-3);
-  top: var(--space-3);
+  left: var(--space-4);
+  bottom: var(--space-4);
+  top: auto;
   display: flex;
   gap: 6px;
   align-items: center;
@@ -1287,6 +1305,208 @@
   color: var(--color-text-faint);
   text-transform: uppercase;
   letter-spacing: 0.06em;
+}
+
+/* Four-option model cards (label + speed/quality hint), compact 2×2 grid. */
+.seg-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.seg-option {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard);
+}
+
+.seg-option:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-muted);
+}
+
+.seg-option.is-active {
+  border: 1.5px solid var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+.seg-option.is-active::after {
+  content: "✓";
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  color: var(--color-primary);
+}
+
+.seg-option:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.seg-option__label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.seg-option__hint {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  line-height: 1.35;
+}
+
+/* ---------- Reset (secondary, non-primary sidebar action) ---------- */
+.reset-row {
+  display: flex;
+  justify-content: flex-start;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border);
+}
+
+.btn--subtle {
+  background: transparent;
+  border-color: var(--color-border);
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.btn--subtle:hover:not(:disabled) {
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+  border-color: var(--color-border-strong);
+}
+
+.btn--subtle-danger {
+  background: transparent;
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+
+.btn--subtle-danger:hover:not(:disabled) {
+  background: var(--color-danger);
+  color: #ffffff;
+}
+
+.reset-confirm {
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  padding: var(--space-3);
+}
+
+.reset-confirm__title {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+.reset-confirm__body {
+  margin: var(--space-1) 0 var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.reset-confirm__actions {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
+/* ---------- Section headings, thumbnails, misc result pieces ---------- */
+.section-heading {
+  margin: var(--space-3) 0 var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.metric-caption {
+  display: block;
+  font-size: var(--text-xs);
+  font-weight: 400;
+  color: var(--color-text-faint);
+}
+
+.result-hero__check {
+  margin-right: 6px;
+  vertical-align: -3px;
+  color: var(--color-success);
+}
+
+.btn--block {
+  width: 100%;
+  justify-content: center;
+  height: 38px;
+  font-size: var(--text-md);
+}
+
+.vis-thumbs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.vis-thumb {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+  border: 1.5px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  cursor: pointer;
+  min-width: 0;
+}
+
+.vis-thumb img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  display: block;
+}
+
+.vis-thumb span {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.vis-thumb.is-active {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+.vis-thumb.is-active span {
+  color: var(--color-primary);
+}
+
+.vis-preview {
+  width: 100%;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  margin-top: var(--space-2);
+  display: block;
 }
 
 /* Completed workflow steps stay visible but recede behind the current stage. */
