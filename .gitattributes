@@ -1,2 +1,4 @@
 backend/models/model.onnx filter=lfs diff=lfs merge=lfs -text
 backend/models/sam2.1_hiera_tiny.pt filter=lfs diff=lfs merge=lfs -text
+backend/models/sam2.1_hiera_base_plus.pt filter=lfs diff=lfs merge=lfs -text
+backend/models/sam2.1_hiera_large.pt filter=lfs diff=lfs merge=lfs -text
