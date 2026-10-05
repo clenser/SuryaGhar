@@ -1,0 +1,59 @@
+/* Design tokens. Components must use these, never raw colours (MASTER_PROMPT section 4-5). */
+:root {
+  --color-background: #eef1f4;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f6f8fa;
+  --color-surface-elevated: #ffffff;
+  --color-border: #d6dde5;
+  --color-border-strong: #b9c4d0;
+  --color-text: #13202e;
+  --color-text-muted: #5b6b7c;
+  --color-text-faint: #8593a3;
+  --color-primary: #0f6e7a;
+  --color-primary-hover: #0b5963;
+  --color-primary-soft: #dcefF1;
+  --color-accent: #f2a71b;
+  --color-success: #1f7a4d;
+  --color-warning: #a86400;
+  --color-danger: #b42318;
+  --color-focus: #2f7fd6;
+  --color-map-chrome: rgba(255, 255, 255, 0.96);
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  --text-xs: 0.72rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.875rem;
+  --text-md: 0.9375rem;
+  --text-lg: 1.0625rem;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+
+  --control-size: 36px;
+  --header-height: 56px;
+  --status-height: 28px;
+
+  --shadow-float: 0 1px 2px rgba(15, 27, 42, 0.08), 0 4px 14px rgba(15, 27, 42, 0.10);
+  --shadow-panel: 0 2px 6px rgba(15, 27, 42, 0.08), 0 12px 32px rgba(15, 27, 42, 0.12);
+
+  --motion-fast: 120ms;
+  --motion-base: 180ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 0ms;
+    --motion-base: 0ms;
+  }
+}
