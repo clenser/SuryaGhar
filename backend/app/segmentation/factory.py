@@ -21,8 +21,9 @@ from app.segmentation.hotosm_provider import HotosmBuildingsProvider
 
 logger = logging.getLogger("solar_rooftop.segmentation.factory")
 
-#: Selectable segmentation models (per validation request). HOTOSM stays default.
-DEFAULT_SEGMENTATION_MODEL = "hotosm_buildings"
+#: Selectable segmentation models (per validation request). SAM 2.1 Tiny is the
+#: default; HOTOSM remains available as a legacy selectable provider.
+DEFAULT_SEGMENTATION_MODEL = "sam2_tiny"
 SUPPORTED_SEGMENTATION_MODELS = ("hotosm_buildings", "sam2_tiny", "sam2_base_plus", "sam2_large")
 SEGMENTATION_MODEL_DISPLAY_NAMES = {
     "hotosm_buildings": "HOTOSM Buildings",
@@ -128,7 +129,7 @@ def segmentation_model_status(settings: Settings) -> list[dict]:
             "id": "hotosm_buildings",
             "display_name": SEGMENTATION_MODEL_DISPLAY_NAMES["hotosm_buildings"],
             "available": hotosm_ok,
-            "default": True,
+            "default": "hotosm_buildings" == DEFAULT_SEGMENTATION_MODEL,
         }
     )
     try:
@@ -145,7 +146,7 @@ def segmentation_model_status(settings: Settings) -> list[dict]:
                     "tagline": SEGMENTATION_MODEL_TAGLINES[variant],
                     "available": sam2_ok,
                     "unavailable_reason": None if sam2_ok else sam2.unavailable_reason,
-                    "default": False,
+                    "default": variant == DEFAULT_SEGMENTATION_MODEL,
                 }
             )
     except Exception as exc:
@@ -157,7 +158,7 @@ def segmentation_model_status(settings: Settings) -> list[dict]:
                     "tagline": SEGMENTATION_MODEL_TAGLINES[variant],
                     "available": False,
                     "unavailable_reason": str(exc),
-                    "default": False,
+                    "default": variant == DEFAULT_SEGMENTATION_MODEL,
                 }
             )
     return items

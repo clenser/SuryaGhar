@@ -69,8 +69,8 @@ def _install_crop_and_vision_stubs(monkeypatch):
     monkeypatch.setattr(validate_module, "validate_with_ai_chain", fake_chain)
 
 
-def test_supported_models_keep_hotosm_default():
-    assert DEFAULT_SEGMENTATION_MODEL == "hotosm_buildings"
+def test_supported_models_keep_sam2_tiny_default():
+    assert DEFAULT_SEGMENTATION_MODEL == "sam2_tiny"
     assert set(SUPPORTED_SEGMENTATION_MODELS) == {
         "hotosm_buildings",
         "sam2_tiny",

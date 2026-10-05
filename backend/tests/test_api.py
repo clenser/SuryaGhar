@@ -33,7 +33,10 @@ def test_config_never_exposes_secrets():
     }
     models = {m["id"]: m for m in r.json()["available_segmentation_models"]}
     assert set(models) == {"hotosm_buildings", "sam2_tiny", "sam2_base_plus", "sam2_large"}
-    assert models["hotosm_buildings"]["default"] is True
+    assert models["sam2_tiny"]["default"] is True
+    assert models["sam2_base_plus"]["default"] is False
+    assert models["sam2_large"]["default"] is False
+    assert models["hotosm_buildings"]["default"] is False
 
 
 def test_geocode_rejects_too_short_query():
