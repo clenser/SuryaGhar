@@ -37,12 +37,23 @@ from app.segmentation.providers import (
 
 logger = logging.getLogger("solar_rooftop.segmentation.sam2")
 
+import threading as _threading
+
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 MODEL_DIR = BACKEND_DIR / "models"
 DEFAULT_CHECKPOINT = MODEL_DIR / "sam2.1_hiera_tiny.pt"
 CONFIG_RELATIVE = Path("configs") / "sam2.1" / "sam2.1_hiera_t.yaml"
 
 CLASSES = ["other", "building"]
+
+# Process-wide predictor cache: the 156 MB checkpoint loads once per process,
+# never per request and never at import time. The semaphore bounds concurrent
+# CPU inferences so parallel validations cannot exhaust a small container.
+_PREDICTOR = None
+_PREDICTOR_DEVICE = "cpu"
+_PREDICTOR_LOADED = False
+_LOAD_LOCK = _threading.Lock()
+_INFERENCE_SEMAPHORE = _threading.Semaphore(2)
 
 
 class SAM2TinyProvider(SegmentationProvider):
@@ -53,9 +64,6 @@ class SAM2TinyProvider(SegmentationProvider):
 
     def __init__(self, checkpoint_path: Optional[str] = None):
         self._checkpoint_path = checkpoint_path or os.environ.get("SAM2_CHECKPOINT_PATH") or str(DEFAULT_CHECKPOINT)
-        self._predictor = None
-        self._device = "cpu"
-        self._loaded = False
         self._unavailable_reason: Optional[str] = None
 
     @property
@@ -68,8 +76,8 @@ class SAM2TinyProvider(SegmentationProvider):
             "type": "promptable_segmentation",
             "name": "sam2.1_hiera_tiny",
             "checkpoint": self._checkpoint_path,
-            "device": self._device,
-            "loaded": self._loaded,
+            "device": _PREDICTOR_DEVICE,
+            "loaded": _PREDICTOR_LOADED,
             "note": "Debugging/comparison model; promptable only, not a semantic classifier.",
         }
 
@@ -103,7 +111,7 @@ class SAM2TinyProvider(SegmentationProvider):
         return True, None
 
     def is_available(self) -> bool:
-        if self._loaded and self._predictor is not None:
+        if _PREDICTOR_LOADED and _PREDICTOR is not None:
             return True
         ok, reason = self.dependencies_available()
         if not ok:
@@ -116,28 +124,32 @@ class SAM2TinyProvider(SegmentationProvider):
         return True
 
     def _ensure_loaded(self) -> None:
-        """Load weights once, preferring CUDA with automatic CPU fallback."""
-        if self._loaded and self._predictor is not None:
+        """Load weights once per process, preferring CUDA with automatic CPU fallback."""
+        global _PREDICTOR, _PREDICTOR_DEVICE, _PREDICTOR_LOADED
+        if _PREDICTOR_LOADED and _PREDICTOR is not None:
             return
-        import torch  # lazy
-        from sam2.build_sam import build_sam2  # lazy
-        from sam2.sam2_image_predictor import SAM2ImagePredictor  # lazy
+        with _LOAD_LOCK:
+            if _PREDICTOR_LOADED and _PREDICTOR is not None:
+                return
+            import torch  # lazy
+            from sam2.build_sam import build_sam2  # lazy
+            from sam2.sam2_image_predictor import SAM2ImagePredictor  # lazy
 
-        config_file = self._resolve_config()
-        if config_file is None:
-            raise RuntimeError("SAM2 config sam2.1_hiera_t.yaml not found in the installed sam2 package")
-        if not self._checkpoint_path or not Path(self._checkpoint_path).exists():
-            raise RuntimeError(f"SAM2 checkpoint not found at {self._checkpoint_path}")
+            config_file = self._resolve_config()
+            if config_file is None:
+                raise RuntimeError("SAM2 config sam2.1_hiera_t.yaml not found in the installed sam2 package")
+            if not self._checkpoint_path or not Path(self._checkpoint_path).exists():
+                raise RuntimeError(f"SAM2 checkpoint not found at {self._checkpoint_path}")
 
-        try:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-        except Exception:
-            device = "cpu"
-        self._device = device
-        model = build_sam2(config_file, self._checkpoint_path, device=device)
-        self._predictor = SAM2ImagePredictor(model)
-        self._loaded = True
-        logger.info("SAM 2.1 Tiny loaded on %s", device)
+            try:
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+            except Exception:
+                device = "cpu"
+            model = build_sam2(config_file, self._checkpoint_path, device=device)
+            _PREDICTOR = SAM2ImagePredictor(model)
+            _PREDICTOR_DEVICE = device
+            _PREDICTOR_LOADED = True
+            logger.info("SAM 2.1 Tiny loaded on %s", device)
 
     def segment(
         self,
@@ -165,8 +177,12 @@ class SAM2TinyProvider(SegmentationProvider):
                 dtype=np.float32,
             )
 
-        self._predictor.set_image(image)
-        masks, scores, _ = self._predictor.predict(box=box, multimask_output=True)
+        # Bounded concurrency: at most 2 CPU inferences at once so parallel
+        # validations cannot exhaust a small single-service container. Waiting
+        # happens in a worker thread (see validate.py), never on the event loop.
+        with _INFERENCE_SEMAPHORE:
+            _PREDICTOR.set_image(image)
+            masks, scores, _ = _PREDICTOR.predict(box=box, multimask_output=True)
         best_idx = int(np.argmax(np.asarray(scores)))
         best = np.asarray(masks[best_idx]).astype(bool)
         score = float(np.asarray(scores)[best_idx])

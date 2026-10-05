@@ -241,6 +241,13 @@ async def validate_surface(geometry: dict, segmentation_model: str | None = None
     warnings: list[str] = []
     logger.info("validate: polygon received, validating geometry")
 
+    # Fail fast on the explicit model choice: unknown ids raise before any
+    # geometry/imagery work, and unavailable models never silently fall back.
+    explicit_model = segmentation_model is not None
+    selected_provider = None
+    if explicit_model:
+        selected_provider = resolve_segmentation_model(segmentation_model, settings)
+
     # Stage 1: Geometry validation
     try:
         validated_geom, centroid_lnglat, metric_geom = prepare_analysis_geometry(geometry)
@@ -299,11 +306,11 @@ async def validate_surface(geometry: dict, segmentation_model: str | None = None
     osm_evidence = await _osm_building_evidence(geometry, metric_geom)
 
     # Stage 3: Segmentation (explicit per-request model or configured default).
-    explicit_model = segmentation_model is not None
-    if explicit_model:
-        provider = resolve_segmentation_model(segmentation_model, settings)
-    else:
-        provider = get_segmentation_provider(settings)
+    # Blocking inference (notably CPU SAM2) runs in a worker thread so slow
+    # validations never freeze /geocode, /health, or other endpoints.
+    from starlette.concurrency import run_in_threadpool
+
+    provider = selected_provider if selected_provider is not None else get_segmentation_provider(settings)
     logger.info("validate: running segmentation provider=%s", provider.name)
     bounds = create_bounds_from_polygon(validated_geom)
 
@@ -313,9 +320,9 @@ async def validate_surface(geometry: dict, segmentation_model: str | None = None
 
     try:
         if prompt_box is not None:
-            seg_result = provider.segment(image, bounds, prompt_box=prompt_box)
+            seg_result = await run_in_threadpool(provider.segment, image, bounds, prompt_box=prompt_box)
         else:
-            seg_result = provider.segment(image, bounds)
+            seg_result = await run_in_threadpool(provider.segment, image, bounds)
     except (UnknownSegmentationModelError, SegmentationModelUnavailableError):
         raise
     except Exception as exc:
@@ -326,7 +333,7 @@ async def validate_surface(geometry: dict, segmentation_model: str | None = None
         logger.warning(f"Segmentation failed: {exc}, using heuristic fallback")
         from app.segmentation.heuristic import HeuristicSegmentationProvider
         fallback_provider = HeuristicSegmentationProvider()
-        seg_result = fallback_provider.segment(image, bounds)
+        seg_result = await run_in_threadpool(fallback_provider.segment, image, bounds)
 
     overlay = _overlay(image, seg_result.mask, seg_result.classes)
     mask_only = _overlay_mask_only(seg_result.mask, seg_result.classes)

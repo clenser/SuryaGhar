@@ -3,6 +3,7 @@
 Heavy SAM2 inference is never exercised here: the provider is stubbed at the
 segment() boundary and the real checkpoint is never loaded by the suite.
 """
+import asyncio
 import io
 import subprocess
 import sys
@@ -48,7 +49,9 @@ def _minimal_response():
 
 
 def _install_crop_and_vision_stubs(monkeypatch):
-    img = Image.fromarray(np.full((32, 32, 3), 120, dtype=np.uint8))
+    # Production-size crop: providers assume imagery at least as large as the
+    # 256 px model window.
+    img = Image.fromarray(np.full((512, 512, 3), 120, dtype=np.uint8))
     buf = io.BytesIO()
     img.save(buf, format="JPEG")
     monkeypatch.setattr(
@@ -117,10 +120,73 @@ def test_default_validation_omits_model_selection(monkeypatch):
     assert seen["model"] is None
 
 
+def test_omitted_model_runs_real_hotosm_default(monkeypatch):
+    """A. Omitted segmentation_model -> 200 via the repo-bundled HOTOSM default."""
+    _install_crop_and_vision_stubs(monkeypatch)
+    r = client.post("/selection/validate", json={"geometry": SQUARE})
+    assert r.status_code == 200
+    assert r.json()["providers"]["segmentation"] == "hotosm_dinov3s_buildings"
+
+
+def test_explicit_hotosm_runs_real_provider(monkeypatch):
+    """B. segmentation_model=hotosm_buildings -> 200 via HOTOSM, no fallback."""
+    _install_crop_and_vision_stubs(monkeypatch)
+    r = client.post("/selection/validate", json={"geometry": SQUARE, "segmentation_model": "hotosm_buildings"})
+    assert r.status_code == 200
+    assert r.json()["providers"]["segmentation"] == "hotosm_dinov3s_buildings"
+
+
 def test_invalid_model_identifier_returns_400():
     r = client.post("/selection/validate", json={"geometry": SQUARE, "segmentation_model": "unet_xl"})
     assert r.status_code == 400
     assert r.json()["error"] == "unknown_segmentation_model"
+
+
+def test_invalid_model_rejected_before_geometry_check():
+    """D. Unknown ids fail fast with 400 even when the geometry is also bad."""
+    # Polygon with empty coordinates passes request-schema validation (Any)
+    # but fails analysis geometry; the unknown model must still win with 400.
+    bad = {"type": "Polygon", "coordinates": []}
+    r = client.post("/selection/validate", json={"geometry": bad, "segmentation_model": "unet_xl"})
+    assert r.status_code == 400
+    assert r.json()["error"] == "unknown_segmentation_model"
+
+
+def test_malformed_request_is_422_with_cors_headers():
+    """E. Unrelated schema violations still 422 and still carry CORS headers."""
+    bad = {"type": "Point", "coordinates": [0, 0]}
+    r = client.post(
+        "/selection/validate",
+        json={"geometry": bad},
+        headers={"Origin": "https://surya-ghar.vercel.app"},
+    )
+    assert r.status_code == 422
+    assert r.headers.get("access-control-allow-origin") == "https://surya-ghar.vercel.app"
+
+
+def test_invalid_model_400_carries_cors_headers():
+    r = client.post(
+        "/selection/validate",
+        json={"geometry": SQUARE, "segmentation_model": "unet_xl"},
+        headers={"Origin": "https://surya-ghar.vercel.app"},
+    )
+    assert r.status_code == 400
+    assert r.headers.get("access-control-allow-origin") == "https://surya-ghar.vercel.app"
+
+
+def test_preflight_allows_validate_post():
+    """F. CORS preflight for the frontend origin succeeds."""
+    r = client.options(
+        "/selection/validate",
+        headers={
+            "Origin": "https://surya-ghar.vercel.app",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "Content-Type",
+        },
+    )
+    assert r.status_code == 200
+    assert r.headers.get("access-control-allow-origin") == "https://surya-ghar.vercel.app"
+    assert "POST" in r.headers.get("access-control-allow-methods", "")
 
 
 def test_sam2_missing_checkpoint_returns_structured_error(monkeypatch):
@@ -132,6 +198,123 @@ def test_sam2_missing_checkpoint_returns_structured_error(monkeypatch):
     body = r.json()
     assert body["error"] == "segmentation_model_unavailable"
     assert "SAM 2.1 Tiny is unavailable" in body["detail"]
+
+
+async def test_blocking_segmentation_runs_off_event_loop(monkeypatch):
+    """G. provider.segment is dispatched to a worker thread, not the loop."""
+    import threading
+    import time
+
+    caller_ident = threading.get_ident()
+    seen: dict = {}
+
+    class SlowProvider:
+        name = "slow_stub"
+        accepts_prompt_box = False
+
+        @property
+        def model_info(self):
+            return {}
+
+        def segment(self, image, bounds):
+            seen["ident"] = threading.get_ident()
+            time.sleep(0.5)
+            h, w = image.shape[:2]
+            mask = np.zeros((h, w), dtype=np.int8)
+            return SegmentationResult(
+                mask=mask,
+                classes=["other", "building"],
+                class_fractions={"other": 1.0, "building": 0.0},
+                confidence=0.5,
+                image_dims=(w, h),
+                transform=compute_affine_transform(bounds, w, h),
+                crs="EPSG:4326",
+                provider="slow_stub",
+                model="stub",
+                limitations=[],
+            )
+
+    monkeypatch.setattr(validate_module, "resolve_segmentation_model", lambda model_id, settings: SlowProvider())
+    _install_crop_and_vision_stubs(monkeypatch)
+
+    ticks = 0
+
+    async def ticker():
+        nonlocal ticks
+        for _ in range(10):
+            await asyncio.sleep(0.1)
+            ticks += 1
+
+    tick_task = asyncio.create_task(ticker())
+    result = await validate_module.validate_surface(SQUARE, segmentation_model="slow_stub")
+    await tick_task
+
+    assert seen["ident"] != caller_ident
+    assert ticks == 10  # the loop kept ticking during blocking inference
+    assert result["providers"]["segmentation"] == "slow_stub"
+
+
+async def test_geocode_responsive_during_slow_validation(monkeypatch):
+    """H. /geocode answers while a slow validation is still running."""
+    import time
+
+    import httpx
+
+    class SlowProvider:
+        name = "slow_stub"
+        accepts_prompt_box = False
+
+        @property
+        def model_info(self):
+            return {}
+
+        def segment(self, image, bounds):
+            time.sleep(3)
+            h, w = image.shape[:2]
+            mask = np.zeros((h, w), dtype=np.int8)
+            return SegmentationResult(
+                mask=mask,
+                classes=["other", "building"],
+                class_fractions={"other": 1.0, "building": 0.0},
+                confidence=0.5,
+                image_dims=(w, h),
+                transform=compute_affine_transform(bounds, w, h),
+                crs="EPSG:4326",
+                provider="slow_stub",
+                model="stub",
+                limitations=[],
+            )
+
+    monkeypatch.setattr(validate_module, "resolve_segmentation_model", lambda model_id, settings: SlowProvider())
+    _install_crop_and_vision_stubs(monkeypatch)
+
+    from app.api import routes as routes_module
+    from app.schemas.geocode import LocationResult as GeoResult
+
+    class FastGeocoder:
+        name = "test"
+
+        async def search(self, query, limit=6):
+            return [GeoResult(name="Kolkata", state="West Bengal", country="India", latitude=22.57, longitude=88.36)]
+
+    app.dependency_overrides[routes_module.get_geocoder] = lambda: FastGeocoder()
+    try:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+            val_task = asyncio.create_task(
+                ac.post("/selection/validate", json={"geometry": SQUARE, "segmentation_model": "slow_stub"})
+            )
+            await asyncio.sleep(0.5)
+            started = time.monotonic()
+            geo = await ac.post("/geocode", json={"query": "kolkata"})
+            geo_elapsed = time.monotonic() - started
+            assert geo.status_code == 200
+            assert not val_task.done()  # slow validation still crunching
+            assert geo_elapsed < 2.0  # geocode did not wait for it
+            val = await val_task
+            assert val.status_code == 200
+    finally:
+        app.dependency_overrides.clear()
 
 
 def test_explicit_sam2_reaches_sam2_provider(monkeypatch):

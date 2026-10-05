@@ -31,6 +31,13 @@ from app.segmentation.providers import (
 
 logger = logging.getLogger("solar_rooftop.segmentation.hotosm")
 
+import threading as _threading
+
+# Process-wide ONNX session cache (see _session). Never loaded at import time.
+_SESSION = None
+_SESSION_PATH: str | None = None
+_SESSION_LOCK = _threading.Lock()
+
 WINDOW = 256
 STRIDE = 192
 HOT_MEAN = np.asarray([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1, 1)
@@ -82,6 +89,10 @@ class HotosmBuildingsProvider(SegmentationProvider):
         # is structured as backend/app/segmentation/, so parents[2] is backend/.
         backend_dir = Path(__file__).resolve().parents[2]
         candidates.extend(str(backend_dir / p) for p in list(candidates) if not Path(p).is_absolute())
+        # Repo-bundled default: backend/models/model.onnx. Without this, deployments
+        # with no SEGMENTATION_MODEL_PATH configured can never resolve HOTOSM even
+        # though the checkpoint ships with the service.
+        candidates.append(str(backend_dir / "models" / "model.onnx"))
         for candidate in candidates:
             if Path(candidate).exists():
                 return candidate
@@ -92,15 +103,22 @@ class HotosmBuildingsProvider(SegmentationProvider):
         return path is not None and Path(path).exists()
 
     def _session(self):
-        if getattr(self, "_sess", None) is not None:
-            return self._sess
-        import onnxruntime as ort
+        # Process-wide session cache: the 219 MB checkpoint must load once per
+        # process, not once per request. InferenceSession.run is thread-safe.
+        global _SESSION, _SESSION_PATH
+        if _SESSION is not None and Path(str(_SESSION_PATH)).exists():
+            return _SESSION
+        with _SESSION_LOCK:
+            if _SESSION is not None and Path(str(_SESSION_PATH)).exists():
+                return _SESSION
+            import onnxruntime as ort
 
-        path = self._model_path()
-        if not path or not Path(path).exists():
-            raise RuntimeError("SEGMENTATION_MODEL_PATH does not exist")
-        self._sess = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
-        return self._sess
+            path = self._model_path()
+            if not path or not Path(path).exists():
+                raise RuntimeError("SEGMENTATION_MODEL_PATH does not exist")
+            _SESSION = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
+            _SESSION_PATH = path
+            return _SESSION
 
     def _windows(self, size: int) -> list[int]:
         if size <= WINDOW:

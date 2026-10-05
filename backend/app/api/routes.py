@@ -38,6 +38,8 @@ async def health() -> dict:
     candidates = [settings.segmentation_model_path, os.environ.get("SEGMENTATION_MODEL_PATH")]
     backend_dir = Path(__file__).resolve().parents[2]
     candidates += [str(backend_dir / c) for c in candidates if c and not Path(c).is_absolute()]
+    # Repo-bundled default, mirroring HotosmBuildingsProvider._model_path().
+    candidates.append(str(backend_dir / "models" / "model.onnx"))
     model_present = any(bool(c and Path(c).exists()) for c in candidates)
     return {"status": "ok", "segmentation_provider": segmentation, "model_present": model_present}
 
