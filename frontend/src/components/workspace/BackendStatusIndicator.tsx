@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 import { API_BASE_URL } from "../../services/apiBase";
 import {
   getBackendStatus,
@@ -8,23 +8,13 @@ import {
 
 /**
  * Backend connection indicator: amber "Starting server… Please wait" while
- * waking, green "Server online" (briefly, then dot-only), red
+ * waking, green "Server online" (always visible while online), red
  * "Server unavailable" + Retry on genuine failure. Driven entirely by the
  * shared backendStatus store; rendered wherever the layout needs it.
  */
 export function BackendStatusIndicator() {
   const backendStatus = useSyncExternalStore(subscribeBackendStatus, getBackendStatus);
-  // "Server online" stays briefly, then fades to just the green dot.
-  const [onlineVisible, setOnlineVisible] = useState(false);
-  useEffect(() => {
-    if (backendStatus !== "online") {
-      setOnlineVisible(false);
-      return;
-    }
-    setOnlineVisible(true);
-    const timer = window.setTimeout(() => setOnlineVisible(false), 8000);
-    return () => window.clearTimeout(timer);
-  }, [backendStatus]);
+  // "Server online" stays permanently visible while the backend is online.
   const retryBackend = () => {
     void requestBackend(`${API_BASE_URL}/health`).catch(() => {});
   };
@@ -56,7 +46,7 @@ export function BackendStatusIndicator() {
           </button>
         </>
       )}
-      {backendStatus === "online" && onlineVisible && (
+      {backendStatus === "online" && (
         <span className="status-bar__muted status-bar__backend-text">Server online</span>
       )}
     </span>
