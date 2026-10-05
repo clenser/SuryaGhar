@@ -1,5 +1,6 @@
 import { Sun, SlidersHorizontal } from "lucide-react";
 import { LocationSearch } from "../search/LocationSearch";
+import { BackendStatusIndicator } from "./BackendStatusIndicator";
 import type { LocationResult } from "../../types";
 
 interface HeaderProps {
@@ -19,6 +20,7 @@ export function Header({ advanced, onAdvancedToggle, onSelectPlace }: HeaderProp
         <LocationSearch onSelect={onSelectPlace} />
       </div>
       <div className="app-header__actions">
+        <BackendStatusIndicator />
         <button
           type="button"
           className={`header-btn${advanced ? " is-active" : ""}`}

@@ -55,6 +55,24 @@
 .app-header__actions {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+/* Backend status pill inside the header: no footer separator, stays compact
+   so it never squeezes the search field or covers the Advanced button. */
+.app-header__actions .status-bar__backend {
+  border-left: 0;
+  margin-left: 0;
+  padding-left: 0;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .app-header__actions .status-bar__backend-text {
+    display: none;
+  }
 }
 
 .header-btn {

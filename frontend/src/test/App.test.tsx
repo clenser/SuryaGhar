@@ -46,6 +46,18 @@ describe("App workspace", () => {
     expect(document.querySelector(".status-bar")).toBeTruthy();
   });
 
+  it("shows the backend status in the header, left of Advanced", () => {
+    render(<App />);
+    const header = screen.getByRole("banner");
+    const status = within(header).getByRole("status");
+    const advanced = within(header).getByRole("button", { name: /Advanced/ });
+    expect(status).toBeInTheDocument();
+    expect(status.compareDocumentPosition(advanced) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Footer keeps map status but no backend indicator.
+    const footer = document.querySelector(".status-bar") as HTMLElement;
+    expect(within(footer).queryByRole("status")).toBeNull();
+  });
+
   it("names the imagery provider and states it is prototype-only in diagnostics", async () => {
     render(<App />);
     await userEvent.click(screen.getByRole("button", { name: /Advanced/ }));

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, afterEach, beforeEach } from "vitest";
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { StatusBar } from "../components/workspace/StatusBar";
+import { BackendStatusIndicator } from "../components/workspace/BackendStatusIndicator";
 import { resetBackendStatusForTests } from "../services/backendStatus";
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -16,9 +16,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("StatusBar backend indicator", () => {
+describe("BackendStatusIndicator", () => {
   it("stays quiet before any request", () => {
-    render(<StatusBar view={null} selectedName={null} />);
+    render(<BackendStatusIndicator />);
     expect(screen.queryByText(/Starting server/)).toBeNull();
     expect(screen.queryByText("Server unavailable")).toBeNull();
     expect(screen.queryByText("Server online")).toBeNull();
@@ -35,7 +35,7 @@ describe("StatusBar backend indicator", () => {
     act(() => {
       pending = requestBackend("http://t/health");
     });
-    render(<StatusBar view={null} selectedName={null} />);
+    render(<BackendStatusIndicator />);
     expect(screen.getByText(/Starting server… Please wait/)).toBeInTheDocument();
     await act(async () => {
       resolveFetch(jsonResponse(200, { status: "ok" }));
@@ -52,7 +52,7 @@ describe("StatusBar backend indicator", () => {
       }),
     );
     const { requestBackend } = await import("../services/backendStatus");
-    render(<StatusBar view={null} selectedName={null} />);
+    render(<BackendStatusIndicator />);
     await act(async () => {
       await expect(requestBackend("http://t/health")).rejects.toThrow();
     });
