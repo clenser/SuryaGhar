@@ -38,8 +38,18 @@ def _sun_position(latitude: float, longitude: float, when_utc) -> tuple[float, f
     return float(sp["apparent_elevation"].iloc[0]), float(sp["azimuth"].iloc[0])
 
 
-async def fetch_building_obstacles(geometry: dict, radius_m: float = 120.0, timeout: float = 10.0):
-    """Returns list of (footprint Polygon in WGS84, height_m)."""
+async def fetch_building_obstacles(
+    geometry: dict,
+    radius_m: float = 120.0,
+    timeout: float = 10.0,
+    assume_default_height: bool = True,
+):
+    """Returns list of (footprint Polygon in WGS84, height_m).
+
+    When ``assume_default_height`` is False, buildings without an explicit
+    ``height``/``building:levels`` tag are returned with ``height_m=None`` so
+    callers never present an assumed height as measured evidence.
+    """
     geom = polygon_from_geometry(geometry)
     minx, miny, maxx, maxy = geom.bounds
     dlat = radius_m / 111320.0
@@ -81,7 +91,7 @@ async def fetch_building_obstacles(geometry: dict, radius_m: float = 120.0, time
                 height = float(levels) * 3.0
             except ValueError:
                 height = None
-        if height is None:
+        if height is None and assume_default_height:
             height = 6.0  # assumed low-rise
         obstacles.append((footprint, height))
     return obstacles

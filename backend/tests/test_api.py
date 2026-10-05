@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.providers.nominatim import NominatimGeocoder
+from app.services.geocoding import build_geocoder
 import app.api.routes as routes
 
 client = TestClient(app)
@@ -55,6 +56,15 @@ def test_geocode_success_with_mocked_provider(monkeypatch):
     data = r.json()
     assert data["provider"] == "nominatim"
     assert data["results"][0]["name"] == "Kalna"
+
+
+def test_geocode_reports_configured_fallback_provider():
+    from app.core.config import Settings
+
+    geocoder = build_geocoder(Settings(geocoder_provider="nominatim+photon"))
+    assert geocoder.name == "nominatim+photon"
+    assert build_geocoder(Settings(geocoder_provider="photon")).name == "photon"
+    assert build_geocoder(Settings(geocoder_provider="nominatim")).name == "nominatim"
 
 
 def test_geocode_upstream_failure_returns_502(monkeypatch):

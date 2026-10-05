@@ -12,7 +12,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=ROOT_DIR / ".env", extra="ignore")
 
     # Provider selection (AGENTS.md section 21)
-    geocoder_provider: str = "nominatim"
+    geocoder_provider: str = "nominatim+photon"
+    photon_base_url: str = "https://photon.komoot.io"
     imagery_provider: str = "esri"
     terrain_provider: str = "aws-terrarium"
 

@@ -70,7 +70,8 @@ async def _osm_building_evidence(geometry: dict, metric_geom) -> dict:
         from app.geospatial.geometry import to_metric
         from shapely.geometry import shape as _shape
 
-        obstacles = await fetch_building_obstacles(geometry)
+        # Tagged heights only: never present the assumed low-rise default as evidence.
+        obstacles = await fetch_building_obstacles(geometry, assume_default_height=False)
         if not obstacles:
             return {"available": False, "overlap_fraction": None, "heights_m": []}
         selected = geom = _shape(geometry)
@@ -79,9 +80,11 @@ async def _osm_building_evidence(geometry: dict, metric_geom) -> dict:
         heights: list[float] = []
         for footprint, height in obstacles:
             footprint_m = to_metric(footprint, selected.centroid.x, selected.centroid.y)
-            if footprint_m.intersects(selected_m):
-                footprints.append(footprint_m)
-                heights.append(height)
+            if not footprint_m.intersects(selected_m):
+                continue
+            footprints.append(footprint_m)
+            if height is not None:  # None means untagged in OSM; never assume a height here.
+                heights.append(float(height))
         if not footprints:
             return {"available": True, "overlap_fraction": 0.0, "heights_m": []}
         from shapely.ops import unary_union
@@ -91,8 +94,10 @@ async def _osm_building_evidence(geometry: dict, metric_geom) -> dict:
             "available": True,
             "overlap_fraction": round(min(max(overlap, 0.0), 1.0), 3),
             "buildings_overlapping": len(footprints),
+            "buildings_with_tagged_height": len(heights),
             "median_height_m": round(float(sorted(heights)[len(heights) // 2]), 1) if heights else None,
             "max_height_m": round(max(heights), 1) if heights else None,
+            "height_source": "osm_tag" if heights else "unavailable",
         }
     except Exception as exc:
         logger.info("OSM building evidence unavailable: %s", exc)
@@ -169,10 +174,12 @@ async def validate_surface(geometry: dict) -> dict:
     Pipeline:
     1. Validate and repair geometry
     2. Fetch satellite imagery crop
-    3. Run segmentation (SAM -> heuristic fallback)
-    4. Run AI semantic validation (Groq -> Gemini -> heuristic fallback)
-    5. Aggregate confidence across stages
-    6. Return structured result with metadata
+    3. Run segmentation (HOTOSM/SAM -> heuristic fallback) as supporting evidence
+    4. Run AI semantic validation (Groq -> Gemini -> unavailable)
+    5. Aggregate supporting confidence and return structured result with metadata
+
+    The final classification and confidence come only from AI semantic
+    validation. Segmentation, OSM and pixel heuristics are supporting evidence.
     """
     settings = get_settings()
     warnings: list[str] = []
@@ -304,27 +311,28 @@ async def validate_surface(geometry: dict) -> dict:
             try:
                 coverage = float(fractions.get("rooftop", 0) or 0) + float(fractions.get("open_ground", 0) or 0)
             except (ValueError, TypeError):
-                coverage = seg_result.class_fractions.get("roof", 0.0)
+                coverage = 0.0
         else:
-            coverage = seg_result.class_fractions.get("roof", 0.0)
+            coverage = 0.0  # never derive semantic coverage from heuristic pixels
         reasoning = ai_result.get("reason", "")
         if reasoning:
             warnings.append(reasoning)
         vision_label = "groq" if ai_provider == "groq" else "gemini_fallback"
         vision_model = ai_result.get("model")
     else:
-        # Heuristic fallback for vision
-        dominant_class = max(seg_result.class_fractions, key=lambda k: seg_result.class_fractions[k])
-        classification = "roof" if dominant_class == "building" else (dominant_class if dominant_class != "other" else "unknown")
-        vision_confidence = round(min(seg_result.confidence, 0.6), 2)
-        coverage = seg_result.class_fractions.get("roof", 0.0)
+        # Both semantic providers failed. Do NOT fabricate a semantic classification
+        # from the heuristic pixel fallback; report it as unavailable instead.
+        classification = "unknown"
+        vision_confidence = 0.0
+        coverage = 0.0
         warnings.append(
-            "Low-confidence heuristic fallback: both AI vision providers failed. "
-            "This is a geometric/color estimate only, not AI semantic validation."
+            "Semantic surface validation could not be completed (Groq and Gemini unavailable). "
+            "No surface classification has been made."
         )
-        vision_label = "heuristic_fallback"
-        vision_model = "color_heuristic_v1"
+        vision_label = "unavailable"
+        vision_model = None
         vision_fallback = True
+        warnings.append("Heuristic pixel analysis is available under Technical diagnostics only.")
 
     # Stage 4 confidence
     vision_confidence_obj = StageConfidence.from_vision(
@@ -348,6 +356,9 @@ async def validate_surface(geometry: dict) -> dict:
     if metric_geom.area_m2 < 20:
         warnings.append("Selected area is very small; resolution is marginal for small polygons.")
     if vision_fallback:
+        warnings.append(
+            "Pixel-heuristic estimates below are diagnostics only and do not classify the surface."
+        )
         if seg_result.class_fractions.get("vegetation", 0.0) > 0.15:
             warnings.append(f"Heuristic estimate: roughly {seg_result.class_fractions['vegetation'] * 100:.0f}% of the area resembles vegetation.")
         if seg_result.class_fractions.get("water", 0.0) > 0.1:
@@ -355,32 +366,44 @@ async def validate_surface(geometry: dict) -> dict:
         if seg_result.class_fractions.get("road", 0.0) > 0.25:
             warnings.append(f"Heuristic estimate: roughly {seg_result.class_fractions['road'] * 100:.0f}% resembles a hard grey surface.")
 
-    # Aggregate confidence
+    # Supporting-evidence confidence (geometry + segmentation) is still reported for
+    # transparency, but it must NOT determine the semantic result.
     all_stages = [geom_confidence, seg_confidence_obj, vision_confidence_obj]
     aggregated = aggregate_confidence(all_stages)
     logger.info("validate: vision done provider=%s; building response", vision_label)
 
-    # Combine independent evidence: HOTOSM building masks, OSM building overlap/height,
-    # and AI vision semantics. Missing OSM data is not a penalty.
+    # HOTOSM / OSM / pixel heuristics are supporting evidence only.
     hotosm_building = seg_result.class_fractions.get("building", seg_result.class_fractions.get("roof", 0.0))
     osm_overlap = osm_evidence.get("overlap_fraction")
-    final_confidence = aggregated.overall_score
-    if vision_label in ("groq", "gemini_fallback") and classification == "roof":
-        if osm_evidence.get("available") and (osm_overlap or 0) >= 0.5 and hotosm_building >= 0.3:
-            final_confidence = max(final_confidence, 0.85)
-        elif hotosm_building >= 0.3 and vision_confidence >= 0.7:
-            final_confidence = max(final_confidence, 0.7)
-    if vision_label == "heuristic_fallback":
-        final_confidence = min(final_confidence, 0.6)
+    supporting = {
+        "hotosm_building_fraction": round(float(hotosm_building), 3),
+        "osm_overlap_fraction": osm_overlap,
+        "geometry_confidence": round(float(geom_confidence.confidence), 2),
+        "segmentation_confidence": round(float(seg_confidence_obj.confidence), 2),
+    }
+    if (osm_overlap or 0) >= 0.5 and hotosm_building >= 0.3:
+        supporting["note"] = "OSM footprint and building pixels agree with a roof-like selection."
+
+    # Final classification and confidence come only from AI semantic validation.
+    semantic_available = bool(ai_result)
+    if semantic_available:
+        final_confidence = round(min(max(float(vision_confidence), 0.0), 1.0), 2)
+        if not supporting.get("note") and hotosm_building >= 0.3:
+            supporting["note"] = "Building pixels support, but do not determine, the AI classification."
+    else:
+        final_confidence = 0.0
 
     evidence = {
+        "semantic_available": semantic_available,
         "hotosm_building_fraction": round(float(hotosm_building), 3),
         "osm": osm_evidence,
+        "supporting": supporting,
         "vision": {
             "classification": classification,
             "confidence": vision_confidence,
             "provider": vision_label,
             "model": vision_model,
+            "reason": reasoning or None,
         },
     }
 

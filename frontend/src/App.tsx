@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { MapView, type MapViewHandle } from "./components/map/MapView";
 import { MapControls } from "./components/map/MapControls";
 import { Header } from "./components/workspace/Header";
-import { OnboardingCard } from "./components/workspace/OnboardingCard";
+import { WorkflowStepper } from "./components/workspace/WorkflowStepper";
 import { StatusBar } from "./components/workspace/StatusBar";
 import { LayerPanel } from "./components/panels/LayerPanel";
 import { SelectedPlaceCard } from "./components/panels/SelectedPlaceCard";
@@ -83,7 +83,8 @@ export default function App() {
 
   const showBanner = imageryFailed && !bannerDismissed;
 
-  // Derive the workflow stepper from the same source of truth as the stage panel.
+  // Workflow progress: stages before the current one are marked complete.
+  const stageOrder: Stage[] = ["select", "validate", "design", "solar", "site"];
   const workflowStep = !place
     ? 0
     : selection.mode !== "confirmed"
@@ -97,24 +98,6 @@ export default function App() {
             : stage === "solar"
               ? 4
               : 5;
-  const TITLES: Record<number, string> = {
-    0: "Find a property to begin",
-    1: "Select an area",
-    2: "Validate the surface",
-    3: "Design the solar layout",
-    4: "Analyse",
-    5: "Results",
-  };
-  const SUBTITLES: Record<number, string> = {
-    0: "Search for an address, locality or landmark in India. The map will move to that place.",
-    1: "Zoom to a rooftop or open ground, then draw a polygon around it.",
-    2: "Let HOTOSM, OSM and AI vision check what you selected.",
-    3: "Compute the panel layout for this area.",
-    4: "Estimate annual energy and site context.",
-    5: "Review surroundings, shadows and final numbers.",
-  };
-  const workflowTitle = TITLES[workflowStep];
-  const workflowSubtitle = SUBTITLES[workflowStep];
 
   return (
     <div className="app">
@@ -139,13 +122,20 @@ export default function App() {
         />
 
         <div className="stage-panel">
+          <WorkflowStepper step={workflowStep} />
           <div className="stage-tabs" role="tablist" aria-label="Analysis stages">
-            {(["select", "validate", "design", "solar", "site"] as Stage[]).map((s) => (
+            {stageOrder.map((s) => (
               <button
                 key={s}
                 role="tab"
                 aria-selected={stage === s}
-                className={stage === s ? "is-active" : ""}
+                className={
+                  stage === s
+                    ? "is-active"
+                    : stageOrder.indexOf(s) < stageOrder.indexOf(stage)
+                      ? "is-complete"
+                      : ""
+                }
                 disabled={
                   s === "select"
                     ? false
@@ -243,12 +233,7 @@ export default function App() {
           />
         ) : null}
 
-        <OnboardingCard
-          visible
-          step={workflowStep}
-          title={workflowTitle}
-          subtitle={workflowSubtitle}
-        />
+        {/* Workflow step is already summarized at the top of the left stage panel. */}
       </main>
 
       <StatusBar view={view} selectedName={place?.name ?? null} />

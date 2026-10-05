@@ -17,11 +17,27 @@ export interface ValidationResult {
   providers: { imagery: string; vision: string; segmentation?: string; segmentation_model?: string } | null;
   ai?: { provider: string | null; model: string | null; primary_class: string | null; is_suitable_for_solar: boolean | null } | null;
   confidence_detail?: { overall_level?: string; overall_score?: number; stages?: Array<Record<string, unknown>>; limitations?: string[] } | null;
-  evidence?: {
-    hotosm_building_fraction?: number;
-    osm?: { available?: boolean; overlap_fraction?: number | null; buildings_overlapping?: number; median_height_m?: number | null; max_height_m?: number | null };
-    vision?: { classification?: string; confidence?: number; provider?: string; model?: string | null };
-  } | null;
+evidence?: {
+      semantic_available?: boolean;
+      hotosm_building_fraction?: number;
+      osm?: {
+        available?: boolean;
+        overlap_fraction?: number | null;
+        buildings_overlapping?: number;
+        buildings_with_tagged_height?: number;
+        height_source?: "osm_tag" | "unavailable";
+        median_height_m?: number | null;
+        max_height_m?: number | null;
+      };
+      supporting?: {
+        hotosm_building_fraction?: number;
+        osm_overlap_fraction?: number | null;
+        geometry_confidence?: number;
+        segmentation_confidence?: number;
+        note?: string;
+      };
+      vision?: { classification?: string; confidence?: number; provider?: string; model?: string | null; reason?: string | null };
+    } | null;
 }
 
 export interface PanelLayoutResult {
@@ -94,12 +110,20 @@ async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promi
     // Aborted requests are not network errors; let callers handle cancellation.
     if (err instanceof DOMException && err.name === "AbortError") throw err;
     console.error(`[API] network failure calling ${API_BASE_URL}${path}`, err);
-    throw new ApiError("The analysis service is unavailable. Please try again later.", "network");
+    throw new ApiError("Could not reach the analysis service.", "network");
   }
   if (response.status === 422) {
     const detail = await response.json().catch(() => null);
     console.error(`[API] ${path} 422`, detail);
     throw new ApiError(detail?.detail ?? "The request was invalid.", "validation");
+  }
+  if (response.status === 429) {
+    console.error(`[API] ${path} 429`, await response.json().catch(() => null));
+    throw new ApiError("Rate limited. Please try again in a moment.", "server");
+  }
+  if (response.status >= 500) {
+    console.error(`[API] ${path} HTTP ${response.status}`, await response.json().catch(() => null));
+    throw new ApiError("Surface analysis failed on the server.", "server");
   }
   if (!response.ok) {
     const detail = await response.json().catch(() => null);

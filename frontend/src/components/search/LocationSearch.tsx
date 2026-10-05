@@ -14,8 +14,8 @@ type Status =
   | { kind: "empty" }
   | { kind: "error"; message: string };
 
-const DEBOUNCE_MS = 350;
-const MIN_QUERY = 2;
+const DEBOUNCE_MS = 600;
+const MIN_QUERY = 3;
 
 export function LocationSearch({ onSelect }: LocationSearchProps) {
   const [query, setQuery] = useState("");

@@ -8,14 +8,16 @@ export class GeocodeError extends Error {
   }
 }
 
-const cache = new Map<string, LocationResult[]>();
+const cache = new Map<string, { at: number; results: LocationResult[] }>();
 const CACHE_LIMIT = 50;
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 /** Calls the backend geocoder. The browser never contacts the upstream provider directly. */
 export async function searchLocations(query: string, signal?: AbortSignal): Promise<LocationResult[]> {
   const key = query.trim().toLowerCase();
   const cached = cache.get(key);
-  if (cached) return cached;
+  if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.results;
+  cache.delete(key);
 
   const timeoutController = new AbortController();
   const timer = window.setTimeout(() => timeoutController.abort(), 8000);
@@ -43,14 +45,22 @@ export async function searchLocations(query: string, signal?: AbortSignal): Prom
     console.error(`[API] /geocode 422`, await response.json().catch(() => null));
     throw new GeocodeError("Enter a place name to search", "validation");
   }
+  if (response.status === 429) {
+    console.error(`[API] /geocode 429`, await response.json().catch(() => null));
+    throw new GeocodeError("Location search is temporarily rate-limited. Please try again in a moment.", "server");
+  }
+  if (response.status >= 500) {
+    console.error(`[API] /geocode HTTP ${response.status}`, await response.json().catch(() => null));
+    throw new GeocodeError("Location search failed on the server.", "server");
+  }
   if (!response.ok) {
     console.error(`[API] /geocode HTTP ${response.status}`, await response.json().catch(() => null));
-    throw new GeocodeError("Location search is temporarily unavailable", "server");
+    throw new GeocodeError("Couldn't find that location. Try again.", "server");
   }
 
   const data = (await response.json()) as GeocodeResponse;
   if (cache.size >= CACHE_LIMIT) cache.delete(cache.keys().next().value as string);
-  cache.set(key, data.results);
+  cache.set(key, { at: Date.now(), results: data.results });
   return data.results;
 }
 

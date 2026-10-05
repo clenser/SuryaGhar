@@ -52,16 +52,20 @@ export function ValidatePanel({ vertices, onContinue, onRedraw }: ValidatePanelP
 
       {state.kind === "ok" && (
         <>
-          <div className="result-hero">
-            <span className="result-hero__value">{labelFor(state.result.classification)}</span>
-            <span className="result-hero__label">
-              {Math.round(state.result.confidence * 100)}% confidence
-              {state.result.confidence_detail?.overall_level ? ` (${String(state.result.confidence_detail.overall_level)})` : ""} ·{" "}
-              {Math.round(state.result.coverage * 100)}% looks suitable for solar
-            </span>
-          </div>
-          {state.result.providers && state.result.providers.segmentation && (
-            <p className="result-note">Segmentation: {state.result.providers.segmentation}</p>
+          {semanticAvailable(state.result) ? (
+            <div className="result-hero">
+              <span className="result-hero__value">{labelFor(state.result.classification)}</span>
+              <span className="result-hero__label">
+                AI assessment · {Math.round(state.result.confidence * 100)}% confidence
+                {state.result.confidence_detail?.overall_level ? ` (${String(state.result.confidence_detail.overall_level)})` : ""} ·{" "}
+                {Math.round(state.result.coverage * 100)}% looks suitable for solar
+              </span>
+            </div>
+          ) : (
+            <div className="stage-card__warning" role="status">
+              <strong>Surface assessment unavailable.</strong> AI semantic validation did not complete, so this
+              selection has not been classified. Pixel and building-model data below are diagnostics only.
+            </div>
           )}
 
           {state.result.evidence && (
@@ -95,18 +99,31 @@ export function ValidatePanel({ vertices, onContinue, onRedraw }: ValidatePanelP
             </dl>
           )}
 
+          {state.result.evidence?.vision?.reason && (
+            <p className="result-note">{state.result.evidence.vision.reason}</p>
+          )}
+
+          {state.result.evidence?.supporting?.note && (
+            <p className="result-note">Supporting evidence: {state.result.evidence.supporting.note}</p>
+          )}
+
           {state.result.components && Object.keys(state.result.components).length > 0 && (
-            <div className="bar-list" aria-label="Area composition">
-              {Object.entries(state.result.components).map(([name, fraction]) => (
-                <div className="bar-list__row" key={name}>
-                  <span>{name}</span>
-                  <span className="bar-list__track">
-                    <span className="bar-list__fill" style={{ width: `${Math.round(fraction * 100)}%`, display: "block" }} />
-                  </span>
+            <details>
+              <summary className="result-note" style={{ cursor: "pointer" }}>
+                Technical diagnostics ({state.result.providers?.segmentation ?? "heuristic"})
+              </summary>
+              <div className="bar-list" aria-label="Area composition">
+                {Object.entries(state.result.components).map(([name, fraction]) => (
+                  <div className="bar-list__row" key={name}>
+                    <span>{name}</span>
+                    <span className="bar-list__track">
+                      <span className="bar-list__fill" style={{ width: `${Math.round(fraction * 100)}%`, display: "block" }} />
+                    </span>
                   <span>{Math.round(fraction * 100)}%</span>
                 </div>
               ))}
-            </div>
+              </div>
+            </details>
           )}
 
           {state.result.images && (
@@ -155,10 +172,15 @@ export function ValidatePanel({ vertices, onContinue, onRedraw }: ValidatePanelP
   );
 }
 
+function semanticAvailable(result: ValidationResult): boolean {
+  if (result.evidence?.semantic_available != null) return result.evidence.semantic_available;
+  return result.providers?.vision === "groq" || result.providers?.vision === "gemini_fallback";
+}
+
 function aiValidationLabel(vision: string | undefined): string {
   if (vision === "groq") return "AI validation: Groq Vision";
   if (vision === "gemini_fallback") return "AI validation: Gemini Vision (fallback)";
-  return "Low-confidence heuristic fallback";
+  return "AI validation: unavailable (no surface classification made)";
 }
 
 function labelFor(classification: string): string {
