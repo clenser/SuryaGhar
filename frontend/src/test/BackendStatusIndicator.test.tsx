@@ -17,11 +17,12 @@ afterEach(() => {
 });
 
 describe("BackendStatusIndicator", () => {
-  it("stays quiet before any request", () => {
-    render(<BackendStatusIndicator />);
-    expect(screen.queryByText(/Starting server/)).toBeNull();
-    expect(screen.queryByText("Server unavailable")).toBeNull();
-    expect(screen.queryByText("Server online")).toBeNull();
+  it("shows only the dot before any request", () => {
+    const { container } = render(<BackendStatusIndicator />);
+    expect(screen.queryByText(/Starting/)).toBeNull();
+    expect(screen.queryByText("API Offline")).toBeNull();
+    expect(screen.queryByText("API Online")).toBeNull();
+    expect(container.querySelector(".backend-status__dot--unknown")).toBeInTheDocument();
   });
 
   it("shows the starting state while the backend wakes", async () => {
@@ -36,12 +37,12 @@ describe("BackendStatusIndicator", () => {
       pending = requestBackend("http://t/health");
     });
     render(<BackendStatusIndicator />);
-    expect(screen.getByText(/Starting server… Please wait/)).toBeInTheDocument();
+    expect(screen.getByText("Starting analysis server…")).toBeInTheDocument();
     await act(async () => {
       resolveFetch(jsonResponse(200, { status: "ok" }));
       await pending;
     });
-    expect(screen.getByText("Server online")).toBeInTheDocument();
+    expect(screen.getByText("API Online")).toBeInTheDocument();
   });
 
   it("shows an error with a retry action on failure, and recovers", async () => {
@@ -56,10 +57,10 @@ describe("BackendStatusIndicator", () => {
     await act(async () => {
       await expect(requestBackend("http://t/health")).rejects.toThrow();
     });
-    expect(screen.getByText("Server unavailable")).toBeInTheDocument();
+    expect(screen.getByText("API Offline")).toBeInTheDocument();
 
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(200, { status: "ok" })));
-    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(await screen.findByText("Server online")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Retry connection" }));
+    expect(await screen.findByText("API Online")).toBeInTheDocument();
   });
 });
