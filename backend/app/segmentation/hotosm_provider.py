@@ -65,15 +65,27 @@ class HotosmBuildingsProvider(SegmentationProvider):
             return 0.4371
 
     def _model_path(self) -> str | None:
+        candidates: list[str] = []
         try:
             from app.core.config import get_settings
 
             p = get_settings().segmentation_model_path
             if p:
-                return str(p)
+                candidates.append(str(p))
         except Exception:
             pass
-        return os.environ.get("SEGMENTATION_MODEL_PATH")
+        env = os.environ.get("SEGMENTATION_MODEL_PATH")
+        if env:
+            candidates.append(env)
+        # Base candidates on the repo's backend/ directory so relative paths resolve
+        # whether the process starts in /app, /app/backend, or another cwd. The repo
+        # is structured as backend/app/segmentation/, so parents[2] is backend/.
+        backend_dir = Path(__file__).resolve().parents[2]
+        candidates.extend(str(backend_dir / p) for p in list(candidates) if not Path(p).is_absolute())
+        for candidate in candidates:
+            if Path(candidate).exists():
+                return candidate
+        return candidates[0] if candidates else None
 
     def is_available(self) -> bool:
         path = self._model_path()

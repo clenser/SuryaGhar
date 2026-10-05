@@ -18,6 +18,7 @@ from app.schemas.analysis import (
     ValidateResponse,
 )
 from app.schemas.geocode import GeocodeRequest, GeocodeResponse
+from app.segmentation.factory import get_segmentation_provider_name
 from app.services.geocoding import build_geocoder
 
 router = APIRouter()
@@ -29,7 +30,16 @@ def get_geocoder(settings: Settings = Depends(get_settings)) -> Geocoder:
 
 @router.get("/health")
 async def health() -> dict:
-    return {"status": "ok"}
+    segmentation = get_segmentation_provider_name(get_settings())
+    import os
+    from pathlib import Path
+
+    settings = get_settings()
+    candidates = [settings.segmentation_model_path, os.environ.get("SEGMENTATION_MODEL_PATH")]
+    backend_dir = Path(__file__).resolve().parents[2]
+    candidates += [str(backend_dir / c) for c in candidates if c and not Path(c).is_absolute()]
+    model_present = any(bool(c and Path(c).exists()) for c in candidates)
+    return {"status": "ok", "segmentation_provider": segmentation, "model_present": model_present}
 
 
 @router.get("/config")

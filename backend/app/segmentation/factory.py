@@ -75,6 +75,15 @@ def get_segmentation_provider_name(settings: Settings) -> str:
     """Get the name of the provider that would be selected."""
     provider_name = getattr(settings, "segmentation_provider", "heuristic").lower()
 
+    if provider_name in ("hotosm", "dinov3s_buildings", "hotosm_buildings"):
+        return "hotosm_dinov3s_buildings"
+    if provider_name == "semantic" or (provider_name == "auto" and semantic_available()):
+        provider = SemanticSegmentationProvider(
+            checkpoint_path=getattr(settings, "segmentation_model_path", None),
+        )
+        return "semantic_model" if provider.is_available() else "heuristic"
     if provider_name == "sam" and sam_available():
         return "sam"
+    if provider_name == "auto" and semantic_available():
+        return "semantic_model"
     return "heuristic"
