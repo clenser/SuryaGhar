@@ -94,7 +94,7 @@ async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promi
     // Aborted requests are not network errors; let callers handle cancellation.
     if (err instanceof DOMException && err.name === "AbortError") throw err;
     console.error(`[API] network failure calling ${API_BASE_URL}${path}`, err);
-    throw new ApiError("The analysis service is unreachable. Start the backend on port 8000.", "network");
+    throw new ApiError("The analysis service is unavailable. Please try again later.", "network");
   }
   if (response.status === 422) {
     const detail = await response.json().catch(() => null);
