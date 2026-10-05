@@ -1,5 +1,6 @@
 import type { GeocodeResponse, LocationResult } from "../types";
 import { API_BASE_URL } from "./apiBase";
+import { requestBackend } from "./backendStatus";
 
 export class GeocodeError extends Error {
   constructor(message: string, readonly kind: "network" | "timeout" | "server" | "validation") {
@@ -27,7 +28,7 @@ export async function searchLocations(query: string, signal?: AbortSignal): Prom
 
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}/geocode`, {
+    response = await requestBackend(`${API_BASE_URL}/geocode`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query }),

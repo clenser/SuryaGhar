@@ -773,6 +773,60 @@
   flex: none;
 }
 
+.status-bar__dot--unknown {
+  background: var(--color-text-faint);
+}
+
+.status-bar__dot--starting {
+  background: var(--color-warning);
+  animation: status-pulse 1.2s ease-in-out infinite;
+}
+
+.status-bar__dot--error {
+  background: var(--color-danger);
+}
+
+@keyframes status-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-bar__dot--starting {
+    animation: none;
+  }
+}
+
+.status-bar__backend {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: var(--space-1);
+  padding-left: var(--space-2);
+  border-left: 1px solid var(--color-border);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+
+.status-bar__retry {
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text);
+  font-size: var(--text-xs);
+  padding: 1px 8px;
+  cursor: pointer;
+}
+
+.status-bar__retry:hover {
+  background: var(--color-surface-muted);
+}
+
 .status-bar__muted {
   color: var(--color-text-faint);
   overflow: hidden;

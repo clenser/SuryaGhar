@@ -1,5 +1,6 @@
 import type { LngLat } from "../lib/geo";
 import { API_BASE_URL } from "./apiBase";
+import { requestBackend } from "./backendStatus";
 
 export interface ValidationResult {
   classification: string;
@@ -149,7 +150,7 @@ function polygonGeometry(vertices: LngLat[]) {
 async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
+    response = await requestBackend(`${API_BASE_URL}${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
