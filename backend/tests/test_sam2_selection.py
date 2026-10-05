@@ -95,6 +95,27 @@ def test_sam2_missing_checkpoint_is_unavailable():
         resolve_segmentation_model("sam2_tiny", SimpleNamespace(sam2_checkpoint_path="/nonexistent/definitely-not-here.pt"))
 
 
+def test_heavy_models_refused_on_tiny_container(monkeypatch):
+    """Explicit heavy models on a 512 MB container get a structured refusal,
+    not a worker-killing OOM (which surfaces as a headerless proxy 502)."""
+    from app.segmentation import factory as factory_module
+
+    monkeypatch.setattr(factory_module, "container_memory_limit_mb", lambda: 512.0)
+    with pytest.raises(SegmentationModelUnavailableError, match="at least"):
+        resolve_segmentation_model("sam2_tiny", SimpleNamespace(sam2_checkpoint_path=None))
+    with pytest.raises(SegmentationModelUnavailableError, match="at least"):
+        resolve_segmentation_model("hotosm_buildings", SimpleNamespace())
+
+
+def test_default_path_falls_back_on_tiny_container(monkeypatch):
+    """The default (non-explicit) path degrades to heuristic instead of crashing."""
+    from app.segmentation import factory as factory_module
+
+    monkeypatch.setattr(factory_module, "container_memory_limit_mb", lambda: 512.0)
+    provider = factory_module.get_segmentation_provider(SimpleNamespace(segmentation_provider="hotosm"))
+    assert provider.name == "heuristic"
+
+
 def test_app_imports_without_torch_or_sam2():
     code = (
         "import sys; from app.main import app; "

@@ -39,6 +39,8 @@ logger = logging.getLogger("solar_rooftop.segmentation.sam2")
 
 import threading as _threading
 
+from app.segmentation.providers import HEAVY_INFERENCE_SEMAPHORE
+
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 MODEL_DIR = BACKEND_DIR / "models"
 DEFAULT_CHECKPOINT = MODEL_DIR / "sam2.1_hiera_tiny.pt"
@@ -47,13 +49,11 @@ CONFIG_RELATIVE = Path("configs") / "sam2.1" / "sam2.1_hiera_t.yaml"
 CLASSES = ["other", "building"]
 
 # Process-wide predictor cache: the 156 MB checkpoint loads once per process,
-# never per request and never at import time. The semaphore bounds concurrent
-# CPU inferences so parallel validations cannot exhaust a small container.
+# never per request and never at import time.
 _PREDICTOR = None
 _PREDICTOR_DEVICE = "cpu"
 _PREDICTOR_LOADED = False
 _LOAD_LOCK = _threading.Lock()
-_INFERENCE_SEMAPHORE = _threading.Semaphore(2)
 
 
 class SAM2TinyProvider(SegmentationProvider):
@@ -177,10 +177,11 @@ class SAM2TinyProvider(SegmentationProvider):
                 dtype=np.float32,
             )
 
-        # Bounded concurrency: at most 2 CPU inferences at once so parallel
-        # validations cannot exhaust a small single-service container. Waiting
-        # happens in a worker thread (see validate.py), never on the event loop.
-        with _INFERENCE_SEMAPHORE:
+        # Bounded concurrency shared with the other heavyweight model, so
+        # parallel validations cannot exhaust a small single-service container.
+        # Waiting happens in a worker thread (see validate.py), never on the
+        # event loop.
+        with HEAVY_INFERENCE_SEMAPHORE:
             _PREDICTOR.set_image(image)
             masks, scores, _ = _PREDICTOR.predict(box=box, multimask_output=True)
         best_idx = int(np.argmax(np.asarray(scores)))

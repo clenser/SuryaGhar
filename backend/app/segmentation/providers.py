@@ -9,8 +9,45 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional
 
+import threading as _threading
+
 import numpy as np
 from affine import Affine
+
+#: Minimum container RAM (MB) required to run the heavyweight segmentation
+#: models (219 MB HOTOSM ONNX / 156 MB SAM2 + runtimes). Measured peak for a
+#: single 512 px HOTOSM inference is ~450 MB on top of the app baseline, so
+#: 512 MB containers cannot survive it. Below this limit the factory refuses
+#: heavy models with a structured error (or heuristic fallback on the default
+#: path) instead of letting the worker be OOM-killed.
+HEAVY_MODEL_MIN_CONTAINER_MB = 768
+
+#: Bounds concurrent heavyweight inferences process-wide so parallel
+#: validations cannot exhaust a small single-service container. Waiting happens
+#: in worker threads, never on the event loop.
+HEAVY_INFERENCE_SEMAPHORE = _threading.Semaphore(2)
+
+
+def container_memory_limit_mb() -> float | None:
+    """Container RAM limit in MB, or None when it cannot be determined.
+
+    Reads cgroup v2 (memory.max) then v1 (memory.limit_in_bytes). A value of
+    "max" or an unreadable file means unknown, never zero.
+    """
+    candidates = (
+        "/sys/fs/cgroup/memory.max",
+        "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+    )
+    for path in candidates:
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                raw = fh.read().strip()
+            if not raw or raw == "max":
+                continue
+            return float(int(raw)) / (1024 * 1024)
+        except (OSError, ValueError):
+            continue
+    return None
 
 
 @dataclass(frozen=True)

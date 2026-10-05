@@ -24,6 +24,7 @@ import numpy as np
 
 from app.segmentation.providers import (
     Bounds,
+    HEAVY_INFERENCE_SEMAPHORE,
     SegmentationProvider,
     SegmentationResult,
     compute_affine_transform,
@@ -116,7 +117,14 @@ class HotosmBuildingsProvider(SegmentationProvider):
             path = self._model_path()
             if not path or not Path(path).exists():
                 raise RuntimeError("SEGMENTATION_MODEL_PATH does not exist")
-            _SESSION = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
+            # Lean session: no CPU arena retention and single-threaded exec keep
+            # the inference-time peak near the load peak (measured neutral).
+            options = ort.SessionOptions()
+            options.intra_op_num_threads = 1
+            options.inter_op_num_threads = 1
+            options.enable_cpu_mem_arena = False
+            options.enable_mem_pattern = False
+            _SESSION = ort.InferenceSession(path, sess_options=options, providers=["CPUExecutionProvider"])
             _SESSION_PATH = path
             return _SESSION
 
@@ -139,14 +147,16 @@ class HotosmBuildingsProvider(SegmentationProvider):
         canvas = np.pad(image, ((0, pad_h), (0, pad_w), (0, 0))) if pad_h or pad_w else image
         H, W = canvas.shape[:2]
 
-        for y in self._windows(H):
-            for x in self._windows(W):
-                window = canvas[y : y + WINDOW, x : x + WINDOW]
-                tensor = ((window.transpose(2, 0, 1).astype(np.float32) / 255.0 - HOT_MEAN) / HOT_STD).astype(np.float32)
-                logits = sess.run(None, {"image": tensor[None, ...]})[0]
-                prob = 1.0 / (1.0 + np.exp(-logits[0, 0]))
-                acc[y : y + WINDOW, x : x + WINDOW] += prob
-                counts[y : y + WINDOW, x : x + WINDOW] += 1
+        # Bounded concurrency with the other heavyweight model (see providers).
+        with HEAVY_INFERENCE_SEMAPHORE:
+            for y in self._windows(H):
+                for x in self._windows(W):
+                    window = canvas[y : y + WINDOW, x : x + WINDOW]
+                    tensor = ((window.transpose(2, 0, 1).astype(np.float32) / 255.0 - HOT_MEAN) / HOT_STD).astype(np.float32)
+                    logits = sess.run(None, {"image": tensor[None, ...]})[0]
+                    prob = 1.0 / (1.0 + np.exp(-logits[0, 0]))
+                    acc[y : y + WINDOW, x : x + WINDOW] += prob
+                    counts[y : y + WINDOW, x : x + WINDOW] += 1
         counts[counts == 0] = 1.0
         return (acc / counts)[:h, :w].astype(np.float32)
 

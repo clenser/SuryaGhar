@@ -8,7 +8,11 @@ from __future__ import annotations
 import logging
 
 from app.core.config import Settings
-from app.segmentation.providers import SegmentationProvider
+from app.segmentation.providers import (
+    HEAVY_MODEL_MIN_CONTAINER_MB,
+    SegmentationProvider,
+    container_memory_limit_mb,
+)
 from app.segmentation.heuristic import HeuristicSegmentationProvider
 from app.segmentation.hotosm_provider import HotosmBuildingsProvider
 
@@ -34,6 +38,24 @@ class SegmentationModelUnavailableError(RuntimeError):
     """An explicitly requested model cannot run (missing deps/checkpoint or failed)."""
 
 
+def _ensure_heavy_model_memory(model_id: str) -> None:
+    """Refuse heavyweight models on containers too small to survive them.
+
+    A single 512 px HOTOSM inference peaks near ~450 MB above baseline and
+    SAM2 needs a comparable spike; on a 512 MB container the worker would be
+    OOM-killed (surfacing as a proxy 502 with no CORS headers). A clear
+    structured refusal keeps the service alive instead.
+    """
+    limit = container_memory_limit_mb()
+    if limit is not None and limit < HEAVY_MODEL_MIN_CONTAINER_MB:
+        raise SegmentationModelUnavailableError(
+            f"Segmentation model '{model_id}' needs at least "
+            f"{HEAVY_MODEL_MIN_CONTAINER_MB} MB of container memory, but only "
+            f"{int(limit)} MB is available. Validation with a lighter setup or "
+            f"a larger service plan is required."
+        )
+
+
 def resolve_segmentation_model(model_id: str | None, settings: Settings) -> SegmentationProvider:
     """Resolve an explicit per-request model choice (no silent fallback).
 
@@ -55,8 +77,10 @@ def resolve_segmentation_model(model_id: str | None, settings: Settings) -> Segm
             raise SegmentationModelUnavailableError(
                 f"SAM 2.1 Tiny is unavailable: {provider.unavailable_reason or 'unknown reason'}."
             )
+        _ensure_heavy_model_memory("sam2_tiny")
         logger.info("Using SAM 2.1 Tiny provider (explicit selection)")
         return provider
+    _ensure_heavy_model_memory("hotosm_buildings")
     provider = HotosmBuildingsProvider()
     if not provider.is_available():
         raise SegmentationModelUnavailableError(
@@ -128,9 +152,15 @@ def get_segmentation_provider(settings: Settings) -> SegmentationProvider:
             os.environ.setdefault("SEGMENTATION_MODEL_PATH", str(model_path))
         provider = HotosmBuildingsProvider()
         if provider.is_available():
-            logger.info("Using HOTOSM dinov3s-buildings ONNX provider (building mask)")
-            return provider
-        logger.warning("HOTOSM ONNX model path not found; falling back to heuristic")
+            try:
+                _ensure_heavy_model_memory("hotosm_buildings")
+            except SegmentationModelUnavailableError as exc:
+                logger.warning("%s Falling back to heuristic.", exc)
+            else:
+                logger.info("Using HOTOSM dinov3s-buildings ONNX provider (building mask)")
+                return provider
+        else:
+            logger.warning("HOTOSM ONNX model path not found; falling back to heuristic")
 
     # The semantic model (per-pixel classes) takes precedence when explicitly configured
     # or selected, because SAM is not a semantic segmenter.
