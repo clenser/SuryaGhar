@@ -176,6 +176,7 @@ async def validate_surface(geometry: dict) -> dict:
     """
     settings = get_settings()
     warnings: list[str] = []
+    logger.info("validate: polygon received, validating geometry")
 
     # Stage 1: Geometry validation
     try:
@@ -202,6 +203,7 @@ async def validate_surface(geometry: dict) -> dict:
         area_m2=metric_geom.area_m2,
     )
 
+    logger.info("validate: geometry OK, area=%.1fm2; fetching satellite crop", metric_geom.area_m2)
     # Stage 2: Fetch imagery
     try:
         crop_bytes, crop_wgs84 = fetch_crop(geometry)
@@ -228,12 +230,14 @@ async def validate_surface(geometry: dict) -> dict:
 
     image = np.asarray(Image.open(io.BytesIO(crop_bytes)).convert("RGB"))
     h, w = image.shape[:2]
+    logger.info("validate: crop fetched %dx%d; osm evidence", w, h)
 
     # OSM supporting evidence: does the selected polygon overlap an OSM building?
     osm_evidence = await _osm_building_evidence(geometry, metric_geom)
 
     # Stage 3: Segmentation
     provider = get_segmentation_provider(settings)
+    logger.info("validate: running segmentation provider=%s", provider.name)
     bounds = create_bounds_from_polygon(validated_geom)
 
     try:
@@ -272,6 +276,7 @@ async def validate_surface(geometry: dict) -> dict:
         "The selected polygon is outlined in bright yellow on the image; judge what lies inside it, "
         "using surrounding context (roads, vegetation, nearby buildings) for interpretation."
     )
+    logger.info("validate: segmentation done (provider=%s); calling vision chain", seg_result.provider)
     ai_result, ai_provider = await validate_with_ai_chain(annotated_jpeg, polygon_summary, settings)
 
     ai_class_map = {
@@ -353,6 +358,7 @@ async def validate_surface(geometry: dict) -> dict:
     # Aggregate confidence
     all_stages = [geom_confidence, seg_confidence_obj, vision_confidence_obj]
     aggregated = aggregate_confidence(all_stages)
+    logger.info("validate: vision done provider=%s; building response", vision_label)
 
     # Combine independent evidence: HOTOSM building masks, OSM building overlap/height,
     # and AI vision semantics. Missing OSM data is not a penalty.

@@ -3,6 +3,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import AliasChoices, Field
 
 ROOT_DIR = Path(__file__).resolve().parents[3]
 
@@ -22,8 +23,11 @@ class Settings(BaseSettings):
     nominatim_base_url: str = "https://nominatim.openstreetmap.org"
 
     # Comma-separated allowed CORS origins for the deployed frontend.
-    # Default keeps local dev working; set CORS_ORIGINS on Render for production.
-    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,https://surya-ghar.vercel.app"
+    # Default keeps local dev working and includes the production Vercel origin.
+    cors_origins: str = Field(
+        default="http://localhost:5173,http://127.0.0.1:5173,https://surya-ghar.vercel.app",
+        validation_alias=AliasChoices("CORS_ORIGINS", "FLAME_CORS_ORIGINS"),
+    )
 
     # Groq / Gemini are backend-only. Keys are loaded from the environment and never
     # returned by any endpoint or sent to the frontend.
