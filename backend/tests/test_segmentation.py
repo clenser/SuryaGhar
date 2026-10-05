@@ -68,3 +68,32 @@ def test_factory_falls_back_when_semantic_model_missing():
         Settings(segmentation_provider="semantic", segmentation_model_path="/nonexistent/model.pt")
     )
     assert provider.name == "heuristic"
+
+
+def test_main_import_does_not_require_torch_and_sam():
+    """Production HOTOSM path must import app.main without importing SAM/torch."""
+    import sys
+
+    # Ensure a clean import path for the app package inside this process check.
+    for mod in list(sys.modules):
+        if mod.startswith("app.") or mod in ("torch", "segment_anything"):
+            del sys.modules[mod]
+    import app.main  # noqa: F401
+
+    assert "torch" not in sys.modules
+    assert "segment_anything" not in sys.modules
+    assert "app.segmentation.sam_provider" not in sys.modules
+
+
+def test_factory_prefers_hotosm_without_sam():
+    import sys
+
+    from app.core.config import Settings
+    from app.segmentation.factory import get_segmentation_provider
+
+    provider = get_segmentation_provider(
+        Settings(segmentation_provider="hotosm_buildings")
+    )
+    assert provider.name in ("hotosm_dinov3s_buildings", "heuristic")
+    assert "app.segmentation.sam_provider" not in sys.modules
+    assert "torch" not in sys.modules
