@@ -39,4 +39,12 @@ describe("validateSurface error handling", () => {
     const init = (fetchMock.mock.calls[0] as unknown[])[1] as unknown as RequestInit;
     expect(JSON.parse(init.body as string).segmentation_model).toBe("sam2_tiny");
   });
+
+  it("omits the model field when no explicit selection is passed", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await validateSurface(VERTICES, undefined);
+    const init = (fetchMock.mock.calls[0] as unknown[])[1] as unknown as RequestInit;
+    expect("segmentation_model" in JSON.parse(init.body as string)).toBe(false);
+  });
 });

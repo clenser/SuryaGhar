@@ -80,6 +80,7 @@ def test_unknown_model_identifier_raises():
 
 
 def test_hotosm_provider_still_resolves(monkeypatch):
+    _adequate_container(monkeypatch)
     monkeypatch.setattr(HotosmBuildingsProvider, "is_available", lambda self: True)
     provider = resolve_segmentation_model("hotosm_buildings", SimpleNamespace())
     assert isinstance(provider, HotosmBuildingsProvider)
@@ -141,8 +142,15 @@ def test_default_validation_omits_model_selection(monkeypatch):
     assert seen["model"] is None
 
 
+def _adequate_container(monkeypatch):
+    from app.segmentation import factory as factory_module
+
+    monkeypatch.setattr(factory_module, "container_memory_limit_mb", lambda: 4096.0)
+
+
 def test_omitted_model_runs_real_hotosm_default(monkeypatch):
     """A. Omitted segmentation_model -> 200 via the repo-bundled HOTOSM default."""
+    _adequate_container(monkeypatch)
     _install_crop_and_vision_stubs(monkeypatch)
     r = client.post("/selection/validate", json={"geometry": SQUARE})
     assert r.status_code == 200
@@ -151,6 +159,7 @@ def test_omitted_model_runs_real_hotosm_default(monkeypatch):
 
 def test_explicit_hotosm_runs_real_provider(monkeypatch):
     """B. segmentation_model=hotosm_buildings -> 200 via HOTOSM, no fallback."""
+    _adequate_container(monkeypatch)
     _install_crop_and_vision_stubs(monkeypatch)
     r = client.post("/selection/validate", json={"geometry": SQUARE, "segmentation_model": "hotosm_buildings"})
     assert r.status_code == 200
@@ -338,9 +347,19 @@ async def test_geocode_responsive_during_slow_validation(monkeypatch):
         app.dependency_overrides.clear()
 
 
+def test_unknown_container_limit_refuses_heavy_models(monkeypatch):
+    """An undeterminable limit must refuse, never risk a crash loop."""
+    from app.segmentation import factory as factory_module
+
+    monkeypatch.setattr(factory_module, "container_memory_limit_mb", lambda: None)
+    with pytest.raises(SegmentationModelUnavailableError, match="could not be determined"):
+        resolve_segmentation_model("sam2_tiny", SimpleNamespace(sam2_checkpoint_path=None))
+
+
 def test_explicit_sam2_reaches_sam2_provider(monkeypatch):
     from app.segmentation import sam2_provider as sam2_module
 
+    _adequate_container(monkeypatch)
     if not sam2_module.SAM2TinyProvider().is_available():
         pytest.skip("SAM2 dependencies/checkpoint unavailable in this environment")
 

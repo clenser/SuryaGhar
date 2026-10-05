@@ -105,6 +105,31 @@ describe("ValidatePanel surface assessment", () => {
     }
   });
 
+  it("omits the model field for the default selection (backend default path)", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          classification: "unknown",
+          confidence: 0,
+          coverage: 0,
+          components: {},
+          metrics: {},
+          images: null,
+          warnings: [],
+          limitations: null,
+          providers: { imagery: "x", vision: "unavailable", segmentation: "heuristic" },
+          evidence: { semantic_available: false },
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ValidatePanel vertices={VERTICES} {...PANEL_PROPS} />);
+    await screen.findByText("Surface assessment unavailable.");
+    const init = (fetchMock.mock.calls[0] as unknown[])[1] as unknown as RequestInit;
+    expect("segmentation_model" in JSON.parse(init.body as string)).toBe(false);
+  });
+
   it("sends the selected model with the validation request", async () => {
     const fetchMock = vi.fn(async () =>
       new Response(

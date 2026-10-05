@@ -35,7 +35,11 @@ export function ValidatePanel({
   useEffect(() => {
     const controller = new AbortController();
     setState({ kind: "loading" });
-    validateSurface(vertices, segmentationModel, controller.signal)
+    // The default model is conveyed by OMISSION: the backend default path
+    // resolves HOTOSM on capable hosts and degrades to labeled heuristic on
+    // hosts too small to survive heavy inference. Only an explicit non-default
+    // choice (SAM 2.1 Tiny) is sent, and it is never silently replaced.
+    validateSurface(vertices, segmentationModel === "hotosm_buildings" ? undefined : segmentationModel, controller.signal)
       .then((result) => setState({ kind: "ok", result }))
       .catch((err) => {
         if (err instanceof DOMException && err.name === "AbortError") return;
