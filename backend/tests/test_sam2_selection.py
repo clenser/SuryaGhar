@@ -527,3 +527,47 @@ def test_variant_predictors_cached_and_released(monkeypatch):
     assert builds.count("sam2.1_hiera_base_plus.pt") == 1
     assert set(sam2_module._PREDICTORS) == {"sam2_base_plus"}  # tiny released
     assert "sam2_tiny" not in sam2_module._PREDICTORS
+
+
+def test_hydra_config_names_are_package_relative():
+    """build_sam2 receives a Hydra config NAME (pkg://sam2-relative), never an
+    absolute filesystem path: absolute paths fail with 'Cannot find primary
+    config' on some platforms/versions (production incident)."""
+    import app.segmentation.sam2_provider as sam2_module
+
+    expected = {
+        "sam2_tiny": "configs/sam2.1/sam2.1_hiera_t.yaml",
+        "sam2_base_plus": "configs/sam2.1/sam2.1_hiera_b+.yaml",
+        "sam2_large": "configs/sam2.1/sam2.1_hiera_l.yaml",
+    }
+    for variant, name in expected.items():
+        provider = sam2_module.SAM2TinyProvider(variant=variant)
+        assert provider._hydra_config_name() == name
+        assert not Path(name).is_absolute()
+
+
+def test_ensure_loaded_passes_relative_config_to_build(monkeypatch):
+    """_ensure_loaded forwards the package-relative config name (not the
+    absolute existence-gate path) into build_sam2. No weights are loaded."""
+    import app.segmentation.sam2_provider as sam2_module
+
+    captured: dict = {}
+
+    def fake_build(config_file, checkpoint, device="cpu"):
+        captured["config_file"] = config_file
+        captured["checkpoint"] = checkpoint
+        return object()
+
+    class FakePredictor:
+        pass
+
+    monkeypatch.setattr("sam2.build_sam.build_sam2", fake_build)
+    monkeypatch.setattr("sam2.sam2_image_predictor.SAM2ImagePredictor", lambda model: FakePredictor())
+    monkeypatch.setattr(sam2_module, "_PREDICTORS", {})
+    monkeypatch.setattr(sam2_module, "_PREDICTOR_DEVICES", {})
+
+    sam2_module.SAM2TinyProvider(variant="sam2_large")._ensure_loaded()
+
+    assert captured["config_file"] == "configs/sam2.1/sam2.1_hiera_l.yaml"
+    assert Path(captured["checkpoint"]).name == "sam2.1_hiera_large.pt"
+    assert set(sam2_module._PREDICTORS) == {"sam2_large"}

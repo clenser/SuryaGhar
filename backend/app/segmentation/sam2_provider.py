@@ -162,13 +162,29 @@ class SAM2TinyProvider(SegmentationProvider):
         return self._unavailable_reason
 
     def _resolve_config(self) -> Optional[str]:
-        """Locate the variant's official config shipped inside the sam2 package."""
+        """Locate the variant's official config shipped inside the sam2 package.
+
+        Returns the absolute filesystem path, used only as an existence gate
+        so missing configs fail with a clear error instead of a Hydra error.
+        """
         try:
             import sam2  # lazy: never at module import time
         except ImportError:
             return None
         candidate = Path(sam2.__file__).resolve().parent / "configs" / "sam2.1" / SAM2_VARIANTS[self._variant]["config"]
         return str(candidate) if candidate.exists() else None
+
+    def _hydra_config_name(self) -> str:
+        """Config name for ``build_sam2``, relative to the sam2 package.
+
+        ``build_sam2`` forwards this to Hydra's ``compose(config_name=...)``,
+        and the sam2 package registers itself (``pkg://sam2``) as the config
+        search path on import. An absolute filesystem path is NOT a valid
+        Hydra config name: it fails with "Cannot find primary config" on some
+        platforms/versions even when the file exists. This is the official
+        usage (e.g. ``configs/sam2.1/sam2.1_hiera_t.yaml``).
+        """
+        return f"configs/sam2.1/{SAM2_VARIANTS[self._variant]['config']}"
 
     def dependencies_available(self) -> tuple[bool, Optional[str]]:
         """Lightweight check: imports + config resolvable, weights NOT loaded."""
@@ -212,8 +228,7 @@ class SAM2TinyProvider(SegmentationProvider):
             from sam2.build_sam import build_sam2  # lazy
             from sam2.sam2_image_predictor import SAM2ImagePredictor  # lazy
 
-            config_file = self._resolve_config()
-            if config_file is None:
+            if self._resolve_config() is None:
                 raise RuntimeError(
                     f"SAM2 config {SAM2_VARIANTS[self._variant]['config']} not found in the installed sam2 package"
                 )
@@ -235,7 +250,7 @@ class SAM2TinyProvider(SegmentationProvider):
                 except Exception:
                     gpu = "unknown CUDA device"
                 logger.info("SAM 2.1 %s selected on CUDA (%s)", self._variant, gpu)
-            model = build_sam2(config_file, self._checkpoint_path, device=device)
+            model = build_sam2(self._hydra_config_name(), self._checkpoint_path, device=device)
             _PREDICTORS[self._variant] = SAM2ImagePredictor(model)
             _PREDICTOR_DEVICES[self._variant] = device
             logger.info("SAM 2.1 variant '%s' loaded on %s", self._variant, device)
