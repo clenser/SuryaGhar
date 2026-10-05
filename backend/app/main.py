@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.routes import router
+from app.core.activity import is_tracked_request, record_activity
 import logging
 
 logger = logging.getLogger("solar_rooftop.api")
@@ -21,6 +22,16 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )
+
+
+@app.middleware("http")
+async def track_activity(request: Request, call_next):
+    # Recorded on arrival (before handling) so even a failing request counts
+    # as activity, and recording can never alter the response. Health/config
+    # polling and OPTIONS preflights are excluded by is_tracked_request.
+    if is_tracked_request(request.method, request.url.path):
+        record_activity()
+    return await call_next(request)
 
 
 @app.middleware("http")

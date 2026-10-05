@@ -8,3 +8,5 @@ __pycache__/
 .venv/
 .pytest_cache/
 coverage/
+# Local EC2 inactivity timestamp (backend/runtime/last_activity.json).
+backend/runtime/
