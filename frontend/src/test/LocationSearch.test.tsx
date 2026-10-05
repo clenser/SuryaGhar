@@ -26,6 +26,14 @@ describe("LocationSearch", () => {
     expect(screen.getByRole("combobox", { name: "Search location" })).toBeInTheDocument();
   });
 
+  it("focuses the input on Ctrl+K", async () => {
+    render(<LocationSearch onSelect={() => {}} />);
+    const input = screen.getByRole("combobox") as HTMLInputElement;
+    expect(document.activeElement).not.toBe(input);
+    await userEvent.keyboard("{Control>}k{/Control}");
+    expect(document.activeElement).toBe(input);
+  });
+
   it("shows results after debounce and calls onSelect on click", async () => {
     const onSelect = vi.fn();
     const fetchMock = vi.fn(async () =>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Zap } from "lucide-react";
 import { analyzeSolar, compassDirection, type SolarResult } from "../../services/analysis";
 
 function compassFor(azimuth: number | string | undefined): string {
@@ -40,9 +41,19 @@ export function SolarPanel({ latitude, longitude, capacityKwp, onContinue }: Sol
       </p>
       <div className="stage-card__actions">
         <button type="button" className="btn btn--primary" onClick={run} disabled={state.kind === "loading"}>
-          {state.kind === "loading" ? "Running simulation…" : "Estimate annual yield"}
+          {state.kind === "loading" ? (
+            <><Zap size={15} strokeWidth={2} aria-hidden="true" /> Analysing solar yield…</>
+          ) : (
+            <><Zap size={15} strokeWidth={2} aria-hidden="true" /> Estimate annual yield</>
+          )}
         </button>
       </div>
+      {state.kind === "loading" && (
+        <div className="stage-loading" aria-live="polite">
+          <div className="progress-indeterminate" aria-hidden="true"><span /></div>
+          <p className="stage-loading__body">Comparing tilt and azimuth combinations…</p>
+        </div>
+      )}
 
       {state.kind === "error" && <p className="stage-card__warning" role="alert">{state.message}</p>}
 

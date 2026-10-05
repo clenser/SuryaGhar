@@ -15,9 +15,10 @@ export function SelectionPanel({ selection, onStartValidate }: SelectionPanelPro
     return (
       <div className="stage-card">
         <p className="stage-card__eyebrow">Stage 1 of 5</p>
-        <h2 className="stage-card__title">Select an area</h2>
+        <h2 className="stage-card__title">Select a rooftop to begin</h2>
         <p className="stage-card__body">
-          Zoom to a rooftop or open ground, then draw a polygon around it.
+          Zoom to a rooftop or usable open ground, then trace its boundary on the map.
+          Draw at least 3 points — the outlined area becomes your solar site.
         </p>
         <button type="button" className="btn btn--primary" onClick={selection.start}>
           <MousePointerSquareDashed size={16} strokeWidth={1.75} aria-hidden="true" />

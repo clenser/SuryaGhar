@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("maplibre-gl", () => ({ default: {} }));
 
-import { compassShort, panelCellsFC } from "../components/map/MapView";
+import { compassShort, measureFC, panelCellsFC } from "../components/map/MapView";
 import type { FeatureCollection } from "geojson";
 
 describe("panel orientation helpers", () => {
@@ -50,5 +50,42 @@ describe("panel orientation helpers", () => {
   it("returns empty output for empty input", () => {
     expect(panelCellsFC(null).features).toHaveLength(0);
     expect(panelCellsFC({ type: "FeatureCollection", features: [] }).features).toHaveLength(0);
+  });
+
+  it("measures real edge lengths and area from selection geometry", () => {
+    // ~22.4 m x ~18.7 m rectangle near Kolkata.
+    const vertices = [
+      { lng: 88.3639, lat: 22.5726 },
+      { lng: 88.36413, lat: 22.5726 },
+      { lng: 88.36413, lat: 22.57277 },
+      { lng: 88.3639, lat: 22.57277 },
+    ];
+    const { labels, ticks } = measureFC(vertices);
+    const texts = labels.features.map((f) => (f.properties as { label: string }).label);
+    // Four edge pills plus one central area pill.
+    expect(labels.features).toHaveLength(5);
+    expect(ticks.features).toHaveLength(4);
+    expect(texts.filter((t) => t.endsWith(" m") && !t.includes("m²"))).toHaveLength(4);
+    expect(texts.some((t) => t.includes("m²"))).toBe(true);
+    const edgeValues = texts
+      .filter((t) => t.endsWith(" m") && !t.includes("m²"))
+      .map((t) => parseFloat(t));
+    // Opposite edges agree (rectangle) and match real metre scale.
+    const sorted = [...edgeValues].sort((a, b) => a - b);
+    expect(sorted[0]).toBeGreaterThan(15);
+    expect(sorted[0]).toBeLessThan(22);
+    expect(sorted[3]).toBeGreaterThan(20);
+    expect(sorted[3]).toBeLessThan(26);
+    expect(Math.abs(sorted[0] - sorted[1]) / sorted[0]).toBeLessThan(0.02);
+    expect(Math.abs(sorted[2] - sorted[3]) / sorted[2]).toBeLessThan(0.02);
+  });
+
+  it("emits nothing measurable for degenerate selections", () => {
+    const { labels, ticks } = measureFC([
+      { lng: 88.3639, lat: 22.5726 },
+      { lng: 88.364, lat: 22.5726 },
+    ]);
+    expect(labels.features).toHaveLength(0);
+    expect(ticks.features).toHaveLength(0);
   });
 });

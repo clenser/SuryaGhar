@@ -50,7 +50,11 @@ export function SitePanel({ vertices, onShadows }: SitePanelProps) {
 
       <div className="stage-card__actions">
         <button type="button" className="btn" onClick={runSurroundings} disabled={surroundings.kind === "loading"}>
-          {surroundings.kind === "loading" ? "Scanning surroundings…" : "Scan surroundings"}
+          {surroundings.kind === "loading" ? (
+            <><span className="spinner" aria-hidden="true" /> Scanning surroundings…</>
+          ) : (
+            "Scan surroundings"
+          )}
         </button>
       </div>
 
@@ -100,7 +104,11 @@ export function SitePanel({ vertices, onShadows }: SitePanelProps) {
       </div>
       <div className="stage-card__actions">
         <button type="button" className="btn" onClick={runShadows} disabled={shadows.kind === "loading"}>
-          {shadows.kind === "loading" ? "Projecting shadows…" : "Estimate shadows"}
+          {shadows.kind === "loading" ? (
+            <><span className="spinner" aria-hidden="true" /> Projecting shadows…</>
+          ) : (
+            "Estimate shadows"
+          )}
         </button>
       </div>
 

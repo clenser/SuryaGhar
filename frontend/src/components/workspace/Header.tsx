@@ -13,8 +13,8 @@ export function Header({ advanced, onAdvancedToggle, onSelectPlace }: HeaderProp
   return (
     <header className="app-header">
       <div className="brand">
-        <span className="brand__mark" aria-hidden="true"><Sun size={16} strokeWidth={2} /></span>
-        <span className="brand__name">Solar Site</span>
+        <span className="brand__mark" aria-hidden="true"><Sun size={17} strokeWidth={2} /></span>
+        <span className="brand__name">Surya-Ghar</span>
       </div>
       <div className="app-header__search">
         <LocationSearch onSelect={onSelectPlace} />

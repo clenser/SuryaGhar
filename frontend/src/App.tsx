@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MapView, type MapViewHandle } from "./components/map/MapView";
 import { MapControls } from "./components/map/MapControls";
+import { MapToolbar } from "./components/map/MapToolbar";
+import { ImagerySelector } from "./components/map/ImagerySelector";
 import { Header } from "./components/workspace/Header";
 import { StatusBar } from "./components/workspace/StatusBar";
 import { LayerPanel } from "./components/panels/LayerPanel";
 import { LocationCard } from "./components/panels/LocationCard";
+import { StageProgress } from "./components/workspace/StageProgress";
 import { DEFAULT_LAYERS, useMapState } from "./hooks/useMapState";
 import { ResetControl } from "./components/workspace/ResetControl";
 import { useSelection } from "./hooks/useSelection";
@@ -31,6 +34,7 @@ export default function App() {
   // Default initial location: Kolkata. Replaced as soon as the user searches
   // elsewhere; never re-applied afterwards.
   const [place, setPlace] = useState<LocationResult | null>(KOLKATA_PLACE);
+  const [measureOn, setMeasureOn] = useState(true);
   const [imageryFailed, setImageryFailed] = useState(false);
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const selection = useSelection();
@@ -190,6 +194,7 @@ export default function App() {
               : null
           }
           shadowFC={shadowFC}
+          showMeasurements={measureOn}
           onAddVertex={selection.addVertex}
           onFinishDrawing={selection.finishDrawing}
           onBeginDrag={selection.beginVertexDrag}
@@ -206,32 +211,29 @@ export default function App() {
               longitude={place.longitude}
             />
           ) : null}
-          <div className="stage-tabs" role="tablist" aria-label="Analysis stages">
-            {stageOrder.map((s) => (
-              <button
-                key={s}
-                role="tab"
-                aria-selected={stage === s}
-                className={
-                  stage === s
-                    ? "is-active"
-                    : stageOrder.indexOf(s) < stageOrder.indexOf(stage)
-                      ? "is-complete"
-                      : ""
-                }
-                disabled={
-                  s === "select"
-                    ? false
-                    : s === "solar"
-                      ? selection.mode !== "confirmed" || capacityKwp <= 0
-                      : selection.mode !== "confirmed"
-                }
-                onClick={() => setStage(s)}
-              >
-                {s === "select" ? "Select" : s === "validate" ? "Validate" : s === "design" ? "Design" : s === "solar" ? "Solar" : "Site"}
-              </button>
-            ))}
-          </div>
+          <StageProgress
+            steps={stageOrder.map((s) => ({
+              id: s,
+              label:
+                s === "select"
+                  ? "Select"
+                  : s === "validate"
+                    ? "Validate"
+                    : s === "design"
+                      ? "Design"
+                      : s === "solar"
+                        ? "Solar"
+                        : "Site",
+              disabled:
+                s === "select"
+                  ? false
+                  : s === "solar"
+                    ? selection.mode !== "confirmed" || capacityKwp <= 0
+                    : selection.mode !== "confirmed",
+            }))}
+            currentId={stage}
+            onSelect={(id) => setStage(id as Stage)}
+          />
 
           {stage === "select" && (
             <SelectionPanel selection={selection} onStartValidate={() => setStage("validate")} />
@@ -290,6 +292,18 @@ export default function App() {
             </button>
           </div>
         )}
+
+        <ImagerySelector onOpenLayers={() => setLayersOpen(true)} />
+
+        <MapToolbar
+          mode={selection.mode}
+          hasVertices={selection.vertices.length > 0}
+          measureOn={measureOn}
+          onSelect={selection.start}
+          onEdit={selection.enterEditing}
+          onClear={selection.clear}
+          onMeasure={() => setMeasureOn((v) => !v)}
+        />
 
         <MapControls
           bearing={view?.bearing ?? 0}

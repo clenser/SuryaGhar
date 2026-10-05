@@ -19,7 +19,7 @@ export function buildMapStyle(
   const basemapLayers = getBasemapLayers();
   return {
     version: 8,
-    name: "Solar Site Analysis",
+    name: "Surya-Ghar Analysis",
     glyphs: "https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf",
     sources: {
       [IMAGERY_SOURCE_ID]: imagery.getSourceConfig(),

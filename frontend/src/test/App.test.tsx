@@ -80,6 +80,12 @@ describe("App workspace", () => {
     expect(screen.getByRole("checkbox", { name: "3D buildings" })).not.toBeChecked();
   });
 
+  it("brands the product as Surya-Ghar", () => {
+    render(<App />);
+    expect(screen.getByText("Surya-Ghar")).toBeInTheDocument();
+    expect(screen.queryByText("Solar Site")).toBeNull();
+  });
+
   it("shows a Reset action in the sidebar", () => {
     render(<App />);
     expect(screen.getByRole("button", { name: "Reset analysis" })).toBeInTheDocument();

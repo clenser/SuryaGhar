@@ -27,6 +27,18 @@ export function LocationSearch({ onSelect }: LocationSearchProps) {
   const listId = useId();
   const statusId = useId();
 
+  // Ctrl/Cmd + K focuses search from anywhere; Escape behaviour stays local.
+  useEffect(() => {
+    const onGlobalKey = (event: globalThis.KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        inputRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onGlobalKey);
+    return () => window.removeEventListener("keydown", onGlobalKey);
+  }, []);
+
   useEffect(() => {
     const trimmed = query.trim();
     if (trimmed.length < MIN_QUERY) {
@@ -120,10 +132,12 @@ export function LocationSearch({ onSelect }: LocationSearchProps) {
           onBlur={() => window.setTimeout(() => setOpen(false), 120)}
           onKeyDown={onKeyDown}
         />
-        {query && (
+        {query ? (
           <button type="button" className="search__clear" onClick={clear} aria-label="Clear search">
             <X size={14} aria-hidden="true" strokeWidth={2} />
           </button>
+        ) : (
+          <kbd className="search__kbd" aria-hidden="true">Ctrl K</kbd>
         )}
       </div>
 

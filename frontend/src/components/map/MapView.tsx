@@ -9,7 +9,7 @@ import type { BoundingBox, LayerSettings, MapErrorEntry, MapViewState } from "..
 import { activeImageryProvider } from "../../providers/imagery";
 import { activeTerrainProvider } from "../../providers/terrain";
 import type { SelectionMode } from "../../hooks/useSelection";
-import type { LngLat } from "../../lib/geo";
+import { formatArea, projectUtm, type LngLat } from "../../lib/geo";
 
 export interface MapViewHandle {
   flyToPlace(lng: number, lat: number, zoom?: number): void;
@@ -31,6 +31,7 @@ interface MapViewProps {
   orientation?: { tilt_deg: number; azimuth_deg: number } | null;
   selectionCentroid?: LngLat | null;
   shadowFC?: FeatureCollection | null;
+  showMeasurements?: boolean;
   onAddVertex?: (point: LngLat) => void;
   onFinishDrawing?: () => void;
   onBeginDrag?: () => void;
@@ -46,7 +47,7 @@ const SOURCE_ERROR_KIND: Record<string, MapErrorEntry["kind"]> = {
 };
 
 export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
-  { layers, onViewChange, onMapError, onReady, selectionMode = "idle", vertices = [], panelFootprints = null, orientation = null, selectionCentroid = null, shadowFC = null, onAddVertex, onFinishDrawing, onBeginDrag, onMoveVertex, onDeleteVertex },
+  { layers, onViewChange, onMapError, onReady, selectionMode = "idle", vertices = [], panelFootprints = null, orientation = null, selectionCentroid = null, shadowFC = null, showMeasurements = true, onAddVertex, onFinishDrawing, onBeginDrag, onMoveVertex, onDeleteVertex },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -75,22 +76,34 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
         id: "sel-fill",
         type: "fill",
         source: "sel-polygon",
-        paint: { "fill-color": "#0f6e7a", "fill-opacity": 0.18 },
+        paint: { "fill-color": "#13a8b5", "fill-opacity": 0.16 },
+      });
+      // Soft glow under the selection outline so the roof reads on any imagery.
+      map.addLayer({
+        id: "sel-glow",
+        type: "line",
+        source: "sel-polygon",
+        paint: {
+          "line-color": "#13a8b5",
+          "line-width": 9,
+          "line-opacity": 0.28,
+          "line-blur": 6,
+        },
       });
       map.addLayer({
         id: "sel-line",
         type: "line",
         source: "sel-polygon",
-        paint: { "line-color": "#0f6e7a", "line-width": 2.5 },
+        paint: { "line-color": "#13a8b5", "line-width": 2.5 },
       });
       map.addLayer({
         id: "sel-vertices",
         type: "circle",
         source: "sel-vertices",
         paint: {
-          "circle-radius": 5.5,
+          "circle-radius": 6,
           "circle-color": "#ffffff",
-          "circle-stroke-color": "#0f6e7a",
+          "circle-stroke-color": "#0e7c86",
           "circle-stroke-width": 2,
         },
       });
@@ -102,9 +115,45 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
         filter: ["==", ["get", "index"], 0],
         paint: {
           "circle-radius": 8,
-          "circle-color": "#0f6e7a",
+          "circle-color": "#0e7c86",
           "circle-stroke-color": "#ffffff",
           "circle-stroke-width": 2.5,
+        },
+      });
+      // CAD-style measurement annotations (labels + ticks), fed by measureFC.
+      map.addSource("measure-labels", { type: "geojson", data: emptyFC() });
+      map.addSource("measure-ticks", { type: "geojson", data: emptyFC() });
+      map.addLayer({
+        id: "measure-tick-casing",
+        type: "line",
+        source: "measure-ticks",
+        paint: { "line-color": "#ffffff", "line-width": 3.5, "line-opacity": 0.9 },
+      });
+      map.addLayer({
+        id: "measure-ticks",
+        type: "line",
+        source: "measure-ticks",
+        paint: { "line-color": "#0b1f33", "line-width": 1.4, "line-opacity": 0.95 },
+      });
+      map.addLayer({
+        id: "measure-labels",
+        type: "symbol",
+        source: "measure-labels",
+        layout: {
+          "text-field": ["get", "label"],
+          "text-size": ["get", "size"],
+          "text-rotate": ["get", "rotate"],
+          "text-rotation-alignment": "map",
+          "text-font": ["Noto Sans Regular"],
+          "text-padding": 4,
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: {
+          "text-color": "#ffffff",
+          "text-halo-color": "#0b1f33",
+          "text-halo-width": 4,
+          "text-halo-blur": 0.6,
         },
       });
       // Dark PV modules with a thin light frame + small inter-module separation
@@ -120,6 +169,14 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
         type: "line",
         source: "panel-footprints",
         paint: { "line-color": "#d7e3f5", "line-width": 0.9, "line-opacity": 0.9 },
+      });
+      // Subtle hover highlight for the panel under the cursor.
+      map.addLayer({
+        id: "panel-hover",
+        type: "fill",
+        source: "panel-footprints",
+        filter: ["==", ["get", "_pi"], -1],
+        paint: { "fill-color": "#ffffff", "fill-opacity": 0.14 },
       });
       // Cell/frame dividers derived from the real panel geometry (separate
       // source so the texture follows panel rotation exactly).
@@ -164,7 +221,7 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
     }
   }, [loaded]);
 
-  // Keep selection geometry in sync.
+  // Keep selection geometry + live CAD measurements in sync.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !loaded) return;
@@ -172,16 +229,54 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
     const vertSource = map.getSource("sel-vertices") as maplibregl.GeoJSONSource | undefined;
     if (polySource) polySource.setData(polygonFC(vertices));
     if (vertSource) vertSource.setData(pointsFC(vertices));
-  }, [vertices, loaded]);
+    const measured = showMeasurements ? measureFC(vertices) : { labels: emptyFC(), ticks: emptyFC() };
+    const labelSource = map.getSource("measure-labels") as maplibregl.GeoJSONSource | undefined;
+    const tickSource = map.getSource("measure-ticks") as maplibregl.GeoJSONSource | undefined;
+    if (labelSource) labelSource.setData(measured.labels);
+    if (tickSource) tickSource.setData(measured.ticks);
+  }, [vertices, loaded, showMeasurements]);
+
+  const panelFootprintsRef = useRef(panelFootprints);
+  panelFootprintsRef.current = panelFootprints;
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !loaded) return;
     const source = map.getSource("panel-footprints") as maplibregl.GeoJSONSource | undefined;
-    if (source) source.setData(panelFootprints ?? emptyFC());
+    if (source) source.setData(indexedFootprints(panelFootprintsRef.current));
     const cells = map.getSource("panel-cells") as maplibregl.GeoJSONSource | undefined;
-    if (cells) cells.setData(panelCellsFC(panelFootprints));
+    if (cells) cells.setData(panelCellsFC(panelFootprintsRef.current));
   }, [panelFootprints, loaded]);
+
+  // Subtle hover brightening for the panel under the cursor (visual only).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !loaded || typeof map.queryRenderedFeatures !== "function") return;
+    const clearHover = () => {
+      try {
+        if (map.getLayer("panel-hover")) map.setFilter("panel-hover", ["==", ["get", "_pi"], -1]);
+      } catch {
+        // Layer teardown race; ignore.
+      }
+    };
+    const onHover = (event: maplibregl.MapMouseEvent) => {
+      if (dragIndexRef.current !== null) return;
+      try {
+        const hits = map.queryRenderedFeatures(event.point, { layers: ["panel-fill"] });
+        const id = hits.length > 0 ? Number(hits[0].properties?._pi ?? -1) : -1;
+        if (map.getLayer("panel-hover")) map.setFilter("panel-hover", ["==", ["get", "_pi"], id]);
+      } catch {
+        // Query during style transitions; ignore.
+      }
+    };
+    map.on("mousemove", onHover);
+    const canvas = map.getCanvas();
+    canvas.addEventListener("mouseleave", clearHover);
+    return () => {
+      map.off("mousemove", onHover);
+      canvas.removeEventListener("mouseleave", clearHover);
+    };
+  }, [loaded]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -429,9 +524,9 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
       <div ref={containerRef} className="map-view__canvas" data-mode={selectionMode} />
       {!loaded && <div className="map-view__loading" aria-live="polite">Loading map</div>}
       <div className="map-legend" aria-hidden="true">
-        <span className="map-legend__north" title="North">N ↑</span>
+        <span className="map-legend__north" title="North — map orientation">N ↑</span>
         {orientation && panelFootprints?.features?.length ? (
-          <span className="map-legend__azimuth">
+          <span className="map-legend__azimuth" title="Panel orientation from the solar analysis">
             Panels face {compassShort(orientation.azimuth_deg)} · {Math.round(((orientation.azimuth_deg % 360) + 360) % 360)}°
           </span>
         ) : null}
@@ -554,6 +649,105 @@ export function compassShort(azimuthDeg: number): string {
 
 function emptyFC(): FeatureCollection {
   return { type: "FeatureCollection", features: [] };
+}
+
+/** Backend footprints with a stable per-panel index for hover highlighting. */
+function indexedFootprints(panels: FeatureCollection | null): FeatureCollection {
+  if (!panels?.features) return emptyFC();
+  return {
+    type: "FeatureCollection",
+    features: panels.features.map((feature, index) => ({
+      ...feature,
+      properties: { ...(feature.properties ?? {}), _pi: index },
+    })),
+  };
+}
+
+export interface MeasureData {
+  labels: FeatureCollection;
+  ticks: FeatureCollection;
+}
+
+/**
+ * CAD-style measurement annotations derived from real selection geometry:
+ * per-edge length pills at edge midpoints (offset outward so they never cover
+ * the polygon), perpendicular tick marks, and a central area label. All
+ * distances come from the UTM projection in lib/geo — nothing is hardcoded.
+ */
+export function measureFC(vertices: LngLat[]): MeasureData {
+  const labels: FeatureCollection["features"] = [];
+  const ticks: FeatureCollection["features"] = [];
+  if (!vertices || vertices.length < 3) return { labels: emptyFC(), ticks: emptyFC() };
+  const projected = vertices.map(projectUtm);
+  const n = projected.length;
+  const meanLat = vertices.reduce((s, p) => s + p.lat, 0) / n;
+  const kx = 111320 * Math.max(Math.cos((meanLat * Math.PI) / 180), 0.2);
+  const ky = 111320;
+  // Absolute UTM meters -> lng/lat, anchored at the first vertex.
+  const origin = projected[0];
+  const toLngLat = (x: number, y: number): [number, number] => [
+    vertices[0].lng + (x - origin.x) / kx,
+    vertices[0].lat + (y - origin.y) / ky,
+  ];
+  const cx = projected.reduce((s, p) => s + p.x, 0) / n;
+  const cy = projected.reduce((s, p) => s + p.y, 0) / n;
+
+  let area2 = 0;
+  for (let i = 0; i < n; i++) {
+    const a = projected[i];
+    const b = projected[(i + 1) % n];
+    area2 += a.x * b.y - b.x * a.y;
+  }
+
+  for (let i = 0; i < n; i++) {
+    const a = projected[i];
+    const b = projected[(i + 1) % n];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 1.0) continue;
+    const mx = (a.x + b.x) / 2;
+    const my = (a.y + b.y) / 2;
+    // Outward normal (away from centroid) so labels never cover the roof.
+    let nx = -dy / len;
+    let ny = dx / len;
+    if ((mx - cx) * nx + (my - cy) * ny < 0) {
+      nx = -nx;
+      ny = -ny;
+    }
+    // Keep text upright: normalize rotation into [-90, 90].
+    let rotate = (-Math.atan2(dy, dx) * 180) / Math.PI;
+    if (rotate > 90) rotate -= 180;
+    if (rotate < -90) rotate += 180;
+    labels.push({
+      type: "Feature",
+      properties: { label: `${len.toFixed(1)} m`, size: 12, rotate: Math.round(rotate * 10) / 10 },
+      geometry: { type: "Point", coordinates: toLngLat(mx + nx * 1.4, my + ny * 1.4) },
+    });
+    const tickHalf = Math.min(Math.max(len * 0.08, 0.5), 2.0) / 2;
+    ticks.push({
+      type: "Feature",
+      properties: {},
+      geometry: {
+        type: "LineString",
+        coordinates: [toLngLat(mx - nx * tickHalf, my - ny * tickHalf), toLngLat(mx + nx * tickHalf, my + ny * tickHalf)],
+      },
+    });
+  }
+
+  const area = Math.abs(area2) / 2;
+  labels.push({
+    type: "Feature",
+    properties: { label: formatArea(area), size: 15, rotate: 0 },
+    geometry: {
+      type: "Point",
+      coordinates: [vertices.reduce((s, p) => s + p.lng, 0) / n, vertices.reduce((s, p) => s + p.lat, 0) / n],
+    },
+  });
+  return {
+    labels: { type: "FeatureCollection", features: labels },
+    ticks: { type: "FeatureCollection", features: ticks },
+  };
 }
 
 function polygonFC(vertices: LngLat[]): FeatureCollection {
