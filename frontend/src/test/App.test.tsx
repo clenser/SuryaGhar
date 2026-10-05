@@ -1,6 +1,8 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { StrictMode } from "react";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { resetBackendStatusForTests } from "../services/backendStatus";
 
 const mapInstance = {
   on: vi.fn(),
@@ -35,6 +37,11 @@ import App from "../App";
 describe("App workspace", () => {
   beforeEach(() => {
     Object.values(mapInstance).forEach((v) => typeof v === "function" && "mockClear" in v && (v as unknown as { mockClear: () => void }).mockClear());
+    resetBackendStatusForTests();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("opens to a map-first workspace with Kolkata location card and search", () => {
@@ -76,6 +83,31 @@ describe("App workspace", () => {
   it("shows a Reset action in the sidebar", () => {
     render(<App />);
     expect(screen.getByRole("button", { name: "Reset analysis" })).toBeInTheDocument();
+  });
+
+  it("fires exactly one backend wake request on mount", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: "ok" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const wakeCalls = (fetchMock.mock.calls as unknown[][]).filter(([url]) => String(url).endsWith("/api/health"));
+    expect(wakeCalls).toHaveLength(1);
+    await screen.findByText("API Online");
+  });
+
+  it("fires exactly one wake request under StrictMode double-mount", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: "ok" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    // Let any duplicate settle, then count.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const wakeCalls = (fetchMock.mock.calls as unknown[][]).filter(([url]) => String(url).endsWith("/api/health"));
+    expect(wakeCalls).toHaveLength(1);
   });
 
   it("opens the layers panel from the map controls and closes it with Escape", async () => {

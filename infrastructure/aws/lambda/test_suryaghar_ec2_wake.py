@@ -287,6 +287,84 @@ def test_handler_forwards_base64_body(monkeypatch, env):
     assert seen["data"] == b"\x89PNG-DATA"
 
 
+def _patch_boto3_ssm(monkeypatch, puts, fail=False):
+    """Fake boto3 module whose SSM client records PutParameter calls."""
+
+    class FakeSSM:
+        def put_parameter(self, **kwargs):
+            puts.append(kwargs)
+            if fail:
+                raise RuntimeError("ssm down")
+            return {"Version": 1}
+
+    class FakeBoto3:
+        def client(self, name, **kwargs):
+            assert name == "ssm"
+            return FakeSSM()
+
+    monkeypatch.setitem(sys.modules, "boto3", FakeBoto3())
+
+
+def test_wake_records_ssm_activity_immediately(monkeypatch, env):
+    """The wake request stamps /suryaghar/last_activity BEFORE startup work,
+    with the backend UTC ISO-8601 format — even for /health requests."""
+    from datetime import datetime
+
+    puts: list = []
+    _patch_boto3_ssm(monkeypatch, puts)
+    ec2 = FakeEC2(["running"])
+    monkeypatch.setattr(gw, "_make_ec2_client", lambda: ec2)
+    fake_urlopen_factory(
+        monkeypatch,
+        {
+            "duckdns": FakeHTTPResponse(b"OK", 200),
+            "health": FakeHTTPResponse(b"ok", 200),
+        },
+    )
+    out = gw.lambda_handler(make_event(rawPath="/health", body=None), None)
+    assert out["statusCode"] == 200
+    assert len(puts) == 1
+    assert puts[0]["Name"] == "/suryaghar/last_activity"
+    assert puts[0]["Type"] == "String"
+    assert puts[0]["Overwrite"] is True
+    datetime.fromisoformat(puts[0]["Value"])  # valid ISO-8601
+
+
+def test_wake_ssm_failure_does_not_break_request(monkeypatch, env):
+    puts: list = []
+    _patch_boto3_ssm(monkeypatch, puts, fail=True)
+    ec2 = FakeEC2(["running"])
+    monkeypatch.setattr(gw, "_make_ec2_client", lambda: ec2)
+    fake_urlopen_factory(
+        monkeypatch,
+        {
+            "duckdns": FakeHTTPResponse(b"OK", 200),
+            "health": FakeHTTPResponse(b"ok", 200),
+            "geocode": FakeHTTPResponse(b"{}", 200, {"Content-Type": "application/json"}),
+        },
+    )
+    out = gw.lambda_handler(make_event(rawPath="/geocode", body=None), None)
+    assert out["statusCode"] == 200
+    assert len(puts) == 1  # attempted exactly once, no retries
+
+
+def test_wake_respects_custom_activity_parameter(monkeypatch, env):
+    puts: list = []
+    _patch_boto3_ssm(monkeypatch, puts)
+    monkeypatch.setenv("ACTIVITY_SSM_PARAMETER", "/custom/activity")
+    ec2 = FakeEC2(["running"])
+    monkeypatch.setattr(gw, "_make_ec2_client", lambda: ec2)
+    fake_urlopen_factory(
+        monkeypatch,
+        {
+            "duckdns": FakeHTTPResponse(b"OK", 200),
+            "health": FakeHTTPResponse(b"ok", 200),
+        },
+    )
+    gw.lambda_handler(make_event(rawPath="/health", body=None), None)
+    assert puts[0]["Name"] == "/custom/activity"
+
+
 def test_no_secrets_in_handler_output(monkeypatch, env):
     ec2 = FakeEC2(["stopped", "pending", "running"])
     monkeypatch.setattr(gw, "_make_ec2_client", lambda: ec2)

@@ -19,6 +19,7 @@ import { SolarPanel } from "./components/analysis/SolarPanel";
 import { SitePanel } from "./components/analysis/SitePanel";
 import type { LocationResult } from "./types";
 import type { SegmentationModel } from "./services/analysis";
+import { ensureBackendAwake } from "./services/backendStatus";
 
 type Stage = "select" | "validate" | "design" | "solar" | "site";
 
@@ -44,6 +45,16 @@ export default function App() {
   // Validation state lives here so tab switches (which unmount ValidatePanel)
   // never lose the result. Reset is the explicit way to clear it.
   const validation = useValidation();
+
+  // Wake the on-demand backend exactly once on page load, before any user
+  // action. ensureBackendAwake() single-flights concurrent callers (StrictMode
+  // double-mount, rerenders), and the shared backendStatus store drives the
+  // header pill from starting -> online without any further work here.
+  useEffect(() => {
+    ensureBackendAwake().catch(() => {
+      // Status UI already reflects the outcome; boot must never fail on wake.
+    });
+  }, []);
 
   // Selection cleared -> reset overlays, capacity, and the current stage so the UI never
   // shows a dead-end stage panel.

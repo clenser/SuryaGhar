@@ -15,6 +15,8 @@
  * user-facing copy; that lives in the components.
  */
 
+import { API_BASE_URL } from "./apiBase";
+
 export type BackendStatus = "unknown" | "starting" | "online" | "error";
 
 export const BACKEND_STARTING_CODE = "backend_starting";
@@ -91,6 +93,26 @@ async function isBackendStarting(response: Response): Promise<boolean> {
 export interface WakeRetryOptions {
   maxWakeWaitMs?: number;
   defaultRetryMs?: number;
+}
+
+/**
+ * Single-flight initial wake request. The first page load must hit the
+ * backend (through the normal wake path) without waiting for any user
+ * action; concurrent callers — including React StrictMode's double-invoked
+ * mount effects and rerenders — share the same in-flight promise, so exactly
+ * one wake request exists at a time. The promise clears on settle so a later
+ * visit after another stop can wake again; afterwards everything flows
+ * through the regular requestBackend() path.
+ */
+let wakeInflight: Promise<Response> | null = null;
+
+export function ensureBackendAwake(): Promise<Response> {
+  if (!wakeInflight) {
+    wakeInflight = requestBackend(`${API_BASE_URL}/health`).finally(() => {
+      wakeInflight = null;
+    });
+  }
+  return wakeInflight;
 }
 
 /**

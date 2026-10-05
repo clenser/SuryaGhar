@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, afterEach, beforeEach } from "vitest";
 import {
+  ensureBackendAwake,
   getBackendStatus,
   parseRetryAfterMs,
   requestBackend,
@@ -31,6 +32,33 @@ describe("parseRetryAfterMs", () => {
 
   it("caps very large values", () => {
     expect(parseRetryAfterMs("120")).toBe(30000);
+  });
+});
+
+describe("ensureBackendAwake single-flight", () => {
+  it("shares one in-flight wake request between concurrent callers", async () => {
+    let resolveFetch!: (response: Response) => void;
+    const fetchMock = vi.fn(
+      () => new Promise<Response>((resolve) => { resolveFetch = resolve; }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = ensureBackendAwake();
+    const second = ensureBackendAwake();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect((fetchMock.mock.calls[0] as unknown[])[0]).toBe("/api/health");
+    resolveFetch(jsonResponse(200, { status: "ok" }));
+    await expect(first).resolves.toBeDefined();
+    await expect(second).resolves.toBeDefined();
+    expect(getBackendStatus()).toBe("online");
+  });
+
+  it("starts a fresh request after the previous one settles", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(200, { status: "ok" }));
+    vi.stubGlobal("fetch", fetchMock);
+    await ensureBackendAwake();
+    await ensureBackendAwake();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
 

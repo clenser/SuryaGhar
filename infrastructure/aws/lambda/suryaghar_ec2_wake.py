@@ -66,6 +66,49 @@ def _make_ec2_client():
     return boto3.client("ec2")
 
 
+#: SSM parameter holding the last-activity timestamp. The backend FastAPI app
+#: uses the same default (see backend/app/core/activity.py); configurable via
+#: environment for tests and future renames.
+DEFAULT_ACTIVITY_PARAMETER = "/suryaghar/last_activity"
+
+
+def _activity_parameter_name() -> str:
+    return os.environ.get("ACTIVITY_SSM_PARAMETER", "").strip() or DEFAULT_ACTIVITY_PARAMETER
+
+
+def _utc_now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
+def record_wake_activity(timestamp_iso: str | None = None) -> bool:
+    """Stamp /suryaghar/last_activity the moment a real frontend request
+    arrives, BEFORE any EC2 startup flow.
+
+    The auto-stop Lambda must never read a stale timestamp for an instance
+    that was just asked to start: without this write, a wake request that
+    only reaches /health (excluded from backend activity tracking) would look
+    like 5+ minutes of inactivity and the fresh instance would be stopped
+    again. Failures only log; the request flow must never break on SSM.
+    """
+    try:
+        import boto3  # lazy: keeps local test collection dependency-free
+
+        ssm = boto3.client("ssm")
+        ssm.put_parameter(
+            Name=_activity_parameter_name(),
+            Value=timestamp_iso or _utc_now_iso(),
+            Type="String",
+            Overwrite=True,
+        )
+        logger.info("Wake activity recorded in SSM %s", _activity_parameter_name())
+        return True
+    except Exception as exc:
+        logger.warning("Wake activity SSM write failed: %s: %s", type(exc).__name__, exc)
+        return False
+
+
 def _describe_instance(ec2_client, instance_id: str) -> dict:
     """Return {'state': <name>, 'public_ip': <ip|None>} for the instance."""
     resp = ec2_client.describe_instances(InstanceIds=[instance_id])
@@ -300,6 +343,11 @@ def lambda_handler(event: dict, context) -> dict:
         return _json_response(500, {"error": "misconfigured", "message": "Gateway is not configured."})
 
     try:
+        # A real frontend request just arrived: mark activity FIRST so the
+        # auto-stop Lambda can never mistake this startup for inactivity,
+        # even if the request only ever reaches /health (which the backend
+        # deliberately excludes from its own activity tracking).
+        record_wake_activity()
         ec2 = _make_ec2_client()
         info = ensure_backend_running(ec2, instance_id, deadline=deadline)
         public_ip = info["public_ip"]
