@@ -15,3 +15,10 @@ affine==3.0.1
 onnxruntime==1.23.2
 Pillow==11.3.0
 numpy==2.2.6
+
+# SAM 2.1 Tiny debugging/comparison (optional at runtime: all imports are lazy,
+# the app starts without these installed). CPU-only wheels via the PyTorch CPU
+# index; never CUDA-mandatory. Pinned for reproducible Render installs.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.7.1
+sam-2 @ git+https://github.com/facebookresearch/sam2.git@2b90b9f5ceec907a1c18123530e92e794ad901a4

@@ -1,6 +1,15 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { ValidatePanel } from "../components/analysis/ValidatePanel";
+import type { SegmentationModel } from "../services/analysis";
+
+const PANEL_PROPS = {
+  segmentationModel: "hotosm_buildings" as SegmentationModel,
+  onSegmentationModelChange: () => {},
+  onContinue: () => {},
+  onRedraw: () => {},
+};
 
 const REASON = "The selected polygon is located entirely on a flat, unobstructed concrete rooftop.";
 
@@ -47,7 +56,7 @@ const VERTICES = [
 describe("ValidatePanel surface assessment", () => {
   it("shows classification with analysis confidence and separate building evidence", async () => {
     mockValidation();
-    render(<ValidatePanel vertices={VERTICES} onContinue={() => {}} onRedraw={() => {}} />);
+    render(<ValidatePanel vertices={VERTICES} {...PANEL_PROPS} />);
 
     // Classification headline + Surface metric share the label by design.
     expect(await screen.findAllByText("Rooftop")).toHaveLength(2);
@@ -58,7 +67,7 @@ describe("ValidatePanel surface assessment", () => {
 
   it("exposes no provider branding, no uncertainty section, and no duplicated assessment", async () => {
     mockValidation();
-    render(<ValidatePanel vertices={VERTICES} onContinue={() => {}} onRedraw={() => {}} />);
+    render(<ValidatePanel vertices={VERTICES} {...PANEL_PROPS} />);
     await screen.findAllByText("Rooftop");
 
     const body = document.body.textContent ?? "";
@@ -74,10 +83,63 @@ describe("ValidatePanel surface assessment", () => {
 
   it("keeps both actions reachable", async () => {
     mockValidation();
-    render(<ValidatePanel vertices={VERTICES} onContinue={() => {}} onRedraw={() => {}} />);
+    render(<ValidatePanel vertices={VERTICES} {...PANEL_PROPS} />);
     await screen.findAllByText("Rooftop");
 
     expect(screen.getByRole("button", { name: "Review selection" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Continue to design" })).toBeInTheDocument();
+  });
+
+  it("offers HOTOSM Buildings (default) and SAM 2.1 Tiny without dependency branding", async () => {
+    mockValidation();
+    render(<ValidatePanel vertices={VERTICES} {...PANEL_PROPS} />);
+    await screen.findAllByText("Rooftop");
+
+    const hotosm = screen.getByRole("tab", { name: "HOTOSM Buildings" });
+    const sam2 = screen.getByRole("tab", { name: "SAM 2.1 Tiny" });
+    expect(hotosm).toHaveAttribute("aria-selected", "true");
+    expect(sam2).toHaveAttribute("aria-selected", "false");
+    const body = document.body.textContent ?? "";
+    for (const banned of ["PyTorch", "ONNX", "CUDA", "Groq", "Gemini"]) {
+      expect(body).not.toMatch(new RegExp(banned));
+    }
+  });
+
+  it("sends the selected model with the validation request", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          classification: "unknown",
+          confidence: 0,
+          coverage: 0,
+          components: {},
+          metrics: {},
+          images: null,
+          warnings: [],
+          limitations: null,
+          providers: { imagery: "x", vision: "unavailable", segmentation: "sam2_tiny" },
+          evidence: { semantic_available: false },
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const onChange = vi.fn();
+    render(
+      <ValidatePanel
+        vertices={VERTICES}
+        segmentationModel="sam2_tiny"
+        onSegmentationModelChange={onChange}
+        onContinue={() => {}}
+        onRedraw={() => {}}
+      />,
+    );
+    await screen.findByText("Surface assessment unavailable.");
+
+    expect(fetchMock).toHaveBeenCalled();
+    const init = (fetchMock.mock.calls[0] as unknown[])[1] as unknown as RequestInit;
+    expect(JSON.parse(init.body as string).segmentation_model).toBe("sam2_tiny");
+    await userEvent.click(screen.getByRole("tab", { name: "HOTOSM Buildings" }));
+    expect(onChange).toHaveBeenCalledWith("hotosm_buildings");
   });
 });

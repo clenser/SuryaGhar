@@ -16,6 +16,7 @@ import { DesignPanel } from "./components/analysis/DesignPanel";
 import { SolarPanel } from "./components/analysis/SolarPanel";
 import { SitePanel } from "./components/analysis/SitePanel";
 import type { LocationResult } from "./types";
+import type { SegmentationModel } from "./services/analysis";
 
 type Stage = "select" | "validate" | "design" | "solar" | "site";
 
@@ -32,6 +33,9 @@ export default function App() {
   const [panelFootprints, setPanelFootprints] = useState<GeoJSON.FeatureCollection | null>(null);
   const [shadowFC, setShadowFC] = useState<GeoJSON.FeatureCollection | null>(null);
   const [capacityKwp, setCapacityKwp] = useState(0);
+  // Debugging segmentation-model comparison (HOTOSM default). Persists across
+  // stages; the next validation request uses the selected model.
+  const [segmentationModel, setSegmentationModel] = useState<SegmentationModel>("hotosm_buildings");
   const [designOrientation, setDesignOrientation] = useState<{ tilt_deg: number; azimuth_deg: number } | null>(null);
 
   // Selection cleared -> reset overlays, capacity, and the current stage so the UI never
@@ -173,7 +177,13 @@ export default function App() {
             <SelectionPanel selection={selection} onStartValidate={() => setStage("validate")} />
           )}
           {stage === "validate" && selection.vertices.length >= 3 && (
-            <ValidatePanel vertices={selection.vertices} onContinue={() => setStage("design")} onRedraw={() => setStage("select")} />
+            <ValidatePanel
+              vertices={selection.vertices}
+              segmentationModel={segmentationModel}
+              onSegmentationModelChange={setSegmentationModel}
+              onContinue={() => setStage("design")}
+              onRedraw={() => setStage("select")}
+            />
           )}
           {stage === "design" && selection.vertices.length >= 3 && (
             <DesignPanel

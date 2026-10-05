@@ -45,10 +45,13 @@ async def health() -> dict:
 @router.get("/config")
 async def public_config(settings: Settings = Depends(get_settings)) -> dict:
     """Public, non-secret configuration only. Never returns credentials."""
+    from app.segmentation.factory import segmentation_model_status
+
     return {
         "geocoder_provider": settings.geocoder_provider,
         "imagery_provider": settings.imagery_provider,
         "terrain_provider": settings.terrain_provider,
+        "available_segmentation_models": segmentation_model_status(settings),
     }
 
 
@@ -83,11 +86,29 @@ async def selection_metrics(body: MetricsRequest):
     )
 
 
-@router.post("/selection/validate", response_model=ValidateResponse)
+@router.post(
+    "/selection/validate",
+    response_model=ValidateResponse,
+    responses={
+        400: {"description": "Unknown segmentation_model identifier"},
+        422: {"description": "Selected segmentation model unavailable"},
+    },
+)
 async def selection_validate(body: ValidateRequest):
+    from app.segmentation.factory import (
+        SegmentationModelUnavailableError,
+        UnknownSegmentationModelError,
+    )
     from app.segmentation.validate import validate_surface
 
-    result = await validate_surface(body.geometry.model_dump())
+    try:
+        result = await validate_surface(
+            body.geometry.model_dump(), segmentation_model=body.segmentation_model
+        )
+    except UnknownSegmentationModelError as exc:
+        return JSONResponse(status_code=400, content={"error": "unknown_segmentation_model", "detail": str(exc)})
+    except SegmentationModelUnavailableError as exc:
+        return JSONResponse(status_code=422, content={"error": "segmentation_model_unavailable", "detail": str(exc)})
     return ValidateResponse(**result)
 
 

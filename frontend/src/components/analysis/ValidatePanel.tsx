@@ -1,17 +1,31 @@
 import { useEffect, useState } from "react";
-import { validateSurface, type ValidationResult } from "../../services/analysis";
+import {
+  SEGMENTATION_MODELS,
+  validateSurface,
+  type SegmentationModel,
+  type ValidationResult,
+} from "../../services/analysis";
 import type { LngLat } from "../../lib/geo";
 
 interface ValidatePanelProps {
   vertices: LngLat[];
+  segmentationModel: SegmentationModel;
+  onSegmentationModelChange: (model: SegmentationModel) => void;
   onContinue: () => void;
   onRedraw: () => void;
 }
 
 /** Stage 2: surface assessment. Single card: classification, analysis
  *  confidence, building evidence, site interpretation, imagery, actions.
- *  Provider/model terminology stays out of the primary UI. */
-export function ValidatePanel({ vertices, onContinue, onRedraw }: ValidatePanelProps) {
+ *  Provider/model terminology stays out of the primary UI, except the
+ *  debugging segmentation-model switcher and its diagnostics label. */
+export function ValidatePanel({
+  vertices,
+  segmentationModel,
+  onSegmentationModelChange,
+  onContinue,
+  onRedraw,
+}: ValidatePanelProps) {
   const [state, setState] = useState<
     { kind: "loading" } | { kind: "error"; message: string } | { kind: "ok"; result: ValidationResult }
   >({ kind: "loading" });
@@ -21,14 +35,14 @@ export function ValidatePanel({ vertices, onContinue, onRedraw }: ValidatePanelP
   useEffect(() => {
     const controller = new AbortController();
     setState({ kind: "loading" });
-    validateSurface(vertices, controller.signal)
+    validateSurface(vertices, segmentationModel, controller.signal)
       .then((result) => setState({ kind: "ok", result }))
       .catch((err) => {
         if (err instanceof DOMException && err.name === "AbortError") return;
         setState({ kind: "error", message: err instanceof Error ? err.message : "Validation failed" });
       });
     return () => controller.abort();
-  }, [vertices, retryKey]);
+  }, [vertices, segmentationModel, retryKey]);
 
   const onRetry = () => setRetryKey((k) => k + 1);
 
@@ -36,6 +50,24 @@ export function ValidatePanel({ vertices, onContinue, onRedraw }: ValidatePanelP
     <div className="stage-card">
       <p className="stage-card__eyebrow">Stage 2 of 5</p>
       <h2 className="stage-card__title">Surface assessment</h2>
+
+      <div className="seg-switch" role="group" aria-label="Segmentation model (debugging)">
+        <span className="seg-switch__label">Segmentation model</span>
+        <div className="stage-tabs stage-tabs--compact" role="tablist" aria-label="Segmentation model options">
+          {SEGMENTATION_MODELS.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              role="tab"
+              aria-selected={segmentationModel === m.id}
+              className={segmentationModel === m.id ? "is-active" : ""}
+              onClick={() => onSegmentationModelChange(m.id)}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+      </div>
 
       {state.kind === "loading" && (
         <p className="stage-card__body" aria-live="polite">
@@ -119,9 +151,7 @@ export function ValidatePanel({ vertices, onContinue, onRedraw }: ValidatePanelP
               </div>
               {state.result.providers && (
                 <p className="result-note">
-                  Segmentation: {state.result.providers.segmentation ?? "heuristic"}
-                  {state.result.providers.segmentation_model ? ` (${state.result.providers.segmentation_model})` : ""} ·
-                  Imagery: {state.result.providers.imagery}
+                  Segmentation: {segmentationDisplayName(state.result.providers.segmentation)} · Imagery: {state.result.providers.imagery}
                 </p>
               )}
             </details>
@@ -156,6 +186,12 @@ export function ValidatePanel({ vertices, onContinue, onRedraw }: ValidatePanelP
       )}
     </div>
   );
+}
+
+function segmentationDisplayName(provider: string | undefined): string {
+  if (provider === "hotosm_dinov3s_buildings") return "HOTOSM Buildings";
+  if (provider === "sam2_tiny") return "SAM 2.1 Tiny";
+  return provider ?? "heuristic";
 }
 
 function semanticAvailable(result: ValidationResult): boolean {

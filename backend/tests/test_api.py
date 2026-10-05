@@ -25,7 +25,15 @@ def test_config_never_exposes_secrets():
     assert "groq" not in body
     assert "api_key" not in body
     assert "key" not in body
-    assert set(r.json().keys()) == {"geocoder_provider", "imagery_provider", "terrain_provider"}
+    assert set(r.json().keys()) == {
+        "geocoder_provider",
+        "imagery_provider",
+        "terrain_provider",
+        "available_segmentation_models",
+    }
+    models = {m["id"]: m for m in r.json()["available_segmentation_models"]}
+    assert set(models) == {"hotosm_buildings", "sam2_tiny"}
+    assert models["hotosm_buildings"]["default"] is True
 
 
 def test_geocode_rejects_too_short_query():

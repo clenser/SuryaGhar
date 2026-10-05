@@ -1273,6 +1273,22 @@
   font-weight: 500;
 }
 
+/* Compact debugging segmentation-model switcher inside the assessment card. */
+.seg-switch {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.seg-switch__label {
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
 /* Completed workflow steps stay visible but recede behind the current stage. */
 .stage-tabs button.is-complete {
   color: var(--color-text);

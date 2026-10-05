@@ -176,8 +176,26 @@ async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promi
   return response.json() as Promise<T>;
 }
 
-export function validateSurface(vertices: LngLat[], signal?: AbortSignal): Promise<ValidationResult> {
-  return post("/selection/validate", { geometry: polygonGeometry(vertices) }, signal);
+export type SegmentationModel = "hotosm_buildings" | "sam2_tiny";
+
+export const SEGMENTATION_MODELS: Array<{ id: SegmentationModel; label: string }> = [
+  { id: "hotosm_buildings", label: "HOTOSM Buildings" },
+  { id: "sam2_tiny", label: "SAM 2.1 Tiny" },
+];
+
+export function validateSurface(
+  vertices: LngLat[],
+  segmentationModel?: SegmentationModel,
+  signal?: AbortSignal,
+): Promise<ValidationResult> {
+  return post(
+    "/selection/validate",
+    {
+      geometry: polygonGeometry(vertices),
+      ...(segmentationModel ? { segmentation_model: segmentationModel } : {}),
+    },
+    signal,
+  );
 }
 
 export function computePanelLayout(

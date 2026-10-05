@@ -17,6 +17,91 @@ from app.segmentation.hotosm_provider import HotosmBuildingsProvider
 
 logger = logging.getLogger("solar_rooftop.segmentation.factory")
 
+#: Selectable segmentation models (per validation request). HOTOSM stays default.
+DEFAULT_SEGMENTATION_MODEL = "hotosm_buildings"
+SUPPORTED_SEGMENTATION_MODELS = ("hotosm_buildings", "sam2_tiny")
+SEGMENTATION_MODEL_DISPLAY_NAMES = {
+    "hotosm_buildings": "HOTOSM Buildings",
+    "sam2_tiny": "SAM 2.1 Tiny",
+}
+
+
+class UnknownSegmentationModelError(ValueError):
+    """An explicitly requested segmentation model identifier is not supported."""
+
+
+class SegmentationModelUnavailableError(RuntimeError):
+    """An explicitly requested model cannot run (missing deps/checkpoint or failed)."""
+
+
+def resolve_segmentation_model(model_id: str | None, settings: Settings) -> SegmentationProvider:
+    """Resolve an explicit per-request model choice (no silent fallback).
+
+    Raises:
+        UnknownSegmentationModelError: identifier not in SUPPORTED_SEGMENTATION_MODELS.
+        SegmentationModelUnavailableError: model known but cannot run.
+    """
+    name = (model_id or DEFAULT_SEGMENTATION_MODEL).strip().lower()
+    if name not in SUPPORTED_SEGMENTATION_MODELS:
+        raise UnknownSegmentationModelError(
+            f"Unknown segmentation_model '{model_id}'. "
+            f"Supported: {', '.join(SUPPORTED_SEGMENTATION_MODELS)}."
+        )
+    if name == "sam2_tiny":
+        from app.segmentation.sam2_provider import SAM2TinyProvider
+
+        provider = SAM2TinyProvider(checkpoint_path=getattr(settings, "sam2_checkpoint_path", None))
+        if not provider.is_available():
+            raise SegmentationModelUnavailableError(
+                f"SAM 2.1 Tiny is unavailable: {provider.unavailable_reason or 'unknown reason'}."
+            )
+        logger.info("Using SAM 2.1 Tiny provider (explicit selection)")
+        return provider
+    provider = HotosmBuildingsProvider()
+    if not provider.is_available():
+        raise SegmentationModelUnavailableError(
+            "HOTOSM Buildings is unavailable: model.onnx checkpoint not found."
+        )
+    logger.info("Using HOTOSM dinov3s-buildings ONNX provider (explicit selection)")
+    return provider
+
+
+def segmentation_model_status(settings: Settings) -> list[dict]:
+    """Availability of each selectable model (for /config; never raises)."""
+    items: list[dict] = []
+    try:
+        hotosm = HotosmBuildingsProvider()
+        hotosm_ok = hotosm.is_available()
+    except Exception:
+        hotosm_ok = False
+    items.append(
+        {
+            "id": "hotosm_buildings",
+            "display_name": SEGMENTATION_MODEL_DISPLAY_NAMES["hotosm_buildings"],
+            "available": hotosm_ok,
+            "default": True,
+        }
+    )
+    try:
+        from app.segmentation.sam2_provider import SAM2TinyProvider
+
+        sam2 = SAM2TinyProvider(checkpoint_path=getattr(settings, "sam2_checkpoint_path", None))
+        sam2_ok = sam2.is_available()
+        sam2_reason = None if sam2_ok else sam2.unavailable_reason
+    except Exception as exc:
+        sam2_ok = False
+        sam2_reason = str(exc)
+    items.append(
+        {
+            "id": "sam2_tiny",
+            "display_name": SEGMENTATION_MODEL_DISPLAY_NAMES["sam2_tiny"],
+            "available": sam2_ok,
+            "unavailable_reason": sam2_reason,
+            "default": False,
+        }
+    )
+    return items
+
 
 def get_segmentation_provider(settings: Settings) -> SegmentationProvider:
     """Get the configured segmentation provider with fallback.

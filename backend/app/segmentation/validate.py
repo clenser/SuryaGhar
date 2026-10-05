@@ -19,7 +19,12 @@ from app.core.config import get_settings
 from app.geospatial.geometry import prepare_analysis_geometry
 from app.segmentation.providers import create_bounds_from_polygon
 from app.geospatial.metrics import analyze_polygon
-from app.segmentation.factory import get_segmentation_provider
+from app.segmentation.factory import (
+    SegmentationModelUnavailableError,
+    UnknownSegmentationModelError,
+    get_segmentation_provider,
+    resolve_segmentation_model,
+)
 from app.segmentation.providers import Bounds
 from app.vision.chain import validate_with_ai_chain
 from app.confidence import (
@@ -198,18 +203,39 @@ def _polygon_building_fraction(seg_result, polygon_px: list, width: int, height:
         return float(fractions.get("building", fractions.get("roof", 0.0)))
 
 
-async def validate_surface(geometry: dict) -> dict:
+def _polygon_bbox_px(
+    geometry: dict,
+    crop_wgs84: tuple[float, float, float, float],
+    width: int,
+    height: int,
+) -> tuple[float, float, float, float] | None:
+    """Selected-polygon bounding box in crop pixel coordinates (for box prompts)."""
+    west, south, east, north = crop_wgs84
+    xs: list[float] = []
+    ys: list[float] = []
+    for lng, lat in _polygon_ring(geometry):
+        xs.append((lng - west) / max(east - west, 1e-12) * (width - 1))
+        ys.append((north - lat) / max(north - south, 1e-12) * (height - 1))
+    if len(xs) < 3:
+        return None
+    return (max(min(xs), 0.0), max(min(ys), 0.0), min(max(xs), float(width)), min(max(ys), float(height)))
+
+
+async def validate_surface(geometry: dict, segmentation_model: str | None = None) -> dict:
     """Returns the structured validation payload for the API and UI.
 
     Pipeline:
     1. Validate and repair geometry
     2. Fetch satellite imagery crop
-    3. Run segmentation (HOTOSM/SAM -> heuristic fallback) as supporting evidence
+    3. Run segmentation (explicit model choice, else configured default) as supporting evidence
     4. Run AI semantic validation (Groq -> Gemini -> unavailable)
     5. Aggregate supporting confidence and return structured result with metadata
 
     The final classification and confidence come only from AI semantic
     validation. Segmentation, OSM and pixel heuristics are supporting evidence.
+
+    An explicit segmentation_model is never silently replaced: unknown ids and
+    unavailable/failed models raise instead of falling back.
     """
     settings = get_settings()
     warnings: list[str] = []
@@ -272,14 +298,31 @@ async def validate_surface(geometry: dict) -> dict:
     # OSM supporting evidence: does the selected polygon overlap an OSM building?
     osm_evidence = await _osm_building_evidence(geometry, metric_geom)
 
-    # Stage 3: Segmentation
-    provider = get_segmentation_provider(settings)
+    # Stage 3: Segmentation (explicit per-request model or configured default).
+    explicit_model = segmentation_model is not None
+    if explicit_model:
+        provider = resolve_segmentation_model(segmentation_model, settings)
+    else:
+        provider = get_segmentation_provider(settings)
     logger.info("validate: running segmentation provider=%s", provider.name)
     bounds = create_bounds_from_polygon(validated_geom)
 
+    prompt_box = None
+    if getattr(provider, "accepts_prompt_box", False):
+        prompt_box = _polygon_bbox_px(geometry, crop_wgs84, w, h)
+
     try:
-        seg_result = provider.segment(image, bounds)
+        if prompt_box is not None:
+            seg_result = provider.segment(image, bounds, prompt_box=prompt_box)
+        else:
+            seg_result = provider.segment(image, bounds)
+    except (UnknownSegmentationModelError, SegmentationModelUnavailableError):
+        raise
     except Exception as exc:
+        if explicit_model:
+            raise SegmentationModelUnavailableError(
+                f"Selected segmentation model failed: {exc}"
+            ) from exc
         logger.warning(f"Segmentation failed: {exc}, using heuristic fallback")
         from app.segmentation.heuristic import HeuristicSegmentationProvider
         fallback_provider = HeuristicSegmentationProvider()

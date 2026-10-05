@@ -32,6 +32,9 @@ class MetricsResponse(BaseModel):
 
 class ValidateRequest(BaseModel):
     geometry: GeometryInput
+    # Optional explicit segmentation model ("hotosm_buildings" | "sam2_tiny").
+    # Omitted -> configured default (HOTOSM). Unknown ids are rejected with 400.
+    segmentation_model: str | None = None
 
 
 class ValidateResponse(BaseModel):

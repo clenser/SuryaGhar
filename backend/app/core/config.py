@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     segmentation_provider: str = "heuristic"
     sam_model_type: str = "vit_b"
     sam_checkpoint_path: str | None = None
+    # SAM 2.1 Tiny debugging/comparison checkpoint. Defaults to
+    # backend/models/sam2.1_hiera_tiny.pt (see sam2_provider); may be overridden
+    # via SAM2_CHECKPOINT_PATH for local testing.
+    sam2_checkpoint_path: str | None = None
     segmentation_model_path: str | None = None
     segmentation_model_classes: str | None = None
     segmentation_building_threshold: float = 0.4371
