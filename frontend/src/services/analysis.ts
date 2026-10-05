@@ -1,4 +1,5 @@
 import type { LngLat } from "../lib/geo";
+import { API_BASE_URL } from "./apiBase";
 
 export interface ValidationResult {
   classification: string;
@@ -83,7 +84,7 @@ function polygonGeometry(vertices: LngLat[]) {
 async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(`/api${path}`, {
+    response = await fetch(`${API_BASE_URL}${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -92,14 +93,18 @@ async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promi
   } catch (err) {
     // Aborted requests are not network errors; let callers handle cancellation.
     if (err instanceof DOMException && err.name === "AbortError") throw err;
+    console.error(`[API] network failure calling ${API_BASE_URL}${path}`, err);
     throw new ApiError("The analysis service is unreachable. Start the backend on port 8000.", "network");
   }
   if (response.status === 422) {
     const detail = await response.json().catch(() => null);
+    console.error(`[API] ${path} 422`, detail);
     throw new ApiError(detail?.detail ?? "The request was invalid.", "validation");
   }
   if (!response.ok) {
-    throw new ApiError("The analysis service returned an error.", "server");
+    const detail = await response.json().catch(() => null);
+    console.error(`[API] ${path} HTTP ${response.status}`, detail);
+    throw new ApiError(`The analysis service returned an error (HTTP ${response.status}).`, "server");
   }
   return response.json() as Promise<T>;
 }

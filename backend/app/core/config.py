@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     nominatim_user_agent: str = "SolarRooftopAnalysis/0.1 (local-dev)"  # set NOMINATIM_USER_AGENT with a real contact
     nominatim_base_url: str = "https://nominatim.openstreetmap.org"
 
+    # Comma-separated allowed CORS origins for the deployed frontend.
+    # Default keeps local dev working; set CORS_ORIGINS on Render for production.
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,https://surya-ghar.vercel.app"
+
     # Groq / Gemini are backend-only. Keys are loaded from the environment and never
     # returned by any endpoint or sent to the frontend.
     groq_api_key: str | None = None

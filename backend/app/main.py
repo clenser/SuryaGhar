@@ -7,11 +7,14 @@ from app.api.routes import router
 
 MAX_BODY_BYTES = 8 * 1024
 
+from app.core.config import get_settings
+
 app = FastAPI(title="Solar Rooftop Analysis API", version="0.1.0")
 
+settings = get_settings()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=[origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()],
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
 )

@@ -1,4 +1,5 @@
 import type { GeocodeResponse, LocationResult } from "../types";
+import { API_BASE_URL } from "./apiBase";
 
 export class GeocodeError extends Error {
   constructor(message: string, readonly kind: "network" | "timeout" | "server" | "validation") {
@@ -24,7 +25,7 @@ export async function searchLocations(query: string, signal?: AbortSignal): Prom
 
   let response: Response;
   try {
-    response = await fetch("/api/geocode", {
+    response = await fetch(`${API_BASE_URL}/geocode`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query }),
@@ -38,8 +39,14 @@ export async function searchLocations(query: string, signal?: AbortSignal): Prom
     window.clearTimeout(timer);
   }
 
-  if (response.status === 422) throw new GeocodeError("Enter a place name to search", "validation");
-  if (!response.ok) throw new GeocodeError("Location search is temporarily unavailable", "server");
+  if (response.status === 422) {
+    console.error(`[API] /geocode 422`, await response.json().catch(() => null));
+    throw new GeocodeError("Enter a place name to search", "validation");
+  }
+  if (!response.ok) {
+    console.error(`[API] /geocode HTTP ${response.status}`, await response.json().catch(() => null));
+    throw new GeocodeError("Location search is temporarily unavailable", "server");
+  }
 
   const data = (await response.json()) as GeocodeResponse;
   if (cache.size >= CACHE_LIMIT) cache.delete(cache.keys().next().value as string);
