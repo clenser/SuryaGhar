@@ -1,14 +1,18 @@
 import { MousePointerSquareDashed, Undo2, Trash2, Check, X, PencilRuler } from "lucide-react";
+import { BACKEND_WAITING_LABEL } from "../../hooks/useBackendStatus";
 import type { SelectionState } from "../../hooks/useSelection";
 import { formatArea } from "../../lib/geo";
 
 interface SelectionPanelProps {
   selection: SelectionState;
   onStartValidate: () => void;
+  /** Backend readiness: selection/editing stay usable while false, but the
+   * transition into Validate is locked until the server is ready. */
+  backendReady: boolean;
 }
 
 /** Contextual selection stage panel (Milestone 2 workflow). */
-export function SelectionPanel({ selection, onStartValidate }: SelectionPanelProps) {
+export function SelectionPanel({ selection, onStartValidate, backendReady }: SelectionPanelProps) {
   const { mode, vertices, metrics, historyDepth } = selection;
 
   if (mode === "idle") {
@@ -118,7 +122,13 @@ export function SelectionPanel({ selection, onStartValidate }: SelectionPanelPro
             <button type="button" className="btn" onClick={selection.enterEditing}>
               Edit
             </button>
-            <button type="button" className="btn btn--primary" onClick={onStartValidate}>
+            <button
+              type="button"
+              className="btn btn--primary"
+              onClick={onStartValidate}
+              disabled={!backendReady}
+              title={backendReady ? undefined : BACKEND_WAITING_LABEL}
+            >
               Continue to Validate
             </button>
           </>

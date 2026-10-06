@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Check, Play } from "lucide-react";
+import { BACKEND_WAITING_LABEL } from "../../hooks/useBackendStatus";
 import {
   SEGMENTATION_MODELS,
   type SegmentationModel,
@@ -17,6 +18,9 @@ interface ValidatePanelProps {
   onProceed: (model: SegmentationModel) => void;
   onContinue: () => void;
   onRedraw: () => void;
+  /** Backend readiness: model browsing stays usable while false, but the
+   * analysis request itself is locked until the server is ready. */
+  backendReady: boolean;
 }
 
 /** Stage 2: surface assessment. Pure view over persisted validation state:
@@ -31,6 +35,7 @@ export function ValidatePanel({
   onProceed,
   onContinue,
   onRedraw,
+  backendReady,
 }: ValidatePanelProps) {
   // Draft selection only; committed to App on Proceed so it survives remounts.
   const [draft, setDraft] = useState<SegmentationModel>(segmentationModel);
@@ -75,7 +80,8 @@ export function ValidatePanel({
           type="button"
           className="btn btn--primary btn--block"
           onClick={proceed}
-          disabled={state.kind === "loading"}
+          disabled={state.kind === "loading" || !backendReady}
+          title={backendReady ? undefined : BACKEND_WAITING_LABEL}
         >
           <Play size={15} strokeWidth={2} aria-hidden="true" />
           {state.kind === "loading" ? "Analyzing site..." : state.kind === "ok" ? "Re-analyze" : "Proceed with analysis"}
@@ -91,7 +97,15 @@ export function ValidatePanel({
         <>
           <p className="stage-card__warning" role="alert">{state.message}</p>
           <div className="stage-card__actions">
-            <button type="button" className="btn" onClick={proceed}>Retry</button>
+            <button
+              type="button"
+              className="btn"
+              onClick={proceed}
+              disabled={!backendReady}
+              title={backendReady ? undefined : BACKEND_WAITING_LABEL}
+            >
+              Retry
+            </button>
             <button type="button" className="btn" onClick={onRedraw}>Back to selection</button>
           </div>
         </>
@@ -231,7 +245,15 @@ export function ValidatePanel({
 
           <div className="stage-card__actions">
             <button type="button" className="btn" onClick={onRedraw}>Review selection</button>
-            <button type="button" className="btn btn--primary" onClick={onContinue}>Continue to design</button>
+            <button
+              type="button"
+              className="btn btn--primary"
+              onClick={onContinue}
+              disabled={!backendReady}
+              title={backendReady ? "Continue to solar design" : BACKEND_WAITING_LABEL}
+            >
+              Continue to design
+            </button>
           </div>
         </>
       )}

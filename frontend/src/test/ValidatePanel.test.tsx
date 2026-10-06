@@ -48,6 +48,7 @@ function renderPanel(snapshot: ValidationSnapshot, props?: Partial<Parameters<ty
       onProceed={onProceed}
       onContinue={() => {}}
       onRedraw={() => {}}
+      backendReady
       {...props}
     />,
   );

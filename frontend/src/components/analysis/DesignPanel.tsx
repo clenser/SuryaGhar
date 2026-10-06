@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, ChevronDown, Settings2, Zap } from "lucide-react";
+import { BACKEND_WAITING_LABEL } from "../../hooks/useBackendStatus";
 import {
   CAPACITY_PRESETS,
   PANEL_PRESETS,
@@ -14,10 +15,13 @@ interface DesignPanelProps {
   vertices: LngLat[];
   onResult: (footprints: GeoJSON.FeatureCollection | null, orientation?: { tilt_deg: number; azimuth_deg: number } | null) => void;
   onContinue: (capacityKwp: number) => void;
+  /** Backend readiness: preset browsing stays usable while false, but layout
+   * computation and the transition to solar analysis lock until ready. */
+  backendReady: boolean;
 }
 
 /** Stage 3: domestic panel presets + auto orientation + realistic layout summary. */
-export function DesignPanel({ vertices, onResult, onContinue }: DesignPanelProps) {
+export function DesignPanel({ vertices, onResult, onContinue, backendReady }: DesignPanelProps) {
   const [preset, setPreset] = useState<PanelPresetId>("standard");
   const [presetOpen, setPresetOpen] = useState(false);
   const [customDims, setCustomDims] = useState({ width_m: 2.28, height_m: 1.13, wattage_w: 550 });
@@ -265,7 +269,13 @@ export function DesignPanel({ vertices, onResult, onContinue }: DesignPanelProps
       )}
 
       <div className="stage-card__actions actions-duo">
-        <button type="button" className="btn btn--primary" onClick={run} disabled={state.kind === "loading"}>
+        <button
+          type="button"
+          className="btn btn--primary"
+          onClick={run}
+          disabled={state.kind === "loading" || !backendReady}
+          title={backendReady ? undefined : BACKEND_WAITING_LABEL}
+        >
           {state.kind === "loading" ? (
             <><span className="spinner spinner--on-dark" aria-hidden="true" /> Computing layout…</>
           ) : justDone && state.kind === "ok" ? (
@@ -277,9 +287,9 @@ export function DesignPanel({ vertices, onResult, onContinue }: DesignPanelProps
         <button
           type="button"
           className="btn btn--secondary"
-          disabled={state.kind !== "ok"}
+          disabled={state.kind !== "ok" || !backendReady}
           onClick={() => state.kind === "ok" && onContinue(state.result.capacity_kwp)}
-          title={state.kind === "ok" ? "Continue to solar analysis" : "Compute a layout first"}
+          title={!backendReady ? BACKEND_WAITING_LABEL : state.kind === "ok" ? "Continue to solar analysis" : "Compute a layout first"}
         >
           <Zap size={15} strokeWidth={2} aria-hidden="true" />
           Analyse solar yield

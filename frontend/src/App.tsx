@@ -14,6 +14,7 @@ import { SheetBar } from "./components/workspace/SheetBar";
 import { useBottomSheet } from "./hooks/useBottomSheet";
 import { useSelection } from "./hooks/useSelection";
 import { useValidation } from "./hooks/useValidation";
+import { BACKEND_WAITING_LABEL, useBackendReady } from "./hooks/useBackendStatus";
 import { formatPlaceContext } from "./services/geocode";
 import { activeImageryProvider } from "./providers/imagery";
 import { KOLKATA_PLACE } from "./config/locations";
@@ -53,6 +54,12 @@ export default function App() {
   const validation = useValidation();
   // Mobile bottom-sheet state. Desktop ignores it (CSS-gated below 600px).
   const sheetCtl = useBottomSheet("partial");
+  // Readiness gate: backend-dependent controls (Validate/Design/Solar/Site,
+  // compute/analyse actions, stage transitions past Select) stay disabled
+  // until GET /api/ready reports 200. Map browsing, search, selection,
+  // editing and measurements are map-local and never lock. Unlocking is
+  // automatic via the shared store — no refresh, no state reset.
+  const backendReady = useBackendReady();
 
   // Wake the on-demand backend exactly once on page load, before any user
   // action. ensureBackendAwake() single-flights concurrent callers (StrictMode
@@ -239,6 +246,12 @@ export default function App() {
               longitude={place.longitude}
             />
           ) : null}
+          {!backendReady && (
+            <p className="readiness-lock" role="status">
+              <span className="readiness-lock__dot" aria-hidden="true" />
+              {BACKEND_WAITING_LABEL} You can browse the map and select an area meanwhile.
+            </p>
+          )}
           <StageProgress
             steps={stageOrder.map((s) => ({
               id: s,
@@ -261,10 +274,15 @@ export default function App() {
             }))}
             currentId={stage}
             onSelect={(id) => setStage(id as Stage)}
+            backendLocked={!backendReady}
           />
 
           {stage === "select" && (
-            <SelectionPanel selection={selection} onStartValidate={() => setStage("validate")} />
+            <SelectionPanel
+              selection={selection}
+              onStartValidate={() => setStage("validate")}
+              backendReady={backendReady}
+            />
           )}
           {stage === "validate" && selection.vertices.length >= 3 && (
             <ValidatePanel
@@ -275,6 +293,7 @@ export default function App() {
               onProceed={(model) => validation.proceed(selection.vertices, model)}
               onContinue={() => setStage("design")}
               onRedraw={() => setStage("select")}
+              backendReady={backendReady}
             />
           )}
           {stage === "design" && selection.vertices.length >= 3 && (
@@ -285,6 +304,7 @@ export default function App() {
                 setCapacityKwp(kwp);
                 setStage("solar");
               }}
+              backendReady={backendReady}
             />
           )}
           {stage === "solar" && selection.metrics && capacityKwp > 0 && (
@@ -293,10 +313,11 @@ export default function App() {
               longitude={selection.metrics.centroid.lng}
               capacityKwp={capacityKwp}
               onContinue={() => setStage("site")}
+              backendReady={backendReady}
             />
           )}
           {stage === "site" && selection.vertices.length >= 3 && (
-            <SitePanel vertices={selection.vertices} onShadows={setShadowFC} />
+            <SitePanel vertices={selection.vertices} onShadows={setShadowFC} backendReady={backendReady} />
           )}
           {selection.mode === "confirmed" && stage !== "select" && stage !== "site" && selection.vertices.length < 3 && (
             <div className="stage-card">

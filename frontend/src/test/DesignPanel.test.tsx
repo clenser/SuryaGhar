@@ -41,6 +41,7 @@ const PROPS = {
   vertices: VERTICES,
   onResult: () => {},
   onContinue: () => {},
+  backendReady: true,
 };
 
 beforeEach(() => {

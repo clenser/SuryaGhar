@@ -1,14 +1,18 @@
 import { useEffect, useState } from "react";
+import { BACKEND_WAITING_LABEL } from "../../hooks/useBackendStatus";
 import { analyzeShadows, analyzeSurroundings, type ShadowResult, type SurroundingsResult } from "../../services/analysis";
 import type { LngLat } from "../../lib/geo";
 
 interface SitePanelProps {
   vertices: LngLat[];
   onShadows: (shadows: GeoJSON.FeatureCollection | null) => void;
+  /** Backend readiness: date/hour browsing stays usable while false, but the
+   * surroundings and shadow analyses lock until the server is ready. */
+  backendReady: boolean;
 }
 
 /** Stage 5: surroundings + shadow estimate. */
-export function SitePanel({ vertices, onShadows }: SitePanelProps) {
+export function SitePanel({ vertices, onShadows, backendReady }: SitePanelProps) {
   const [surroundings, setSurroundings] = useState<
     { kind: "idle" } | { kind: "loading" } | { kind: "error"; message: string } | { kind: "ok"; result: SurroundingsResult }
   >({ kind: "idle" });
@@ -49,7 +53,13 @@ export function SitePanel({ vertices, onShadows }: SitePanelProps) {
       <h2 className="stage-card__title">Site context</h2>
 
       <div className="stage-card__actions">
-        <button type="button" className="btn" onClick={runSurroundings} disabled={surroundings.kind === "loading"}>
+        <button
+          type="button"
+          className="btn"
+          onClick={runSurroundings}
+          disabled={surroundings.kind === "loading" || !backendReady}
+          title={backendReady ? undefined : BACKEND_WAITING_LABEL}
+        >
           {surroundings.kind === "loading" ? (
             <><span className="spinner" aria-hidden="true" /> Scanning surroundings…</>
           ) : (
@@ -103,7 +113,13 @@ export function SitePanel({ vertices, onShadows }: SitePanelProps) {
         </div>
       </div>
       <div className="stage-card__actions">
-        <button type="button" className="btn" onClick={runShadows} disabled={shadows.kind === "loading"}>
+        <button
+          type="button"
+          className="btn"
+          onClick={runShadows}
+          disabled={shadows.kind === "loading" || !backendReady}
+          title={backendReady ? undefined : BACKEND_WAITING_LABEL}
+        >
           {shadows.kind === "loading" ? (
             <><span className="spinner" aria-hidden="true" /> Projecting shadows…</>
           ) : (

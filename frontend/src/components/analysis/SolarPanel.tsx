@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Zap } from "lucide-react";
+import { BACKEND_WAITING_LABEL } from "../../hooks/useBackendStatus";
 import { analyzeSolar, compassDirection, type SolarResult } from "../../services/analysis";
 
 function compassFor(azimuth: number | string | undefined): string {
@@ -12,10 +13,13 @@ interface SolarPanelProps {
   longitude: number;
   capacityKwp: number;
   onContinue?: () => void;
+  /** Backend readiness: the yield estimate and the transition to site
+   * context lock until the server is ready. */
+  backendReady: boolean;
 }
 
 /** Stage 4: annual energy estimate via pvlib + PVGIS. */
-export function SolarPanel({ latitude, longitude, capacityKwp, onContinue }: SolarPanelProps) {
+export function SolarPanel({ latitude, longitude, capacityKwp, onContinue, backendReady }: SolarPanelProps) {
   const [state, setState] = useState<
     { kind: "idle" } | { kind: "loading" } | { kind: "error"; message: string } | { kind: "ok"; result: SolarResult }
   >({ kind: "idle" });
@@ -40,7 +44,13 @@ export function SolarPanel({ latitude, longitude, capacityKwp, onContinue }: Sol
         compared — there is no single universal "best angle".
       </p>
       <div className="stage-card__actions">
-        <button type="button" className="btn btn--primary" onClick={run} disabled={state.kind === "loading"}>
+        <button
+          type="button"
+          className="btn btn--primary"
+          onClick={run}
+          disabled={state.kind === "loading" || !backendReady}
+          title={backendReady ? undefined : BACKEND_WAITING_LABEL}
+        >
           {state.kind === "loading" ? (
             <><Zap size={15} strokeWidth={2} aria-hidden="true" /> Analysing solar yield…</>
           ) : (
@@ -111,7 +121,13 @@ export function SolarPanel({ latitude, longitude, capacityKwp, onContinue }: Sol
           ))}
           {onContinue && (
             <div className="stage-card__actions">
-              <button type="button" className="btn btn--primary" onClick={onContinue}>
+              <button
+                type="button"
+                className="btn btn--primary"
+                onClick={onContinue}
+                disabled={!backendReady}
+                title={backendReady ? "Continue to site context" : BACKEND_WAITING_LABEL}
+              >
                 Continue to site context
               </button>
             </div>
