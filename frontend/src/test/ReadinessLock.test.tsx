@@ -88,7 +88,7 @@ const STEPS = ["select", "validate", "design", "solar", "site"].map((id) => ({
 }));
 
 describe("useBackendReady state rule", () => {
-  it("is false for unknown and error, true only for online", async () => {
+  it("tolerates a single failure after ONLINE but surfaces persistent outage", async () => {
     const { result, rerender } = renderHook(() => useBackendReady());
     expect(result.current).toBe(false);
 
@@ -99,14 +99,25 @@ describe("useBackendReady state rule", () => {
     rerender();
     expect(result.current).toBe(true);
 
+    // A single failed request is a blip, not an outage: stays ONLINE.
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
-        throw new TypeError("down");
+        throw new TypeError("blip");
       }),
     );
     await act(async () => {
-      await expect(requestBackend("/api/ready")).rejects.toThrow();
+      await expect(requestBackend("/api/x")).rejects.toThrow();
+    });
+    rerender();
+    expect(result.current).toBe(true);
+
+    // Consecutive failures are a genuine outage: flips to OFFLINE.
+    await act(async () => {
+      await expect(requestBackend("/api/x")).rejects.toThrow();
+    });
+    await act(async () => {
+      await expect(requestBackend("/api/x")).rejects.toThrow();
     });
     rerender();
     expect(result.current).toBe(false);
@@ -244,7 +255,9 @@ describe("readiness lock (App integration)", () => {
     expect(screen.getByRole("application", { name: /Satellite map of India/ })).toBeInTheDocument();
   });
 
-  it("keeps backend workflow locked on error without false API errors", async () => {
+  it("treats persistent startup failure as STARTING, never OFFLINE", async () => {
+    // Cold-start connection failures (gateway still booting EC2) must not
+    // surface as "API Offline": the backend is reasonably expected to recover.
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
@@ -253,12 +266,16 @@ describe("readiness lock (App integration)", () => {
     );
     const { default: App } = await import("../App");
     render(<App />);
-    expect(await screen.findByText("API Offline")).toBeInTheDocument();
+    expect(await screen.findByText("Starting analysis server…")).toBeInTheDocument();
+    expect(screen.queryByText("API Offline")).toBeNull();
+    expect(screen.queryByText("API Online")).toBeNull();
     // Locked, not errored: the notice explains the state, no error is thrown.
     expect(await screen.findByText(/Waiting for analysis server/)).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Validate/ })).toBeDisabled();
     expect(screen.getByRole("tab", { name: /Select/ })).toBeEnabled();
+    // No retry affordance: retry only appears for genuine errors, and a
+    // background wake cycle is still polling (no hammering: paced retries).
     const header = screen.getByRole("banner");
-    expect(within(header).queryByRole("button", { name: "Retry connection" })).toBeInTheDocument();
+    expect(within(header).queryByRole("button", { name: "Retry connection" })).toBeNull();
   });
 });

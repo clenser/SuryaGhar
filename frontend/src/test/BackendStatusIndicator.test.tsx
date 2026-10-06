@@ -59,7 +59,7 @@ describe("BackendStatusIndicator", () => {
     });
     expect(screen.getByText("API Offline")).toBeInTheDocument();
 
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(200, { status: "ok" })));
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(200, { status: "ready" })));
     await userEvent.click(screen.getByRole("button", { name: "Retry connection" }));
     expect(await screen.findByText("API Online")).toBeInTheDocument();
   });

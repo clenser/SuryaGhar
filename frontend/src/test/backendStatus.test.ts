@@ -45,16 +45,18 @@ describe("ensureBackendAwake single-flight", () => {
 
     const first = ensureBackendAwake();
     const second = ensureBackendAwake();
+    const third = ensureBackendAwake();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect((fetchMock.mock.calls[0] as unknown[])[0]).toBe("/api/ready");
-    resolveFetch(jsonResponse(200, { status: "ok" }));
+    resolveFetch(jsonResponse(200, { status: "ready" }));
     await expect(first).resolves.toBeDefined();
     await expect(second).resolves.toBeDefined();
+    await expect(third).resolves.toBeDefined();
     expect(getBackendStatus()).toBe("online");
   });
 
   it("starts a fresh request after the previous one settles", async () => {
-    const fetchMock = vi.fn(async () => jsonResponse(200, { status: "ok" }));
+    const fetchMock = vi.fn(async () => jsonResponse(200, { status: "ready" }));
     vi.stubGlobal("fetch", fetchMock);
     await ensureBackendAwake();
     await ensureBackendAwake();
@@ -67,16 +69,17 @@ describe("ensureBackendAwake single-flight", () => {
     const fetchMock = vi.fn(async (input: unknown) => {
       calls += 1;
       urls.push(input);
-      return calls === 1 ? jsonResponse(503, { error: "backend_starting" }, "0") : jsonResponse(200, { status: "ready" });
+      return calls <= 3 ? jsonResponse(503, { error: "backend_starting" }, "0") : jsonResponse(200, { status: "ready" });
     });
     vi.stubGlobal("fetch", fetchMock);
     const seen: BackendStatus[] = [];
     subscribeBackendStatus(() => seen.push(getBackendStatus()));
 
     await ensureBackendAwake();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(urls.every((u) => u === "/api/ready")).toBe(true);
     expect(seen).toContain("starting");
+    expect(seen).not.toContain("error");
     expect(getBackendStatus()).toBe("online");
   });
 
@@ -89,10 +92,109 @@ describe("ensureBackendAwake single-flight", () => {
       return calls === 1 ? jsonResponse(503, { status: "starting" }) : jsonResponse(200, { status: "ready" });
     });
     vi.stubGlobal("fetch", fetchMock);
-    const response = await requestBackend("/api/ready", undefined, { maxWakeWaitMs: 8000 });
+    const response = await requestBackend("/api/ready", undefined, { maxWakeWaitMs: 8000, defaultRetryMs: 10 });
     expect(response.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(getBackendStatus()).toBe("online");
+  });
+
+  it("an aborted attempt then success stays STARTING and ends ONLINE", async () => {
+    let calls = 0;
+    const fetchMock = vi.fn(async () => {
+      calls += 1;
+      // E.g. a cold-start gateway reset surfacing as an abort mid-flight.
+      if (calls === 1) throw new DOMException("Aborted", "AbortError");
+      return jsonResponse(200, { status: "ready" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const seen: BackendStatus[] = [];
+    subscribeBackendStatus(() => seen.push(getBackendStatus()));
+
+    await ensureBackendAwake({ defaultRetryMs: 5 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(seen).toContain("starting");
+    expect(seen).not.toContain("error");
+    expect(getBackendStatus()).toBe("online");
+  });
+
+  it("a transient network failure during startup stays STARTING and recovers", async () => {
+    let calls = 0;
+    const fetchMock = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) throw new TypeError("fetch failed");
+      return jsonResponse(200, { status: "ready" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const seen: BackendStatus[] = [];
+    subscribeBackendStatus(() => seen.push(getBackendStatus()));
+
+    await ensureBackendAwake({ defaultRetryMs: 5 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(seen).toContain("starting");
+    expect(seen).not.toContain("error");
+    expect(getBackendStatus()).toBe("online");
+  });
+
+  it("persistent failure inside the window eventually reports OFFLINE", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("fetch failed");
+      }),
+    );
+    await expect(ensureBackendAwake({ maxWakeWaitMs: 60, defaultRetryMs: 5 })).rejects.toThrow("fetch failed");
+    expect(getBackendStatus()).toBe("error");
+  });
+
+  it("a stale failure arriving after a newer success never overwrites ONLINE", async () => {
+    let rejectFirst!: (err: unknown) => void;
+    let calls = 0;
+    const fetchMock = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) return new Promise<Response>((_resolve, reject) => { rejectFirst = reject; });
+      return jsonResponse(200, { status: "ready" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const older = requestBackend("http://t/old");
+    const newer = await requestBackend("http://t/new");
+    expect(newer.status).toBe(200);
+    expect(getBackendStatus()).toBe("online");
+    rejectFirst(new TypeError("stale connection reset"));
+    await expect(older).rejects.toThrow("stale connection reset");
+    expect(getBackendStatus()).toBe("online");
+  });
+
+  it("aborting the wake leaves shared state untouched and allows a fresh cycle", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), {
+          once: true,
+        });
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pending = ensureBackendAwake({ signal: controller.signal });
+    controller.abort();
+    await expect(pending).rejects.toThrowError();
+    // Aborted before any verdict: starting (set at loop entry), never error.
+    expect(getBackendStatus()).toBe("starting");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(200, { status: "ready" })));
+    await ensureBackendAwake();
+    expect(getBackendStatus()).toBe("online");
+  });
+
+  it("resumes startup detection from a clean slate like a reload", async () => {
+    vi.resetModules();
+    const fresh = await import("../services/backendStatus");
+    expect(fresh.getBackendStatus()).toBe("unknown");
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(200, { status: "ready" })));
+    await fresh.ensureBackendAwake();
+    expect(fresh.getBackendStatus()).toBe("online");
   });
 });
 
@@ -154,6 +256,20 @@ describe("requestBackend status and wake retries", () => {
     const response = await requestBackend("http://t/validate");
     expect(response.status).toBe(500);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(getBackendStatus()).toBe("error");
+  });
+
+  it("tolerates isolated failures while ONLINE, surfaces persistent outage", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(200, { status: "ready" })));
+    await requestBackend("http://t/ready");
+    expect(getBackendStatus()).toBe("online");
+
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(500, { error: "slow" })));
+    await requestBackend("http://t/a");
+    expect(getBackendStatus()).toBe("online");
+    await requestBackend("http://t/b");
+    expect(getBackendStatus()).toBe("online");
+    await requestBackend("http://t/c");
     expect(getBackendStatus()).toBe("error");
   });
 

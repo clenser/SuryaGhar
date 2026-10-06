@@ -112,7 +112,7 @@ describe("App workspace", () => {
   });
 
   it("fires exactly one backend wake request on mount", async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: "ok" }), { status: 200 }));
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: "ready" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     render(<App />);
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
@@ -140,7 +140,7 @@ describe("App workspace", () => {
   });
 
   it("fires exactly one wake request under StrictMode double-mount", async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: "ok" }), { status: 200 }));
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: "ready" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     render(
       <StrictMode>

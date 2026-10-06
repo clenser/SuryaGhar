@@ -1,9 +1,8 @@
 import { useSyncExternalStore } from "react";
 import { RotateCcw } from "lucide-react";
-import { API_BASE_URL } from "../../services/apiBase";
 import {
+  ensureBackendAwake,
   getBackendStatus,
-  requestBackend,
   subscribeBackendStatus,
 } from "../../services/backendStatus";
 
@@ -20,9 +19,10 @@ import {
 export function BackendStatusIndicator() {
   const backendStatus = useSyncExternalStore(subscribeBackendStatus, getBackendStatus);
   const retryBackend = () => {
-    // Retry against the readiness probe too: only a ready backend may flip
-    // the pill back to "API Online" (/health alone must never do that).
-    void requestBackend(`${API_BASE_URL}/ready`).catch(() => {});
+    // Fresh wake cycle (not a single probe): only a ready backend flips the
+    // pill back to "API Online" (/health alone must never do that, and a
+    // lone failed probe must not declare OFFLINE mid-startup either).
+    void ensureBackendAwake().catch(() => {});
   };
 
   return (

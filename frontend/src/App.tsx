@@ -65,10 +65,15 @@ export default function App() {
   // action. ensureBackendAwake() single-flights concurrent callers (StrictMode
   // double-mount, rerenders), and the shared backendStatus store drives the
   // header pill from starting -> online without any further work here.
+  // Aborting on unmount keeps remounts (StrictMode, HMR) to a single active
+  // wake: the aborted cycle exits quietly without touching shared state.
   useEffect(() => {
-    ensureBackendAwake().catch(() => {
+    const controller = new AbortController();
+    ensureBackendAwake({ signal: controller.signal }).catch(() => {
       // Status UI already reflects the outcome; boot must never fail on wake.
+      // AbortError from unmount is quiet by design (never OFFLINE).
     });
+    return () => controller.abort();
   }, []);
 
   // Selection cleared -> reset overlays, capacity, and the current stage so the UI never
