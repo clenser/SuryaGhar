@@ -3,8 +3,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from contextlib import asynccontextmanager
+
 from app.api.routes import router
 from app.core.activity import is_tracked_request, record_activity
+from app.core.readiness import mark_ready, perform_startup_checks
 import logging
 
 logger = logging.getLogger("solar_rooftop.api")
@@ -13,7 +16,27 @@ MAX_BODY_BYTES = 8 * 1024
 
 from app.core.config import get_settings
 
-app = FastAPI(title="Solar Rooftop Analysis API", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup completes the required one-time initialization, then marks
+    the backend ready. Any failure is logged and the process stays live but
+    NOT ready (GET /health keeps answering; GET /ready keeps returning 503).
+    """
+    try:
+        detail = perform_startup_checks(settings)
+    except Exception as exc:
+        logger.error(
+            "Backend startup initialization failed; staying not ready: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+    else:
+        mark_ready(detail)
+    yield
+
+
+app = FastAPI(title="Solar Rooftop Analysis API", version="0.1.0", lifespan=lifespan)
 
 settings = get_settings()
 app.add_middleware(

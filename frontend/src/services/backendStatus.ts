@@ -83,8 +83,10 @@ function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
 async function isBackendStarting(response: Response): Promise<boolean> {
   if (response.status !== 503) return false;
   try {
-    const data = (await response.clone().json()) as { error?: unknown } | null;
-    return (data as { error?: unknown } | null)?.error === BACKEND_STARTING_CODE;
+    const data = (await response.clone().json()) as { error?: unknown; status?: unknown } | null;
+    // Gateway form ("backend_starting") and direct-backend form ("starting",
+    // from GET /ready without the gateway in local dev) both mean "not ready".
+    return data?.error === BACKEND_STARTING_CODE || data?.status === "starting";
   } catch {
     return false;
   }
@@ -97,18 +99,22 @@ export interface WakeRetryOptions {
 
 /**
  * Single-flight initial wake request. The first page load must hit the
- * backend (through the normal wake path) without waiting for any user
- * action; concurrent callers — including React StrictMode's double-invoked
- * mount effects and rerenders — share the same in-flight promise, so exactly
- * one wake request exists at a time. The promise clears on settle so a later
- * visit after another stop can wake again; afterwards everything flows
- * through the regular requestBackend() path.
+ * backend readiness probe (through the normal wake path) without waiting for
+ * any user action; concurrent callers — including React StrictMode's
+ * double-invoked mount effects and rerenders — share the same in-flight
+ * promise, so exactly one wake request exists at a time. The promise clears
+ * on settle so a later visit after another stop can wake again; afterwards
+ * everything flows through the regular requestBackend() path.
+ *
+ * Readiness (GET /ready), not liveness (GET /health), drives the online
+ * state: "API Online" is shown only after the backend reports it finished
+ * initialization and can accept analysis requests.
  */
 let wakeInflight: Promise<Response> | null = null;
 
 export function ensureBackendAwake(): Promise<Response> {
   if (!wakeInflight) {
-    wakeInflight = requestBackend(`${API_BASE_URL}/health`).finally(() => {
+    wakeInflight = requestBackend(`${API_BASE_URL}/ready`).finally(() => {
       wakeInflight = null;
     });
   }

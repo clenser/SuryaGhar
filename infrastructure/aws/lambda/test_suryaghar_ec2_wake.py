@@ -108,6 +108,7 @@ def test_build_backend_url_preserves_path_and_query():
     assert gw.build_backend_url("1.2.3.4", "/selection/validate", "") == "http://1.2.3.4/selection/validate"
     assert gw.build_backend_url("1.2.3.4", "/geocode", "q=kolkata") == "http://1.2.3.4/geocode?q=kolkata"
     assert gw.build_backend_url("1.2.3.4", "/api/health", "") == "http://1.2.3.4/api/health"
+    assert gw.build_backend_url("1.2.3.4", "/ready", "") == "http://1.2.3.4/ready"
 
 
 def test_filter_request_headers_drops_hop_by_hop():
@@ -165,12 +166,47 @@ def test_duckdns_skipped_without_token():
     assert gw.update_duckdns(None, "tok", "1.2.3.4") is False
 
 
-def test_check_health_true_and_false(monkeypatch):
-    fake_urlopen_factory(monkeypatch, {"health": FakeHTTPResponse(b"ok", 200)})
-    assert gw.check_backend_health("1.2.3.4", timeout_s=5, poll_s=0) is True
+def test_check_readiness_true_and_false(monkeypatch):
+    fake_urlopen_factory(monkeypatch, {"ready": FakeHTTPResponse(b'{"status":"ready"}', 200)})
+    assert gw.check_backend_readiness("1.2.3.4", timeout_s=5, poll_s=0) is True
 
-    fake_urlopen_factory(monkeypatch, {"health": FakeHTTPResponse(b"no", 503)})
-    assert gw.check_backend_health("1.2.3.4", timeout_s=0, poll_s=0) is False
+    fake_urlopen_factory(monkeypatch, {"ready": FakeHTTPResponse(b'{"status":"starting"}', 503)})
+    assert gw.check_backend_readiness("1.2.3.4", timeout_s=0, poll_s=0) is False
+
+
+def test_check_readiness_polls_through_503_until_ready(monkeypatch):
+    """503s (raised as HTTPError by urlopen, exactly like the real backend)
+    keep polling /ready; only HTTP 200 counts as ready."""
+    calls: list[str] = []
+    script: list = [
+        urllib.error.HTTPError(
+            "http://1.2.3.4/ready", 503, "Service Unavailable",
+            {"Content-Type": "application/json"}, io.BytesIO(b'{"status":"starting"}'),
+        ),
+        urllib.error.HTTPError(
+            "http://1.2.3.4/ready", 503, "Service Unavailable",
+            {"Content-Type": "application/json"}, io.BytesIO(b'{"status":"starting"}'),
+        ),
+        FakeHTTPResponse(b'{"status":"ready"}', 200, {"Content-Type": "application/json"}),
+    ]
+
+    def fake_urlopen(req, timeout=None):
+        url = req.full_url if hasattr(req, "full_url") else req
+        calls.append(url)
+        result = script.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    assert gw.check_backend_readiness("1.2.3.4", timeout_s=10, poll_s=0) is True
+    assert len(calls) == 3
+    assert all(url.endswith("/ready") for url in calls)
+
+
+def test_check_readiness_timeout_returns_false(monkeypatch):
+    fake_urlopen_factory(monkeypatch, {"ready": FakeHTTPResponse(b'{"status":"starting"}', 503)})
+    assert gw.check_backend_readiness("1.2.3.4", timeout_s=0, poll_s=0) is False
 
 
 # --- forward mapping ----------------------------------------------------------
@@ -221,7 +257,7 @@ def test_handler_proxies_when_running(monkeypatch, env):
         monkeypatch,
         {
             "duckdns": FakeHTTPResponse(b"OK", 200),
-            "health": FakeHTTPResponse(b"ok", 200),
+            "ready": FakeHTTPResponse(b'{"status":"ready"}', 200),
             "selection/validate": FakeHTTPResponse(b'{"classification":"roof"}', 200, {"Content-Type": "application/json"}),
         },
     )
@@ -239,21 +275,25 @@ def test_handler_starts_stopped_instance_and_updates_duckdns(monkeypatch, env):
         monkeypatch,
         {
             "duckdns": FakeHTTPResponse(b"OK", 200),
-            "health": FakeHTTPResponse(b"ok", 200),
+            "ready": FakeHTTPResponse(b'{"status":"ready"}', 200),
             "geocode": FakeHTTPResponse(b'{"results":[]}', 200, {"Content-Type": "application/json"}),
         },
     )
     out = gw.lambda_handler(make_event(rawPath="/geocode", body=None), None)
     assert ec2.starts == 1
     assert any("duckdns" in c["url"] for c in calls)
+    assert any(c["url"].endswith("/ready") for c in calls)
     assert out["statusCode"] == 200
 
 
-def test_handler_returns_503_with_retry_after_when_unhealthy(monkeypatch, env):
+def test_handler_returns_503_when_running_but_not_ready(monkeypatch, env):
+    """An already-running EC2 is never assumed ready: a failed /ready probe
+    keeps the client on the backend_starting retry path with Retry-After."""
     ec2 = FakeEC2(["running"])
     monkeypatch.setattr(gw, "_make_ec2_client", lambda: ec2)
-    monkeypatch.setattr(gw, "check_backend_health", lambda *a, **k: False)
+    monkeypatch.setattr(gw, "check_backend_readiness", lambda *a, **k: False)
     out = gw.lambda_handler(make_event(), None)
+    assert ec2.starts == 0
     assert out["statusCode"] == 503
     assert out["headers"]["Retry-After"] == "3"
     assert json.loads(out["body"])["error"] == "backend_starting"
@@ -273,8 +313,8 @@ def test_handler_forwards_base64_body(monkeypatch, env):
 
     def fake_urlopen(req, timeout=None):
         url = req.full_url if hasattr(req, "full_url") else req
-        if "duckdns" in url or "health" in url:
-            return FakeHTTPResponse(b"OK" if "duckdns" in url else b"ok", 200)
+        if "duckdns" in url or url.endswith("/ready"):
+            return FakeHTTPResponse(b"OK" if "duckdns" in url else b'{"status":"ready"}', 200)
         seen["data"] = req.data
         return FakeHTTPResponse(b"{}", 200, {"Content-Type": "application/json"})
 
@@ -318,7 +358,8 @@ def test_wake_records_ssm_activity_immediately(monkeypatch, env):
         monkeypatch,
         {
             "duckdns": FakeHTTPResponse(b"OK", 200),
-            "health": FakeHTTPResponse(b"ok", 200),
+            "ready": FakeHTTPResponse(b'{"status":"ready"}', 200),
+            "health": FakeHTTPResponse(b'{"status":"ok"}', 200),
         },
     )
     out = gw.lambda_handler(make_event(rawPath="/health", body=None), None)
@@ -339,7 +380,7 @@ def test_wake_ssm_failure_does_not_break_request(monkeypatch, env):
         monkeypatch,
         {
             "duckdns": FakeHTTPResponse(b"OK", 200),
-            "health": FakeHTTPResponse(b"ok", 200),
+            "ready": FakeHTTPResponse(b'{"status":"ready"}', 200),
             "geocode": FakeHTTPResponse(b"{}", 200, {"Content-Type": "application/json"}),
         },
     )
@@ -358,7 +399,8 @@ def test_wake_respects_custom_activity_parameter(monkeypatch, env):
         monkeypatch,
         {
             "duckdns": FakeHTTPResponse(b"OK", 200),
-            "health": FakeHTTPResponse(b"ok", 200),
+            "ready": FakeHTTPResponse(b'{"status":"ready"}', 200),
+            "health": FakeHTTPResponse(b'{"status":"ok"}', 200),
         },
     )
     gw.lambda_handler(make_event(rawPath="/health", body=None), None)
@@ -368,7 +410,7 @@ def test_wake_respects_custom_activity_parameter(monkeypatch, env):
 def test_no_secrets_in_handler_output(monkeypatch, env):
     ec2 = FakeEC2(["stopped", "pending", "running"])
     monkeypatch.setattr(gw, "_make_ec2_client", lambda: ec2)
-    monkeypatch.setattr(gw, "check_backend_health", lambda *a, **k: False)
+    monkeypatch.setattr(gw, "check_backend_readiness", lambda *a, **k: False)
     fake_urlopen_factory(monkeypatch, {"duckdns": FakeHTTPResponse(b"OK", 200)})
     out = gw.lambda_handler(make_event(), None)
     blob = json.dumps(out)

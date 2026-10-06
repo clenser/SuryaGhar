@@ -46,7 +46,9 @@ SSM_PARAMETER_ENV_VAR = "ACTIVITY_SSM_PARAMETER"
 DEFAULT_AWS_REGION = "ap-southeast-2"
 
 #: Requests to these paths are infrastructure polling, not user activity.
-EXCLUDED_PATHS = frozenset({"/health", "/config"})
+#: /ready joins /health and /config: readiness probes must neither count as
+#: activity nor delay auto-stop (and /ready never records activity itself).
+EXCLUDED_PATHS = frozenset({"/health", "/config", "/ready"})
 
 _LOCK = threading.Lock()
 

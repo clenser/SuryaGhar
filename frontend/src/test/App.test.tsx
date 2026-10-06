@@ -116,9 +116,27 @@ describe("App workspace", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<App />);
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    const wakeCalls = (fetchMock.mock.calls as unknown[][]).filter(([url]) => String(url).endsWith("/api/health"));
+    const wakeCalls = (fetchMock.mock.calls as unknown[][]).filter(([url]) => String(url).endsWith("/api/ready"));
     expect(wakeCalls).toHaveLength(1);
     await screen.findByText("API Online");
+  });
+
+  it("stays starting while the readiness probe reports starting", async () => {
+    let calls = 0;
+    const fetchMock = vi.fn(async () => {
+      calls += 1;
+      // First the backend is still initializing (direct /ready form), then it
+      // becomes ready. Retry-After keeps the starting state observable.
+      return calls === 1
+        ? new Response(JSON.stringify({ status: "starting" }), { status: 503, headers: { "Retry-After": "1" } })
+        : new Response(JSON.stringify({ status: "ready" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+    expect(await screen.findByText("Starting analysis server…")).toBeInTheDocument();
+    expect(screen.queryByText("API Online")).toBeNull();
+    expect(await screen.findByText("API Online")).toBeInTheDocument();
+    expect((fetchMock.mock.calls as unknown[][]).every(([url]) => String(url).endsWith("/api/ready"))).toBe(true);
   });
 
   it("fires exactly one wake request under StrictMode double-mount", async () => {
@@ -132,7 +150,7 @@ describe("App workspace", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     // Let any duplicate settle, then count.
     await new Promise((resolve) => setTimeout(resolve, 50));
-    const wakeCalls = (fetchMock.mock.calls as unknown[][]).filter(([url]) => String(url).endsWith("/api/health"));
+    const wakeCalls = (fetchMock.mock.calls as unknown[][]).filter(([url]) => String(url).endsWith("/api/ready"));
     expect(wakeCalls).toHaveLength(1);
   });
 

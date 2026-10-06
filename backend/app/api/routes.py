@@ -28,6 +28,30 @@ def get_geocoder(settings: Settings = Depends(get_settings)) -> Geocoder:
     return build_geocoder(settings)
 
 
+@router.get("/ready")
+async def ready():
+    """Readiness: 200 only after startup initialization completed.
+
+    Deliberately cheap — reads process-local state only and never triggers
+    model initialization. Excluded from activity tracking (see
+    app.core.activity.EXCLUDED_PATHS) so readiness polling never counts as
+    user activity and never delays auto-stop.
+    """
+    from app.core.readiness import is_ready, readiness_detail
+
+    if not is_ready():
+        return JSONResponse(
+            status_code=503,
+            content={"status": "starting"},
+            headers={"Cache-Control": "no-store"},
+        )
+    return JSONResponse(
+        status_code=200,
+        content={"status": "ready", "detail": readiness_detail()},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @router.get("/health")
 async def health() -> dict:
     segmentation = get_segmentation_provider_name(get_settings())

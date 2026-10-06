@@ -46,7 +46,7 @@ describe("ensureBackendAwake single-flight", () => {
     const first = ensureBackendAwake();
     const second = ensureBackendAwake();
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect((fetchMock.mock.calls[0] as unknown[])[0]).toBe("/api/health");
+    expect((fetchMock.mock.calls[0] as unknown[])[0]).toBe("/api/ready");
     resolveFetch(jsonResponse(200, { status: "ok" }));
     await expect(first).resolves.toBeDefined();
     await expect(second).resolves.toBeDefined();
@@ -59,6 +59,40 @@ describe("ensureBackendAwake single-flight", () => {
     await ensureBackendAwake();
     await ensureBackendAwake();
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("wake polls /api/ready through backend_starting 503s until online", async () => {
+    let calls = 0;
+    const urls: unknown[] = [];
+    const fetchMock = vi.fn(async (input: unknown) => {
+      calls += 1;
+      urls.push(input);
+      return calls === 1 ? jsonResponse(503, { error: "backend_starting" }, "0") : jsonResponse(200, { status: "ready" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const seen: BackendStatus[] = [];
+    subscribeBackendStatus(() => seen.push(getBackendStatus()));
+
+    await ensureBackendAwake();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(urls.every((u) => u === "/api/ready")).toBe(true);
+    expect(seen).toContain("starting");
+    expect(getBackendStatus()).toBe("online");
+  });
+
+  it("treats a direct-backend 503 starting probe as starting, not error", async () => {
+    let calls = 0;
+    const fetchMock = vi.fn(async () => {
+      calls += 1;
+      // Local dev hits the backend directly (no gateway): /ready answers
+      // 503 {"status": "starting"} without an `error` field or Retry-After.
+      return calls === 1 ? jsonResponse(503, { status: "starting" }) : jsonResponse(200, { status: "ready" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const response = await requestBackend("/api/ready", undefined, { maxWakeWaitMs: 8000 });
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(getBackendStatus()).toBe("online");
   });
 });
 

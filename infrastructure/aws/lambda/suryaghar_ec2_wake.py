@@ -5,8 +5,9 @@ Architecture:
 
 The function ensures the EC2 backend is running (starting it if stopped),
 waits only a short bounded window (API Gateway caps integrations at 30s),
-then proxies the ORIGINAL request to the backend. If the backend is not
-healthy in time it returns 503 with Retry-After so the client retries.
+polls the backend /ready probe until initialization is complete, then
+proxies the ORIGINAL request to the backend. If the backend is not ready in
+time it returns 503 with Retry-After so the client retries.
 
 Environment variables (existing names, unchanged):
     INSTANCE_ID     EC2 instance to wake (required)
@@ -37,9 +38,11 @@ logger.setLevel(logging.INFO)
 HANDLER_DEADLINE_S = 27.0
 WAIT_RUNNING_TIMEOUT_S = 6.0
 WAIT_RUNNING_POLL_S = 1.0
-HEALTH_TIMEOUT_S = 20.0
-HEALTH_POLL_S = 1.5
-HEALTH_REQUEST_TIMEOUT_S = 3.0
+# Readiness probe budget: poll GET /ready (200 = initialized) until the
+# backend reports ready or the window is exhausted.
+READY_TIMEOUT_S = 20.0
+READY_POLL_S = 1.5
+READY_REQUEST_TIMEOUT_S = 3.0
 DUCKDNS_TIMEOUT_S = 10.0
 
 # Request headers that must never be forwarded to the backend (hop-by-hop or
@@ -178,30 +181,35 @@ def update_duckdns(domain: str | None, token: str | None, ip: str, timeout_s: fl
         return False
 
 
-def check_backend_health(
+def check_backend_readiness(
     public_ip: str,
-    timeout_s: float = HEALTH_TIMEOUT_S,
-    poll_s: float = HEALTH_POLL_S,
+    timeout_s: float = READY_TIMEOUT_S,
+    poll_s: float = READY_POLL_S,
     deadline: float | None = None,
 ) -> bool:
-    """Poll http://<ip>/health until 2xx or the budget is exhausted."""
-    url = f"http://{public_ip}/health"
+    """Poll http://<ip>/ready until HTTP 200 or the budget is exhausted.
+
+    Readiness (not liveness): /health may already answer 200 while the
+    backend is still initializing, so only /ready 200 counts. A 503 (or any
+    connection failure) keeps polling; anything else is logged and retried.
+    """
+    url = f"http://{public_ip}/ready"
     started = time.monotonic()
     while True:
         try:
-            with urllib.request.urlopen(url, timeout=HEALTH_REQUEST_TIMEOUT_S) as resp:
+            with urllib.request.urlopen(url, timeout=READY_REQUEST_TIMEOUT_S) as resp:
                 if 200 <= resp.status < 300:
-                    logger.info("Backend healthy at %s", url)
+                    logger.info("Backend ready at %s", url)
                     return True
-                logger.info("Backend health status %s", resp.status)
+                logger.info("Backend readiness status %s", resp.status)
         except Exception as exc:
-            logger.info("Backend health check failed: %s: %s", type(exc).__name__, exc)
+            logger.info("Backend readiness check failed: %s: %s", type(exc).__name__, exc)
         elapsed = time.monotonic() - started
         remaining = timeout_s - elapsed
         if deadline is not None:
             remaining = min(remaining, deadline - time.monotonic())
         if remaining <= 0:
-            logger.info("Backend still unavailable after health window")
+            logger.info("Backend still not ready after readiness window")
             return False
         time.sleep(min(poll_s, remaining))
 
@@ -345,8 +353,8 @@ def lambda_handler(event: dict, context) -> dict:
     try:
         # A real frontend request just arrived: mark activity FIRST so the
         # auto-stop Lambda can never mistake this startup for inactivity,
-        # even if the request only ever reaches /health (which the backend
-        # deliberately excludes from its own activity tracking).
+        # even if the request only ever reaches /health or /ready (which the
+        # backend deliberately excludes from its own activity tracking).
         record_wake_activity()
         ec2 = _make_ec2_client()
         info = ensure_backend_running(ec2, instance_id, deadline=deadline)
@@ -359,9 +367,12 @@ def lambda_handler(event: dict, context) -> dict:
             public_ip,
         )
 
-        healthy = check_backend_health(public_ip, deadline=deadline)
-        logger.info("Backend health: %s", "healthy" if healthy else "unavailable")
-        if not healthy:
+        # An already-running instance is NOT assumed ready: only a 200 from
+        # /ready proves initialization finished. Anything else keeps the
+        # client on the backend_starting retry path.
+        ready = check_backend_readiness(public_ip, deadline=deadline)
+        logger.info("Backend readiness: %s", "ready" if ready else "not ready")
+        if not ready:
             return _json_response(
                 503,
                 {"error": "backend_starting", "message": "SuryaGhar backend is starting. Retry shortly."},

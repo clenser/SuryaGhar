@@ -20,7 +20,9 @@ import {
 export function BackendStatusIndicator() {
   const backendStatus = useSyncExternalStore(subscribeBackendStatus, getBackendStatus);
   const retryBackend = () => {
-    void requestBackend(`${API_BASE_URL}/health`).catch(() => {});
+    // Retry against the readiness probe too: only a ready backend may flip
+    // the pill back to "API Online" (/health alone must never do that).
+    void requestBackend(`${API_BASE_URL}/ready`).catch(() => {});
   };
 
   return (
