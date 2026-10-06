@@ -46,6 +46,19 @@ const SOURCE_ERROR_KIND: Record<string, MapErrorEntry["kind"]> = {
   "osm-context": "basemap",
 };
 
+/**
+ * Touch pointers need bigger drag handles and label pills. A true 44px canvas
+ * handle would swallow small rooftops, so this is the practical maximum that
+ * keeps the map usable while still being comfortable to hit.
+ */
+function isCoarsePointer(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(pointer: coarse)").matches
+  );
+}
+
 export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
   { layers, onViewChange, onMapError, onReady, selectionMode = "idle", vertices = [], panelFootprints = null, orientation = null, selectionCentroid = null, shadowFC = null, showMeasurements = true, onAddVertex, onFinishDrawing, onBeginDrag, onMoveVertex, onDeleteVertex },
   ref,
@@ -67,6 +80,12 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !loaded) return;
+    // Touch pointers get larger drag handles (44px-class touch targets are
+    // impossible for canvas circles; 9px radius is the practical maximum
+    // before handles obscure small rooftops).
+    const coarse = isCoarsePointer();
+    const handleRadius = coarse ? 9 : 5.5;
+    const handleFirstRadius = coarse ? 11 : 8;
     if (!map.getSource("sel-polygon")) {
       map.addSource("sel-polygon", { type: "geojson", data: emptyFC() });
       map.addSource("sel-vertices", { type: "geojson", data: emptyFC() });
@@ -101,9 +120,9 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
         type: "circle",
         source: "sel-vertices",
         paint: {
-          "circle-radius": 6,
+          "circle-radius": handleRadius,
           "circle-color": "#ffffff",
-          "circle-stroke-color": "#0e7c86",
+          "circle-stroke-color": "#0f6e7a",
           "circle-stroke-width": 2,
         },
       });
@@ -114,8 +133,8 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
         source: "sel-vertices",
         filter: ["==", ["get", "index"], 0],
         paint: {
-          "circle-radius": 8,
-          "circle-color": "#0e7c86",
+          "circle-radius": handleFirstRadius,
+          "circle-color": "#0f6e7a",
           "circle-stroke-color": "#ffffff",
           "circle-stroke-width": 2.5,
         },
@@ -229,7 +248,9 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
     const vertSource = map.getSource("sel-vertices") as maplibregl.GeoJSONSource | undefined;
     if (polySource) polySource.setData(polygonFC(vertices));
     if (vertSource) vertSource.setData(pointsFC(vertices));
-    const measured = showMeasurements ? measureFC(vertices) : { labels: emptyFC(), ticks: emptyFC() };
+    const measured = showMeasurements
+      ? measureFC(vertices, isCoarsePointer() ? 1.2 : 1)
+      : { labels: emptyFC(), ticks: emptyFC() };
     const labelSource = map.getSource("measure-labels") as maplibregl.GeoJSONSource | undefined;
     const tickSource = map.getSource("measure-ticks") as maplibregl.GeoJSONSource | undefined;
     if (labelSource) labelSource.setData(measured.labels);
@@ -673,8 +694,13 @@ export interface MeasureData {
  * per-edge length pills at edge midpoints (offset outward so they never cover
  * the polygon), perpendicular tick marks, and a central area label. All
  * distances come from the UTM projection in lib/geo — nothing is hardcoded.
+ *
+ * `labelScale` grows the text pills on touch devices so measurements stay
+ * readable without changing the underlying geometry (1 = desktop).
  */
-export function measureFC(vertices: LngLat[]): MeasureData {
+export function measureFC(vertices: LngLat[], labelScale = 1): MeasureData {
+  const edgeSize = Math.max(12, Math.round(12 * labelScale));
+  const areaSize = Math.max(15, Math.round(15 * labelScale));
   const labels: FeatureCollection["features"] = [];
   const ticks: FeatureCollection["features"] = [];
   if (!vertices || vertices.length < 3) return { labels: emptyFC(), ticks: emptyFC() };
@@ -721,7 +747,7 @@ export function measureFC(vertices: LngLat[]): MeasureData {
     if (rotate < -90) rotate += 180;
     labels.push({
       type: "Feature",
-      properties: { label: `${len.toFixed(1)} m`, size: 12, rotate: Math.round(rotate * 10) / 10 },
+      properties: { label: `${len.toFixed(1)} m`, size: edgeSize, rotate: Math.round(rotate * 10) / 10 },
       geometry: { type: "Point", coordinates: toLngLat(mx + nx * 1.4, my + ny * 1.4) },
     });
     const tickHalf = Math.min(Math.max(len * 0.08, 0.5), 2.0) / 2;
@@ -738,7 +764,7 @@ export function measureFC(vertices: LngLat[]): MeasureData {
   const area = Math.abs(area2) / 2;
   labels.push({
     type: "Feature",
-    properties: { label: formatArea(area), size: 15, rotate: 0 },
+    properties: { label: formatArea(area), size: areaSize, rotate: 0 },
     geometry: {
       type: "Point",
       coordinates: [vertices.reduce((s, p) => s + p.lng, 0) / n, vertices.reduce((s, p) => s + p.lat, 0) / n],

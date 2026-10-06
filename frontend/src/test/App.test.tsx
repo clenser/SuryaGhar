@@ -86,6 +86,26 @@ describe("App workspace", () => {
     expect(screen.queryByText("Solar Site")).toBeNull();
   });
 
+  it("mounts the mobile bottom-sheet handle in the partially expanded state", () => {
+    render(<App />);
+    const panel = document.querySelector(".stage-panel") as HTMLElement;
+    expect(panel).toHaveAttribute("data-sheet", "partial");
+    const handle = screen.getByRole("button", { name: "Expand results panel" });
+    expect(handle).toHaveAttribute("aria-expanded", "false");
+    expect(document.querySelector(".stage-panel__body")).toBeTruthy();
+  });
+
+  it("offers a theme toggle in the header that switches to dark", async () => {
+    render(<App />);
+    const btn = screen.getByRole("button", { name: "Switch to dark theme" });
+    await userEvent.click(btn);
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(window.localStorage.getItem("suryaghar-theme")).toBe("dark");
+    expect(screen.getByRole("button", { name: "Switch to light theme" })).toBeInTheDocument();
+    window.localStorage.clear();
+    document.documentElement.removeAttribute("data-theme");
+  });
+
   it("shows a Reset action in the sidebar", () => {
     render(<App />);
     expect(screen.getByRole("button", { name: "Reset analysis" })).toBeInTheDocument();

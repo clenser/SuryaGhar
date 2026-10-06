@@ -23,6 +23,10 @@ export function StageProgress({ steps, currentId, onSelect }: StageProgressProps
     steps.findIndex((s) => s.id === currentId),
   );
   return (
+    <>
+    <p className="stage-progress__caption" aria-hidden="true">
+      Step {currentIndex + 1} of {steps.length} · {steps[currentIndex]?.label}
+    </p>
     <ol className="stage-progress" role="tablist" aria-label="Analysis stages">
       {steps.map((step, index) => {
         const state = index === currentIndex ? "current" : index < currentIndex ? "done" : "todo";
@@ -52,5 +56,6 @@ export function StageProgress({ steps, currentId, onSelect }: StageProgressProps
         );
       })}
     </ol>
+    </>
   );
 }

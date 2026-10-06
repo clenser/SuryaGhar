@@ -25,6 +25,7 @@ export function MapToolbar({ mode, hasVertices, measureOn, onSelect, onEdit, onC
         onClick={onSelect}
         disabled={mode === "drawing"}
         aria-pressed={mode === "drawing"}
+        aria-label="Select"
         title="Draw a new rooftop boundary"
       >
         <MousePointerSquareDashed size={15} strokeWidth={1.75} aria-hidden="true" />
@@ -36,6 +37,7 @@ export function MapToolbar({ mode, hasVertices, measureOn, onSelect, onEdit, onC
         onClick={onEdit}
         disabled={!hasVertices}
         aria-pressed={mode === "editing" || mode === "confirmed"}
+        aria-label="Edit"
         title="Edit the selected boundary"
       >
         <Pencil size={15} strokeWidth={1.75} aria-hidden="true" />
@@ -46,6 +48,7 @@ export function MapToolbar({ mode, hasVertices, measureOn, onSelect, onEdit, onC
         className="map-toolbar__btn"
         onClick={onClear}
         disabled={!hasVertices && mode === "idle"}
+        aria-label="Clear"
         title="Clear the current selection"
       >
         <Trash2 size={15} strokeWidth={1.75} aria-hidden="true" />
@@ -56,6 +59,7 @@ export function MapToolbar({ mode, hasVertices, measureOn, onSelect, onEdit, onC
         className={`map-toolbar__btn${measureOn ? " is-active" : ""}`}
         onClick={onMeasure}
         aria-pressed={measureOn}
+        aria-label="Measure"
         title="Measure rooftop dimensions"
       >
         <Ruler size={15} strokeWidth={1.75} aria-hidden="true" />

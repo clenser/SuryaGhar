@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { ChevronUp } from "lucide-react";
 import type { MapViewState } from "../../types";
 import { activeImageryProvider } from "../../providers/imagery";
 
@@ -26,8 +28,27 @@ export function formatScale(lat: number, zoom: number): { width: number; label: 
 
 export function StatusBar({ view, selectedName }: StatusBarProps) {
   const scale = view ? formatScale(view.center.lat, view.zoom) : null;
+  // Phone only: the three-segment GIS footer collapses into a single floating
+  // chip that expands on tap. Desktop keeps the full row (CSS hides the chip).
+  const [open, setOpen] = useState(false);
   return (
-    <footer className="status-bar" aria-label="Map status">
+    <footer className="status-bar" aria-label="Map status" data-open={open ? "true" : "false"}>
+      <button
+        type="button"
+        className="status-bar__summary"
+        aria-expanded={open}
+        aria-controls="status-details"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="status-bar__dot" aria-hidden="true" />
+        <span className="status-bar__summary-text">
+          {activeImageryProvider.getDisplayName()}
+          {selectedName ? ` · ${selectedName}` : ""}
+        </span>
+        {view && <span className="mono status-bar__summary-zoom">z {view.zoom.toFixed(1)}</span>}
+        <ChevronUp size={14} strokeWidth={2} aria-hidden="true" className={`status-bar__chevron${open ? " is-open" : ""}`} />
+      </button>
+      <div className="status-bar__row" id="status-details">
       <div className="status-bar__segment status-bar__segment--primary">
         <span className="status-bar__dot" aria-hidden="true" />
         <span className="status-bar__text">{activeImageryProvider.getDisplayName()}</span>
@@ -48,6 +69,7 @@ export function StatusBar({ view, selectedName }: StatusBarProps) {
           </span>
         )}
         {view && <span className="mono status-bar__zoom">z {view.zoom.toFixed(1)}</span>}
+      </div>
       </div>
     </footer>
   );

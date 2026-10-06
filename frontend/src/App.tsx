@@ -10,6 +10,8 @@ import { LocationCard } from "./components/panels/LocationCard";
 import { StageProgress } from "./components/workspace/StageProgress";
 import { DEFAULT_LAYERS, useMapState } from "./hooks/useMapState";
 import { ResetControl } from "./components/workspace/ResetControl";
+import { SheetBar } from "./components/workspace/SheetBar";
+import { useBottomSheet } from "./hooks/useBottomSheet";
 import { useSelection } from "./hooks/useSelection";
 import { useValidation } from "./hooks/useValidation";
 import { formatPlaceContext } from "./services/geocode";
@@ -49,6 +51,8 @@ export default function App() {
   // Validation state lives here so tab switches (which unmount ValidatePanel)
   // never lose the result. Reset is the explicit way to clear it.
   const validation = useValidation();
+  // Mobile bottom-sheet state. Desktop ignores it (CSS-gated below 600px).
+  const sheetCtl = useBottomSheet("partial");
 
   // Wake the on-demand backend exactly once on page load, before any user
   // action. ensureBackendAwake() single-flights concurrent callers (StrictMode
@@ -174,10 +178,10 @@ export default function App() {
   const stageOrder: Stage[] = ["select", "validate", "design", "solar", "site"];
 
   return (
-    <div className="app">
+    <div className="app" data-sheet={sheetCtl.sheet}>
       <Header advanced={advanced} onAdvancedToggle={handleAdvancedToggle} onSelectPlace={handleSelectPlace} />
 
-      <main className="workspace">
+      <main className="workspace" data-sheet={sheetCtl.sheet}>
         <MapView
           ref={mapRef}
           layers={layers}
@@ -202,7 +206,31 @@ export default function App() {
           onDeleteVertex={selection.deleteVertex}
         />
 
-        <div className="stage-panel">
+        <div className="stage-panel" data-sheet={sheetCtl.sheet}>
+          <SheetBar
+            sheet={sheetCtl.sheet}
+            stageLabel={
+              stage === "select"
+                ? "Select area"
+                : stage === "validate"
+                  ? "Surface assessment"
+                  : stage === "design"
+                    ? "Solar design"
+                    : stage === "solar"
+                      ? "Solar potential"
+                      : "Site context"
+            }
+            summary={
+              capacityKwp > 0
+                ? `${panelFootprints?.features.length ?? 0} panels · ${capacityKwp.toFixed(2)} kWp`
+                : validation.snapshot.kind === "ok"
+                  ? "Assessment ready"
+                  : null
+            }
+            onCycle={sheetCtl.cycle}
+            onDragEnd={sheetCtl.applyDrag}
+          />
+          <div className="stage-panel__body">
           {place ? (
             <LocationCard
               name={place.name}
@@ -279,6 +307,7 @@ export default function App() {
           )}
 
           <ResetControl hasData={hasAnalysisData} onReset={handleReset} />
+          </div>
         </div>
 
         {showBanner && (

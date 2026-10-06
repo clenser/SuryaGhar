@@ -2,6 +2,7 @@
    Surya-Ghar professional palette: deep navy text/controls, solar teal accents,
    restrained green status, thin borders, compact engineering typography. */
 :root {
+  color-scheme: light;
   --color-background: #f7f9fb;
   --color-surface: #ffffff;
   --color-surface-muted: #f1f5f8;
@@ -73,4 +74,170 @@
     --motion-fast: 0ms;
     --motion-base: 0ms;
   }
+}
+
+/* ---------- Dark theme ----------
+   Deliberately designed GIS-dark surfaces (not an inverted light theme).
+   Satellite imagery is untouched; only UI chrome adapts. */
+[data-theme="dark"] {
+  color-scheme: dark;
+  --color-background: #081522;
+  --color-surface: #102536;
+  --color-surface-muted: #0b1f33;
+  --color-surface-elevated: #142d40;
+  --color-border: #294354;
+  --color-border-strong: #3d5c72;
+  --color-text: #f4f8fa;
+  --color-text-muted: #afc0cc;
+  --color-text-faint: #718795;
+  --color-primary: #13a8b5;
+  --color-primary-hover: #25c5d1;
+  --color-primary-soft: rgba(19, 168, 181, 0.16);
+  --color-accent: #f2a71b;
+  --color-success: #22b978;
+  --color-warning: #e5a11a;
+  --color-danger: #f06a6a;
+  --color-focus: #6aa8ff;
+  --color-map-chrome: rgba(16, 37, 54, 0.96);
+
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.45);
+  --shadow-float: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 14px rgba(0, 0, 0, 0.45);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.5);
+  --shadow-panel: 0 2px 6px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.55);
+}
+
+/* Subtle theme cross-fade for large surfaces only (never the map canvas). */
+body,
+.app-header,
+.stage-panel,
+.layer-panel,
+.status-bar,
+.map-toolbar,
+.map-legend__north,
+.map-legend__azimuth,
+.stage-card,
+.result-hero,
+.estimate-card,
+.stage-loading,
+.accordion,
+.seg-option,
+.preset-select__button,
+.vis-thumb,
+.test-site,
+.reset-confirm,
+.map-banner,
+.search__panel,
+.imagery-selector,
+.sheet-bar,
+.btn,
+.icon-btn,
+.field input,
+.field select,
+.search__input {
+  transition:
+    background-color var(--motion-base) var(--ease-standard),
+    border-color var(--motion-base) var(--ease-standard),
+    color var(--motion-base) var(--ease-standard),
+    box-shadow var(--motion-base) var(--ease-standard);
+}
+
+/* Filled controls keep white glyphs legible on bright teal in dark mode. */
+[data-theme="dark"] .btn--primary,
+[data-theme="dark"] .map-toolbar__btn.is-active,
+[data-theme="dark"] .stage-progress__item--done .stage-progress__circle,
+[data-theme="dark"] .preset-select__option.is-active {
+  background: #0e7c86;
+  border-color: #0e7c86;
+  color: #ffffff;
+}
+
+[data-theme="dark"] .preset-select__option.is-active .preset-select__check,
+[data-theme="dark"] .preset-select__option.is-active .preset-select__name,
+[data-theme="dark"] .preset-select__option.is-active .preset-select__dims {
+  color: #ffffff;
+}
+
+/* Header status pill stays dark in both themes for map legibility. */
+[data-theme="dark"] .backend-status {
+  background: #0b1f33;
+  border: 1px solid var(--color-border);
+}
+
+/* Module glyph keeps contrast on dark inputs. */
+[data-theme="dark"] .module-glyph rect {
+  fill: #274b63;
+}
+
+[data-theme="dark"] .module-glyph line {
+  stroke: #9db4c6;
+}
+
+[data-theme="dark"] .btn--primary:hover:not(:disabled) {
+  background: #13a8b5;
+  border-color: #13a8b5;
+}
+
+[data-theme="dark"] .stage-progress__item--current .stage-progress__circle {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #06272b;
+  box-shadow: 0 0 0 3px rgba(19, 168, 181, 0.25);
+}
+
+[data-theme="dark"] .toggle__input:checked + .toggle__track,
+[data-theme="dark"] .switch__track.is-on {
+  background: #0e7c86;
+}
+
+/* Brand mark stays deep navy with a light glyph in both themes. */
+[data-theme="dark"] .brand__mark {
+  background: #0b1f33;
+  border: 1px solid var(--color-border);
+  color: #ffffff;
+}
+
+/* Native dropdown options follow the theme instead of flashing white. */
+option,
+optgroup {
+  background-color: var(--color-surface);
+  color: var(--color-text);
+}
+
+[data-theme="dark"] .badge--ok {
+  background: rgba(34, 185, 120, 0.16);
+}
+
+[data-theme="dark"] .badge--warn {
+  background: rgba(229, 161, 26, 0.16);
+}
+
+[data-theme="dark"] .badge--info {
+  background: rgba(19, 168, 181, 0.16);
+}
+
+[data-theme="dark"] .btn--secondary {
+  background: transparent;
+}
+
+/* The result number is navy ink on light surfaces; on dark surfaces it must
+   flip to primary text or it disappears into the card. */
+[data-theme="dark"] .estimate-value {
+  color: var(--color-text);
+}
+
+/* Completion/current step colours keep enough contrast on dark surfaces. */
+[data-theme="dark"] .stage-progress__item--current .stage-progress__label {
+  color: var(--color-text);
+}
+
+/* Focus ring reads better as teal on the dark palette. */
+[data-theme="dark"] :focus-visible {
+  outline-color: var(--color-primary);
+}
+
+/* Status-bar summary chip (phone) follows the theme instead of forcing white. */
+[data-theme="dark"] .status-bar__summary {
+  background: var(--color-surface-elevated);
+  border-color: var(--color-border);
 }

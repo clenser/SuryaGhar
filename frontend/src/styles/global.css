@@ -9,6 +9,8 @@
 html,
 body,
 #root {
+  width: 100%;
+  min-height: 100%;
   height: 100%;
   margin: 0;
 }
@@ -20,7 +22,13 @@ body {
   color: var(--color-text);
   background: var(--color-background);
   -webkit-font-smoothing: antialiased;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: hidden;
+}
+
+.app {
+  height: 100vh;
+  height: 100dvh;
 }
 
 button,

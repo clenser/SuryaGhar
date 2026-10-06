@@ -10,6 +10,22 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      // Apply the persisted/OS theme before React mounts to avoid a flash of
+      // the wrong theme. Mirrors useTheme's resolveInitialTheme().
+      try {
+        var storedTheme = localStorage.getItem("suryaghar-theme");
+        if (storedTheme !== "light" && storedTheme !== "dark") {
+          storedTheme =
+            window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light";
+        }
+        document.documentElement.dataset.theme = storedTheme;
+      } catch (e) {
+        document.documentElement.dataset.theme = "light";
+      }
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
