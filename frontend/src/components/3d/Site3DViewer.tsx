@@ -1,0 +1,885 @@
+/**
+ * Site3DViewer - Main Three.js Canvas Component
+ *
+ * React wrapper for the Three.js 3D scene. Handles:
+ * - Canvas ref and container sizing (the parent owns the frame)
+ * - Scene initialization, animation loop and cleanup
+ * - Rebuilding the building mesh when the local coordinates change
+ * - Rendering the rooftop obstacles held in application state
+ * - Click-to-select / click-to-place hit testing on the roof plane
+ * - Driving the sun light and its shadows from the shared SunClock (Phase 4)
+ * - WebGL availability detection with a readable fallback (AGENTS.md §74)
+ *
+ * AGENTS.md §14: controlled camera (OrbitControls) — horizontal rotation,
+ * vertical/elevation rotation and zoom only; the building stays the target.
+ * AGENTS.md §72/§73: React owns UI/state, Three.js owns scene/camera/
+ * rendering, and the frame path never triggers React state updates — playback
+ * advances the mutable clock here and reports back at ≤5 Hz.
+ * Obstacle records never live in Three.js: meshes are rebuilt from props.
+ */
+
+import { forwardRef, useEffect, useRef, useState } from "react";
+import * as THREE from "three";
+import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import type { LocalCoords3D } from "../../lib/3d/coordinates";
+import {
+  buildingBounds,
+  frameCamera,
+  frameControls,
+  framingFromBox,
+  keepCameraOutsideBox,
+  setupScene,
+  updateCameraAspect,
+} from "../../lib/3d/scene";
+import { createBuildingMeshes, disposeBuildingMeshes, createDesignBuildingMaterial, createDesignRoofMaterial, setShellTransparent, type BuildingMeshes } from "../../lib/3d/geometry";
+import { applySunToScene, shadowCameraExtent } from "../../lib/3d/lighting";
+import type { Obstacle } from "../../lib/3d/obstacles";
+import { createPanelGroup, disposePanelGroup } from "../../lib/3d/panelMeshes";
+import type { PlacedPanel } from "../../lib/3d/panelPlacement";
+import type { PanelLayoutConfig } from "../../lib/3d/panels";
+import {
+  applyObstacleSelection,
+  createFootprintMarkerGroup,
+  createObstacleGroup,
+  createObstaclePreviewMesh,
+  disposeFootprintMarkerGroup,
+  disposeObstacleResources,
+} from "../../lib/3d/obstacleMeshes";
+import { fetchSatelliteGround } from "../../lib/3d/satelliteGround";
+import type { LngLat } from "../../lib/geo";
+import {
+  SUN_UI_TICK_MS,
+  advanceSunClock,
+  shortestAngleDelta,
+  sunStateAt,
+  type SunClock,
+} from "../../lib/solar";
+
+/**
+ * Attributes used for the capability probe. They mirror what Three.js requests,
+ * so the context handed to WebGLRenderer already carries `alpha` (transparent
+ * canvas → themed panel background) and antialiasing. Three.js r163+ requires
+ * WebGL 2, so the probe asks for exactly that.
+ */
+const CONTEXT_ATTRIBUTES: WebGLContextAttributes = {
+  alpha: true,
+  antialias: true,
+  depth: true,
+  preserveDrawingBuffer: false,
+};
+
+/** A press-and-release without movement counts as a click, not a camera drag. */
+const CLICK_DRAG_THRESHOLD_PX = 6;
+
+export interface Site3DViewerProps {
+  /** Local 3D coordinates for the building (terrace polygon + height) */
+  localCoords: LocalCoords3D;
+  /**
+   * Rooftop obstacles from application state (metres). Re-rendered whenever
+   * this array changes — Three.js never becomes the source of truth.
+   */
+  obstacles?: Obstacle[];
+  /** Obstacle currently highlighted in the viewport */
+  selectedObstacleId?: string | null;
+  /** Obstacle hidden while it is shown as a draft preview */
+  hiddenObstacleId?: string | null;
+  /** Draft obstacle rendered as a translucent ghost while the editor is open */
+  previewObstacle?: Obstacle | null;
+  /** Whether the current draft satisfies validation (ghost turns red if not) */
+  previewValid?: boolean;
+  /**
+   * Click-to-select: fires with the obstacle id, or null when empty space is
+   * clicked (deselect). Suppressed while a preview is shown.
+   */
+  onObstacleSelect?: (id: string | null) => void;
+  /**
+   * Click-to-place: while a preview is shown, clicking the roof plane reports
+   * the local-metre position under the cursor for the draft footprint.
+   */
+  onRoofPlace?: (x: number, y: number) => void;
+  /**
+   * Footprint-drawing finish (double-click on the roof): the parent closes
+   * the drawn polygon the same way the map selection finishes drawing.
+   * Only wired while a footprint draft is active.
+   */
+  onRoofFinish?: () => void;
+  /**
+   * Interactive footprint drawing (Custom obstacles): absolute local-metre
+   * points collected so far, rendered as markers + edges + live cursor edge.
+   * Null (or empty with drawing off) shows nothing.
+   */
+  footprintPoints?: Array<{ x: number; y: number }> | null;
+  /** True while footprint drawing captures roof clicks. */
+  footprintDrawing?: boolean;
+  /**
+   * Shared sun clock (Phase 4): precomputed solar samples plus the simulated
+   * time and playback flag. The render loop advances it while playing and
+   * applies the resulting direction to the scene's key light. Optional so the
+   * viewport can still render a static, sun-less scene.
+   */
+  sun?: SunClock | null;
+  /**
+   * Solar panel layout (Phase 5): configuration plus the placed panel
+   * records from application state. Rendered as one InstancedMesh; rebuilt
+   * (old geometry disposed) whenever this object changes.
+   */
+  panelLayer?: { config: PanelLayoutConfig; panels: PlacedPanel[] } | null;
+  /** Optional callback fired once the scene is ready */
+  onReady?: () => void;
+  /**
+   * Rooftop parapet (M2 enhancement): wall height/thickness in metres.
+   * Rendered as a separate ring solid on the roof surface.
+   */
+  parapet?: { heightM: number; thicknessM: number } | null;
+  /**
+   * Transparency (X-ray) mode: fades the building shell to reveal the roof
+   * boundary against interior structures. Reversible via rebuild.
+   */
+  xray?: boolean;
+  /**
+   * Geographic anchor for the satellite ground texture: the WGS84 terrace
+   * ring plus the UTM centroid the local frame was built against. Without
+   * it the viewer keeps its neutral studio ground.
+   */
+  siteAnchor?: { ring: LngLat[]; originUtm: { x: number; y: number } } | null;
+  /** Additional CSS class for the container */
+  className?: string;
+  /** Inline style for the container */
+  style?: React.CSSProperties;
+}
+
+export interface Site3DViewerHandle {
+  /** Reset the camera to the default framing of the building */
+  resetCamera: () => void;
+}
+
+/**
+ * The container fills its parent, so the surrounding layout (for example
+ * `.stage-3d-viewport`) owns the size, border and responsive aspect ratio.
+ */
+export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
+  function Site3DViewer(
+    {
+      localCoords,
+      obstacles = [],      selectedObstacleId = null,
+      hiddenObstacleId = null,
+      previewObstacle = null,
+      previewValid = true,
+      onObstacleSelect,
+      onRoofPlace,
+      onRoofFinish,
+      footprintPoints = null,
+      footprintDrawing = false,
+      sun = null,
+      panelLayer = null,
+      siteAnchor = null,
+      parapet = null,
+      xray = false,
+      onReady,
+      className = "",
+      style,
+    },
+    ref,
+  ) {
+    const canvasRef = useRef<HTMLCanvasElement | null>(null);
+    const containerRef = useRef<HTMLDivElement | null>(null);
+    const animationFrameRef = useRef<number | null>(null);
+
+    const sceneRef = useRef<THREE.Scene | null>(null);
+    const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+    const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+    const controlsRef = useRef<OrbitControls | null>(null);
+    const meshesRef = useRef<BuildingMeshes | null>(null);
+    const lightsRef = useRef<THREE.Object3D[]>([]);
+    const sunLightRef = useRef<THREE.DirectionalLight | null>(null);
+    const ambientLightRef = useRef<THREE.AmbientLight | null>(null);
+    const hemiLightRef = useRef<THREE.HemisphereLight | null>(null);
+    const obstacleGroupRef = useRef<THREE.Group | null>(null);
+    const panelGroupRef = useRef<THREE.Group | null>(null);
+    const previewMeshRef = useRef<THREE.Mesh | null>(null);
+    const texturedGroundRef = useRef<{ mesh: THREE.Mesh; texture: THREE.CanvasTexture } | null>(null);
+    /**
+     * Building volume in local metres, for camera containment. Rebuilt with
+     * the mesh so a height or footprint change is picked up without a manual
+     * refresh. Kept as a ref (not state) so the render loop reads it without
+     * triggering a React re-render.
+     */
+    const buildingBoxRef = useRef<THREE.Box3>(new THREE.Box3());
+
+    // Latest values for effects that must run exactly once per mount.
+    const localCoordsRef = useRef(localCoords);
+    localCoordsRef.current = localCoords;
+    const sunRef = useRef<SunClock | null>(sun);
+    sunRef.current = sun;
+    const onReadyRef = useRef(onReady);
+    onReadyRef.current = onReady;
+    const onObstacleSelectRef = useRef(onObstacleSelect);
+    onObstacleSelectRef.current = onObstacleSelect;
+    const onRoofPlaceRef = useRef(onRoofPlace);
+    onRoofPlaceRef.current = onRoofPlace;
+    const onRoofFinishRef = useRef(onRoofFinish);
+    onRoofFinishRef.current = onRoofFinish;
+    const previewActiveRef = useRef(previewObstacle !== null);
+    previewActiveRef.current = previewObstacle !== null;
+
+    /**
+     * The renderer renders shadow maps on demand (`autoUpdate` is false), so
+     * geometry and sun changes request exactly one refresh — a static scene
+     * never pays for a shadow pass (AGENTS.md §45).
+     */
+    const requestShadowUpdate = () => {
+      const renderer = rendererRef.current;
+      if (renderer) renderer.shadowMap.needsUpdate = true;
+    };
+
+    const disposeTexturedGround = () => {
+      const entry = texturedGroundRef.current;
+      if (!entry) return;
+      sceneRef.current?.remove(entry.mesh);
+      entry.mesh.geometry.dispose();
+      (entry.mesh.material as THREE.Material).dispose();
+      entry.texture.dispose();
+      texturedGroundRef.current = null;
+    };
+
+    const [webglError, setWebglError] = useState<string | null>(null);
+    const [isInitialized, setIsInitialized] = useState(false);
+
+    // Initialize the Three.js scene exactly once per mount.
+    useEffect(() => {
+      const canvas = canvasRef.current;
+      const container = containerRef.current;
+      if (!canvas || !container) return;
+
+      try {
+        // Explicit capability probe: jsdom, locked-down browsers and devices
+        // without WebGL return null here, and we can explain the situation
+        // instead of rendering an empty black box (AGENTS.md §74).
+        const gl = canvas.getContext("webgl2", CONTEXT_ATTRIBUTES);
+        if (!gl) {
+          setWebglError(
+            "WebGL is not supported in this browser. Please use a modern browser to view the 3D model.",
+          );
+          return;
+        }
+
+        const setup = setupScene(canvas, localCoordsRef.current);
+        sceneRef.current = setup.scene;
+        rendererRef.current = setup.renderer;
+        cameraRef.current = setup.camera;
+        controlsRef.current = setup.controls;
+        lightsRef.current = setup.lights;
+        sunLightRef.current = setup.sunLight;
+        ambientLightRef.current = setup.ambientLight;
+        hemiLightRef.current = setup.hemiLight;
+        // First shadow pass happens on the first rendered frame.
+        setup.renderer.shadowMap.needsUpdate = true;
+
+        setIsInitialized(true);
+        onReadyRef.current?.();
+      } catch (err) {
+        console.error("[Site3DViewer] Initialization failed:", err);
+        setWebglError("Failed to initialize 3D view. Your device may not support WebGL.");
+      }
+
+      return () => {
+        if (animationFrameRef.current !== null) {
+          cancelAnimationFrame(animationFrameRef.current);
+          animationFrameRef.current = null;
+        }
+        if (meshesRef.current) {
+          // Detach before disposing, exactly like the rebuild path: a mesh
+          // that is only disposed stays parented and keeps rendering.
+          for (const object of meshesRef.current.all) sceneRef.current?.remove(object);
+          disposeBuildingMeshes(meshesRef.current);
+          meshesRef.current = null;
+        }
+        if (obstacleGroupRef.current) {
+          disposeObstacleResources(obstacleGroupRef.current);
+          sceneRef.current?.remove(obstacleGroupRef.current);
+          obstacleGroupRef.current = null;
+        }
+        if (previewMeshRef.current) {
+          disposeObstacleResources(previewMeshRef.current);
+          sceneRef.current?.remove(previewMeshRef.current);
+          previewMeshRef.current = null;
+        }
+        if (panelGroupRef.current) {
+          disposePanelGroup(panelGroupRef.current);
+          sceneRef.current?.remove(panelGroupRef.current);
+          panelGroupRef.current = null;
+        }
+        disposeTexturedGround();
+        for (const light of lightsRef.current) {
+          sceneRef.current?.remove(light);
+        }
+        lightsRef.current = [];
+        sunLightRef.current = null;
+        ambientLightRef.current = null;
+        hemiLightRef.current = null;
+        sunRef.current = null;
+        controlsRef.current?.dispose();
+        controlsRef.current = null;
+        rendererRef.current?.dispose();
+        rendererRef.current = null;
+        sceneRef.current = null;
+        cameraRef.current = null;
+        setIsInitialized(false);
+      };
+    }, []);
+
+    // Build (or rebuild) the building mesh whenever the local coordinates
+    // change — e.g. the user edited the terrace or changed the building height.
+    // Warm-white walls + ivory roof (ExtrudeGeometry groups: caps = roof,
+    // walls = sides); the ground plane is sized to contain the shadow reach
+    // so long low-sun shadows stay on a receiving surface. X-ray mode fades
+    // just the shell (transparent + no depth write) so roof boundaries stay
+    // readable against interior structures; toggling rebuilds only meshes.
+    useEffect(() => {
+      if (!isInitialized || !sceneRef.current) return;
+      try {
+        if (meshesRef.current) {
+          // Detach BEFORE disposing. `disposeBuildingMeshes` only frees GPU
+          // resources: the old meshes stay parented to the scene and Three.js
+          // silently recreates their program on the next frame, so every
+          // rebuild left a fully opaque duplicate of the building and its
+          // ground plane in front of the new shell. That ghost was drawn in
+          // the opaque pass, then the x-ray shell blended over it — reading
+          // as an unchanged, opaque building. Removing from the scene first
+          // leaves exactly one shell to render.
+          for (const object of meshesRef.current.all) sceneRef.current.remove(object);
+          disposeBuildingMeshes(meshesRef.current);
+          meshesRef.current = null;
+        }
+        const framing = framingFromBox(buildingBounds(localCoords));
+        const groundSizeM = Math.max(
+          framing.footprint * 1.5,
+          shadowCameraExtent(framing.footprint, framing.height) * 2,
+        );
+        const wall = createDesignBuildingMaterial();
+        const roof = createDesignRoofMaterial();
+        const meshes = createBuildingMeshes(
+          localCoords,
+          { wall, roof },
+          groundSizeM,
+          parapet,
+        );
+        if (xray) {
+          // Fade the whole shell — walls, roof AND parapet — so the roof
+          // boundary reads against interior structures instead of hiding
+          // behind an opaque parapet ring. Wireframe, obstacles and ground
+          // stay solid as reference points.
+          const shell: THREE.Material[] = [wall, roof];
+          meshes.parapet?.traverse((child) => {
+            const material = (child as Partial<THREE.Mesh>).material;
+            if (Array.isArray(material)) shell.push(...material);
+            else if (material) shell.push(material);
+          });
+          setShellTransparent(shell, true);
+          // Transparent shell renders after opaque interior content so
+          // obstacles and inner faces read through it instead of z-fighting.
+          // Fresh objects per rebuild: Solid mode needs no restore step.
+          meshes.building.renderOrder = 2;
+          meshes.parapet?.traverse((child) => {
+            child.renderOrder = 2;
+          });
+          // Edges draw last so the footprint outline and vertical corner
+          // lines stay crisp on top of the faded shell — close edges would
+          // otherwise be re-tinted towards invisible by the transparent pass.
+          meshes.wireframe.renderOrder = 3;
+        }
+        meshesRef.current = meshes;
+        // Volume the camera may never enter. Taken from the same
+        // buildingBounds() the framing uses, so containment and framing can
+        // never disagree about where the building is.
+        buildingBoxRef.current = buildingBounds(localCoords);
+        // Exclusivity with the satellite texture: a rebuild creates a fresh
+        // visible grey plane, which would bury an active textured ground
+        // (and z-fight it). Exactly one ground is ever visible.
+        meshes.ground.visible = !texturedGroundRef.current;
+        for (const mesh of meshes.all) {
+          sceneRef.current.add(mesh);
+        }
+        requestShadowUpdate();
+        // Re-focus the orbit target on the new building centre without
+        // teleporting the camera away from the user's current view.
+        if (controlsRef.current) {
+          frameControls(controlsRef.current, framingFromBox(buildingBounds(localCoords)));
+        }
+      } catch (err) {
+        console.error("[Site3DViewer] Mesh update failed:", err);
+      }
+    }, [localCoords, isInitialized, parapet, xray]);
+
+    // Satellite ground context: real site imagery under the model, aligned
+    // to the local frame. Failure resolves to null and the neutral studio
+    // ground stays — a missing texture never breaks the scene.
+    useEffect(() => {
+      if (!isInitialized || !sceneRef.current || !siteAnchor || siteAnchor.ring.length < 3) return;
+      const scene = sceneRef.current;
+      let cancelled = false;
+
+      fetchSatelliteGround({
+        ring: siteAnchor.ring,
+        originUtm: siteAnchor.originUtm,
+      }).then((ground) => {
+        if (cancelled || !ground || !sceneRef.current) return;
+        disposeTexturedGround();
+        // Contrast/brightness grade for the satellite imagery. Real tiles are
+        // mid-dark and low-saturation, so a modest exposure lift plus mild
+        // saturation makes roads, vegetation and rooftops read under daylight.
+        // Only the ground texture carries this: nothing else is re-tinted and
+        // the building keeps its own lighting.
+        const graded = document.createElement("canvas");
+        graded.width = ground.canvas.width;
+        graded.height = ground.canvas.height;
+        {
+          const gctx = graded.getContext("2d");
+          if (gctx) {
+            gctx.drawImage(ground.canvas, 0, 0);
+            const imageData = gctx.getImageData(0, 0, graded.width, graded.height);
+            const data = imageData.data;
+            const round = (v: number) => Math.round(Math.min(1, Math.max(0, v)) * 255);
+            for (let i = 0; i < data.length; i += 4) {
+              const r = data[i] / 255;
+              const g = data[i + 1] / 255;
+              const b = data[i + 2] / 255;
+              // Lift the lower end of each channel toward white (blacks stay
+              // anchored so contrast is preserved), then separate the channels
+              // slightly for saturation.
+              const lr = 1 - (1 - r) * 0.7;
+              const lg = 1 - (1 - g) * 0.7;
+              const lb = 1 - (1 - b) * 0.7;
+              const mean = (lr + lg + lb) / 3;
+              data[i] = round(mean + (lr - mean) * 1.14);
+              data[i + 1] = round(mean + (lg - mean) * 1.14);
+              data[i + 2] = round(mean + (lb - mean) * 1.14);
+            }
+            gctx.putImageData(imageData, 0, 0);
+          }
+        }
+
+        const texture = new THREE.CanvasTexture(graded);
+        texture.colorSpace = THREE.SRGBColorSpace;
+        const maxAniso = rendererRef.current?.capabilities.getMaxAnisotropy() ?? 1;
+        texture.anisotropy = Math.min(8, maxAniso);
+        const mesh = new THREE.Mesh(
+          new THREE.PlaneGeometry(ground.sizeM.width, ground.sizeM.height),
+          new THREE.MeshStandardMaterial({
+            map: texture,
+            // The ground receives no direct sunlight in this scene, only
+            // ambient + hemisphere fill. Keep it near-white so the sunlit
+            // building is not the only bright thing on the plane.
+            color: 0xffffff,
+            roughness: 0.92,
+            metalness: 0,
+          }),
+        );
+        // Z-up: PlaneGeometry is already horizontal; sit just below the
+        // reference plane to avoid coplanar flicker at the building base.
+        mesh.rotation.x = 0;
+        mesh.position.set(ground.centerM.x, ground.centerM.y, -0.05);
+        mesh.receiveShadow = true;
+        mesh.name = "SatelliteGround";
+        scene.add(mesh);
+        texturedGroundRef.current = { mesh, texture };
+        if (meshesRef.current) meshesRef.current.ground.visible = false;
+        requestShadowUpdate();
+      });
+
+      return () => {
+        cancelled = true;
+        disposeTexturedGround();
+        if (meshesRef.current) meshesRef.current.ground.visible = true;
+      };
+    }, [siteAnchor, localCoords, isInitialized]);
+
+    // Rebuild the obstacle layer from application state (React is the source
+    // of truth — meshes are a projection of props, never the reverse).
+    useEffect(() => {
+      if (!isInitialized || !sceneRef.current) return;
+      const scene = sceneRef.current;
+
+      let group: THREE.Group;
+      try {
+        group = createObstacleGroup(obstacles, localCoords.height, { hiddenId: hiddenObstacleId });
+      } catch (err) {
+        console.error("[Site3DViewer] Obstacle update failed:", err);
+        return;
+      }
+
+      obstacleGroupRef.current = group;
+      scene.add(group);
+      requestShadowUpdate();
+
+      return () => {
+        scene.remove(group);
+        disposeObstacleResources(group);
+        if (obstacleGroupRef.current === group) obstacleGroupRef.current = null;
+      };
+    }, [obstacles, hiddenObstacleId, localCoords, isInitialized]);
+
+    // Highlight the selected obstacle without rebuilding the whole layer.
+    useEffect(() => {
+      if (!obstacleGroupRef.current) return;
+      applyObstacleSelection(obstacleGroupRef.current, selectedObstacleId);
+    }, [selectedObstacleId, obstacles, isInitialized]);
+
+    // Solar panel layer: one InstancedMesh rebuilt from application state.
+    // The effect cleanup removes and disposes the previous group, so a
+    // configuration change can never leave duplicate scene objects behind.
+    useEffect(() => {
+      if (!isInitialized || !sceneRef.current || !panelLayer) return;
+      const scene = sceneRef.current;
+
+      let group: THREE.Group;
+      try {
+        group = createPanelGroup(
+          panelLayer.panels,
+          panelLayer.config.panelTypeId,
+          panelLayer.config.mounting,
+          panelLayer.config.tiltDeg,
+          localCoords.height,
+          panelLayer.config.mountHeightM,
+        );
+      } catch (err) {
+        console.error("[Site3DViewer] Panel update failed:", err);
+        return;
+      }
+
+      panelGroupRef.current = group;
+      scene.add(group);
+      requestShadowUpdate();
+
+      return () => {
+        scene.remove(group);
+        disposePanelGroup(group);
+        if (panelGroupRef.current === group) panelGroupRef.current = null;
+      };
+    }, [panelLayer, localCoords, isInitialized]);
+
+    // Translucent draft preview while the obstacle editor holds a draft.
+    useEffect(() => {
+      if (!isInitialized || !sceneRef.current) return;
+      const scene = sceneRef.current;
+
+      if (previewMeshRef.current) {
+        scene.remove(previewMeshRef.current);
+        disposeObstacleResources(previewMeshRef.current);
+        previewMeshRef.current = null;
+      }
+      if (!previewObstacle) return;
+
+      try {
+        const mesh = createObstaclePreviewMesh(previewObstacle, localCoords.height, previewValid);
+        previewMeshRef.current = mesh;
+        scene.add(mesh);
+        requestShadowUpdate();
+      } catch (err) {
+        console.error("[Site3DViewer] Obstacle preview failed:", err);
+      }
+
+      return () => {
+        if (previewMeshRef.current) {
+          scene.remove(previewMeshRef.current);
+          disposeObstacleResources(previewMeshRef.current);
+          previewMeshRef.current = null;
+        }
+      };
+    }, [previewObstacle, previewValid, localCoords, isInitialized]);
+
+    // Footprint-drawing overlay: vertex markers, connecting edges and a
+    // live cursor edge, all on the roof plane. The overlay (not React state)
+    // tracks the pointer so orbiting stays smooth; points arrive through the
+    // existing onRoofPlace path. Cleanup removes listeners, restores the
+    // cursor and disposes every marker resource.
+    useEffect(() => {
+      if (!isInitialized || !sceneRef.current || !footprintDrawing) return;
+      const scene = sceneRef.current;
+      const canvas = canvasRef.current;
+      const camera = cameraRef.current;
+      if (!canvas || !camera) return;
+
+      const box = new THREE.Box3();
+      for (const v of localCoordsRef.current.vertices) box.expandByPoint(v);
+      const sizeVec = box.getSize(new THREE.Vector3());
+      const size = Math.max(sizeVec.x, sizeVec.y, 1);
+      const handle = createFootprintMarkerGroup(
+        footprintPoints ?? [],
+        localCoordsRef.current.height,
+        size,
+      );
+      scene.add(handle.group);
+      canvas.style.cursor = "crosshair";
+
+      const raycaster = new THREE.Raycaster();
+      const roofPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -localCoordsRef.current.height);
+      const onMove = (event: PointerEvent) => {
+        const rect = canvas.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return;
+        camera.updateMatrixWorld(true);
+        raycaster.setFromCamera(
+          new THREE.Vector2(
+            ((event.clientX - rect.left) / rect.width) * 2 - 1,
+            -((event.clientY - rect.top) / rect.height) * 2 + 1,
+          ),
+          camera,
+        );
+        const hit = new THREE.Vector3();
+        handle.setLivePoint(raycaster.ray.intersectPlane(roofPlane, hit) ? { x: hit.x, y: hit.y } : null);
+      };
+      const onLeave = () => handle.setLivePoint(null);
+      canvas.addEventListener("pointermove", onMove);
+      canvas.addEventListener("pointerleave", onLeave);
+      return () => {
+        canvas.removeEventListener("pointermove", onMove);
+        canvas.removeEventListener("pointerleave", onLeave);
+        canvas.style.cursor = "";
+        scene.remove(handle.group);
+        disposeFootprintMarkerGroup(handle);
+      };
+    }, [footprintDrawing, footprintPoints, localCoords, isInitialized]);
+
+    // Pointer interaction: a click (press + release without movement) either
+    // places the draft footprint on the roof plane or picks an obstacle.
+    // Dragging past the threshold is a camera orbit and selects nothing.
+    useEffect(() => {
+      if (!isInitialized) return;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
+      let press: { x: number; y: number; button: number } | null = null;
+
+      const handleDown = (event: PointerEvent) => {
+        press = { x: event.clientX, y: event.clientY, button: event.button };
+      };
+
+      const handleUp = (event: PointerEvent) => {
+        const start = press;
+        press = null;
+        if (!start || start.button !== 0) return;
+        if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > CLICK_DRAG_THRESHOLD_PX) {
+          return; // camera orbit
+        }
+
+        const camera = cameraRef.current;
+        const rect = canvas.getBoundingClientRect();
+        if (!camera || rect.width <= 0 || rect.height <= 0) return;
+
+        // Three's renderer refreshes camera matrices every frame; the pointer
+        // path must not depend on that, so update them before raycasting.
+        camera.updateMatrixWorld(true);
+
+        const raycaster = new THREE.Raycaster();
+        raycaster.setFromCamera(
+          new THREE.Vector2(
+            ((event.clientX - rect.left) / rect.width) * 2 - 1,
+            -((event.clientY - rect.top) / rect.height) * 2 + 1,
+          ),
+          camera,
+        );
+
+        if (previewActiveRef.current || onRoofFinishRef.current) {
+          // Draft mode: intersect the horizontal roof plane at building height.
+          const roofZ = localCoordsRef.current.height;
+          const hit = new THREE.Vector3();
+          const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -roofZ);
+          if (raycaster.ray.intersectPlane(plane, hit)) {
+            onRoofPlaceRef.current?.(hit.x, hit.y);
+          }
+          return;
+        }
+
+        const group = obstacleGroupRef.current;
+        const targets: THREE.Object3D[] = [];
+        if (group) {
+          // Same reason as the camera: the mesh transforms must be fresh even
+          // if no frame has been rendered yet.
+          group.updateMatrixWorld(true);
+          for (const child of group.children) {
+            if ((child as THREE.Mesh).isMesh) targets.push(child);
+          }
+        }
+        const hits = targets.length ? raycaster.intersectObjects(targets, false) : [];
+        const id = hits.length ? (hits[0].object.userData.obstacleId as string | undefined) : undefined;
+        onObstacleSelectRef.current?.(id ?? null);
+      };
+
+      canvas.addEventListener("pointerdown", handleDown);
+      window.addEventListener("pointerup", handleUp);
+      const handleDoubleClick = () => {
+        // Draft mode only: mirrors the map selection's double-click finish.
+        // Gated on either signal so finishing works from the very first
+        // point, before any preview exists to mark draft mode.
+        if (previewActiveRef.current || onRoofFinishRef.current) onRoofFinishRef.current?.();
+      };
+      canvas.addEventListener("dblclick", handleDoubleClick);
+      return () => {
+        canvas.removeEventListener("pointerdown", handleDown);
+        window.removeEventListener("pointerup", handleUp);
+        canvas.removeEventListener("dblclick", handleDoubleClick);
+      };
+    }, [isInitialized]);
+
+    // Render loop: Three.js drives it, React stays out of the frame path
+    // (AGENTS.md §73). Damping needs controls.update() every frame.
+    useEffect(() => {
+      if (!isInitialized || !rendererRef.current || !sceneRef.current || !cameraRef.current || !controlsRef.current) {
+        return;
+      }
+
+      // Loop-local bookkeeping: the clock is shared, this bookkeeping is not.
+      let lastFrame: number | null = null;
+      let lastTick = 0;
+      let applied: { azimuthDeg: number; elevationDeg: number; night: boolean } | null = null;
+      /**
+       * Sun step, once per frame:
+       * 1. advance the shared clock while playing (bounded, ends at 24:00);
+       * 2. report to React at most every SUN_UI_TICK_MS — never per frame;
+       * 3. apply the interpolated position to the light and refresh the
+       *    shadow map only when the direction or day/night state changed.
+       */
+      const syncSun = (now: number) => {
+        const renderer = rendererRef.current;
+        const sun = sunRef.current;
+        const sunLight = sunLightRef.current;
+        const ambient = ambientLightRef.current;
+        if (!renderer || !sun || !sunLight || !ambient) return;
+
+        if (sun.playing) {
+          const delta = lastFrame === null ? 0 : Math.min(Math.max((now - lastFrame) / 1000, 0), 0.25);
+          if (advanceSunClock(sun, delta)) {
+            sun.onEnd?.(); // reached 24:00: the clock stopped itself
+          }
+          if (now - lastTick >= SUN_UI_TICK_MS) {
+            lastTick = now;
+            sun.onTick?.(sun.timeMinutes);
+          }
+        }
+        lastFrame = now;
+
+        const state = sunStateAt(sun.samples, sun.timeMinutes);
+        const changed =
+          !applied ||
+          applied.night !== state.night ||
+          (!state.night &&
+            (Math.abs(shortestAngleDelta(applied.azimuthDeg, state.azimuthDeg)) > 0.05 ||
+              Math.abs(applied.elevationDeg - state.elevationDeg) > 0.05));
+        if (!changed) return;
+
+        applied = {
+          azimuthDeg: state.azimuthDeg,
+          elevationDeg: state.elevationDeg,
+          night: state.night,
+        };
+        applySunToScene(sunLight, ambient, state, hemiLightRef.current ?? undefined);
+        renderer.shadowMap.needsUpdate = true;
+      };
+
+      const animate = (now: number) => {
+        animationFrameRef.current = requestAnimationFrame(animate);
+        controlsRef.current?.update();
+        // Containment runs after update(): OrbitControls rebuilds its offset
+        // from camera.position each frame, so a clamp applied here persists
+        // through the next frame instead of being overwritten.
+        const controls = controlsRef.current;
+        if (controls) keepCameraOutsideBox(cameraRef.current!, controls, buildingBoxRef.current);
+        syncSun(now);
+        rendererRef.current?.render(sceneRef.current!, cameraRef.current!);
+      };
+
+      // Start through rAF so every timestamp comes from the same clock —
+      // deltas between frames stay valid whatever the host provides.
+      animationFrameRef.current = requestAnimationFrame(animate);
+
+      return () => {
+        if (animationFrameRef.current !== null) {
+          cancelAnimationFrame(animationFrameRef.current);
+          animationFrameRef.current = null;
+        }
+      };
+    }, [isInitialized]);
+
+    // Keep the viewport and projection in step with its container.
+    useEffect(() => {
+      if (!isInitialized) return;
+      const container = containerRef.current;
+      if (!container) return;
+
+      const handleResize = () => {
+        const renderer = rendererRef.current;
+        const camera = cameraRef.current;
+        const el = containerRef.current;
+        if (!renderer || !camera || !el) return;
+        const width = el.clientWidth;
+        const height = el.clientHeight;
+        if (width === 0 || height === 0) return;
+        renderer.setSize(width, height, false);
+        updateCameraAspect(camera, width, height);
+      };
+
+      handleResize();
+
+      const resizeObserver = new ResizeObserver(handleResize);
+      resizeObserver.observe(container);
+      window.addEventListener("resize", handleResize);
+
+      return () => {
+        resizeObserver.disconnect();
+        window.removeEventListener("resize", handleResize);
+      };
+    }, [isInitialized]);
+
+    // Imperative handle for parents that want to re-frame the camera.
+    useEffect(() => {
+      if (!ref) return;
+      const handle: Site3DViewerHandle = {
+        resetCamera: () => {
+          if (!cameraRef.current || !controlsRef.current) return;
+          const framing = framingFromBox(buildingBounds(localCoordsRef.current));
+          frameCamera(cameraRef.current, framing);
+          frameControls(controlsRef.current, framing);
+          controlsRef.current.update();
+        },
+      };
+      if (typeof ref === "function") ref(handle);
+      else if (ref && typeof ref === "object") ref.current = handle;
+      return () => {
+        if (typeof ref === "function") ref(null);
+        else if (ref && typeof ref === "object") ref.current = null;
+      };
+    }, [ref]);
+
+    if (webglError) {
+      return (
+        <div
+          ref={containerRef}
+          className={`site-3d-viewer site-3d-viewer--error ${className}`}
+          style={style}
+          role="alert"
+        >
+          <div className="site-3d-viewer__message">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+              <rect x="2" y="3" width="20" height="14" rx="2" />
+              <path d="M8 21h8M12 17v4" />
+              <line x1="6" y1="9" x2="18" y2="9" strokeDasharray="4 4" />
+            </svg>
+            <p>{webglError}</p>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div ref={containerRef} className={`site-3d-viewer ${className}`} style={style}>
+        <canvas
+          ref={canvasRef}
+          aria-label="3D building model. Drag to rotate, scroll/pinch to zoom, click to select an obstacle."
+        />
+        {!isInitialized && (
+          <div className="site-3d-viewer__loading">Loading 3D view…</div>
+        )}
+      </div>
+    );
+  },
+);

@@ -98,7 +98,7 @@ describe("ensureBackendAwake single-flight", () => {
     expect(getBackendStatus()).toBe("online");
   });
 
-  it("an aborted attempt then success stays STARTING and ends ONLINE", async () => {
+  it("an aborted attempt then success stays CHECKING and ends ONLINE", async () => {
     let calls = 0;
     const fetchMock = vi.fn(async () => {
       calls += 1;
@@ -112,12 +112,12 @@ describe("ensureBackendAwake single-flight", () => {
 
     await ensureBackendAwake({ defaultRetryMs: 5 });
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(seen).toContain("starting");
+    expect(seen).toContain("checking");
     expect(seen).not.toContain("error");
     expect(getBackendStatus()).toBe("online");
   });
 
-  it("a transient network failure during startup stays STARTING and recovers", async () => {
+  it("a transient network failure during startup stays CHECKING and recovers", async () => {
     let calls = 0;
     const fetchMock = vi.fn(async () => {
       calls += 1;
@@ -130,7 +130,7 @@ describe("ensureBackendAwake single-flight", () => {
 
     await ensureBackendAwake({ defaultRetryMs: 5 });
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(seen).toContain("starting");
+    expect(seen).toContain("checking");
     expect(seen).not.toContain("error");
     expect(getBackendStatus()).toBe("online");
   });
@@ -179,8 +179,8 @@ describe("ensureBackendAwake single-flight", () => {
     const pending = ensureBackendAwake({ signal: controller.signal });
     controller.abort();
     await expect(pending).rejects.toThrowError();
-    // Aborted before any verdict: starting (set at loop entry), never error.
-    expect(getBackendStatus()).toBe("starting");
+    // Aborted before any verdict: checking (set at loop entry), never error.
+    expect(getBackendStatus()).toBe("checking");
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(200, { status: "ready" })));

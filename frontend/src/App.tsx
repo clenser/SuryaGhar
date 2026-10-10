@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import { MapView, type MapViewHandle } from "./components/map/MapView";
 import { MapControls } from "./components/map/MapControls";
 import { MapToolbar } from "./components/map/MapToolbar";
@@ -13,6 +13,7 @@ import { ResetControl } from "./components/workspace/ResetControl";
 import { SheetBar } from "./components/workspace/SheetBar";
 import { useBottomSheet } from "./hooks/useBottomSheet";
 import { useSelection } from "./hooks/useSelection";
+import { useObstacles } from "./hooks/useObstacles";
 import { useValidation } from "./hooks/useValidation";
 import { BACKEND_WAITING_LABEL, useBackendReady } from "./hooks/useBackendStatus";
 import { formatPlaceContext } from "./services/geocode";
@@ -27,7 +28,12 @@ import type { LocationResult } from "./types";
 import type { SegmentationModel } from "./services/analysis";
 import { ensureBackendAwake } from "./services/backendStatus";
 
-type Stage = "select" | "validate" | "design" | "solar" | "site";
+type Stage = "select" | "model" | "validate" | "design" | "solar" | "site";
+
+// The 3D workspace (Three.js + local coordinate conversion) is only needed once
+// the user opens the Model stage, so it is code-split out of the first load
+// (AGENTS.md §75 progressive loading).
+const ModelPanel = lazy(() => import("./components/analysis/ModelPanel"));
 
 export default function App() {
   const mapRef = useRef<MapViewHandle | null>(null);
@@ -42,6 +48,24 @@ export default function App() {
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const selection = useSelection();
   const [stage, setStage] = useState<Stage>("select");
+  const [buildingHeight, setBuildingHeight] = useState<number | null>(null);
+  /**
+   * Parapet height above the roof (m). Null means "no explicit value yet" —
+   * consumers fall back to DEFAULT_PARAPET_HEIGHT_M so old projects keep
+   * rendering a parapet instead of breaking.
+   */
+  const [parapetHeight, setParapetHeight] = useState<number | null>(null);
+  /**
+   * 3D design workspace (correction milestone): when true, the side panel
+   * becomes the primary surface and the satellite map docks as a context
+   * inset (CSS-only switch — no remounts, no provider churn, no second map).
+   * Entered explicitly from the Model stage, exited explicitly or whenever
+   * the stage/site changes.
+   */
+  const [designMode, setDesignMode] = useState(false);
+  // Rooftop obstacles: application state, cleared with the selection so a new
+  // site never inherits another rooftop's objects (AGENTS.md §40).
+  const obstacleStore = useObstacles();
   const [panelFootprints, setPanelFootprints] = useState<GeoJSON.FeatureCollection | null>(null);
   const [shadowFC, setShadowFC] = useState<GeoJSON.FeatureCollection | null>(null);
   const [capacityKwp, setCapacityKwp] = useState(0);
@@ -61,19 +85,19 @@ export default function App() {
   // automatic via the shared store — no refresh, no state reset.
   const backendReady = useBackendReady();
 
-  // Wake the on-demand backend exactly once on page load, before any user
+  // Probe the local backend exactly once on page load, before any user
   // action. ensureBackendAwake() single-flights concurrent callers (StrictMode
   // double-mount, rerenders), and the shared backendStatus store drives the
-  // header pill from starting -> online without any further work here.
-  // Aborting on unmount keeps remounts (StrictMode, HMR) to a single active
-  // wake: the aborted cycle exits quietly without touching shared state.
+  // header pill from checking -> online without any further work here.
+  // Deliberately NOT aborted on cleanup: under StrictMode the cleanup runs
+  // before the second effect, and aborting would leave the second mount
+  // sharing an already-dead promise — no live probe, pill stuck mid-state
+  // until some later request happened to succeed. A shared live cycle is
+  // single-active by construction, and the module-level store survives HMR.
   useEffect(() => {
-    const controller = new AbortController();
-    ensureBackendAwake({ signal: controller.signal }).catch(() => {
-      // Status UI already reflects the outcome; boot must never fail on wake.
-      // AbortError from unmount is quiet by design (never OFFLINE).
+    ensureBackendAwake().catch(() => {
+      // Status UI already reflects the outcome; boot must never fail on probe.
     });
-    return () => controller.abort();
   }, []);
 
   // Selection cleared -> reset overlays, capacity, and the current stage so the UI never
@@ -81,12 +105,17 @@ export default function App() {
   useEffect(() => {
     if (selection.mode === "idle") {
       setStage("select");
+      setDesignMode(false);
+      setBuildingHeight(null);
+      setParapetHeight(null);
+      obstacleStore.clear();
       setPanelFootprints(null);
       setShadowFC(null);
       setCapacityKwp(0);
       setDesignOrientation(null);
     }
-  }, [selection.mode]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selection.mode, obstacleStore.clear]);
 
   // Full workspace reset back to the clean initial state. Permanent app/API
   // configuration (layers object shape, providers, thresholds) is untouched;
@@ -94,6 +123,9 @@ export default function App() {
   const handleReset = useCallback(() => {
     selection.clear();
     validation.reset();
+    setBuildingHeight(null);
+    setParapetHeight(null);
+    obstacleStore.clear();
     setPanelFootprints(null);
     setShadowFC(null);
     setCapacityKwp(0);
@@ -117,6 +149,7 @@ export default function App() {
   const hasAnalysisData =
     selection.vertices.length > 0 ||
     validation.snapshot.kind !== "idle" ||
+    obstacleStore.obstacles.length > 0 ||
     panelFootprints !== null ||
     shadowFC !== null ||
     capacityKwp > 0 ||
@@ -140,6 +173,14 @@ export default function App() {
       setDesignOrientation(orientation ?? null);
     },
     [],
+  );
+
+  const handleModelHeight = useCallback(
+    (height: number) => {
+      setBuildingHeight(height);
+      setStage("model");
+    },
+    []
   );
 
   // Advanced controls and diagnostics live in the layers panel, so turning advanced on also opens it.
@@ -187,13 +228,20 @@ export default function App() {
 
   // Sidebar stage navigation. The map stays clean: progress is communicated
   // through the current stage panel, section headings and primary actions.
-  const stageOrder: Stage[] = ["select", "validate", "design", "solar", "site"];
+  const stageOrder: Stage[] = ["select", "model", "validate", "design", "solar", "site"];
 
   return (
     <div className="app" data-sheet={sheetCtl.sheet}>
-      <Header advanced={advanced} onAdvancedToggle={handleAdvancedToggle} onSelectPlace={handleSelectPlace} />
+      <Header advanced={advanced} onAdvancedToggle={handleAdvancedToggle} onSelectPlace={handleSelectPlace} designMode={designMode} />
 
-      <main className="workspace" data-sheet={sheetCtl.sheet}>
+      <main className={`workspace${designMode ? " design-mode" : ""}`} data-sheet={sheetCtl.sheet}>
+        {/*
+          Design mode owns the workspace: the map unmounts completely (no
+          hidden inset, no background GPU work) and the panel becomes the 3D
+          design surface. Mounting again on exit resumes the preserved
+          provider state via ensureProviderWatch — never a fresh wake cycle.
+        */}
+        {!designMode && (
         <MapView
           ref={mapRef}
           layers={layers}
@@ -217,6 +265,7 @@ export default function App() {
           onMoveVertex={selection.moveVertex}
           onDeleteVertex={selection.deleteVertex}
         />
+        )}
 
         <div className="stage-panel" data-sheet={sheetCtl.sheet}>
           <SheetBar
@@ -224,13 +273,15 @@ export default function App() {
             stageLabel={
               stage === "select"
                 ? "Select area"
-                : stage === "validate"
-                  ? "Surface assessment"
-                  : stage === "design"
-                    ? "Solar design"
-                    : stage === "solar"
-                      ? "Solar potential"
-                      : "Site context"
+                : stage === "model"
+                  ? "3D building"
+                  : stage === "validate"
+                    ? "Surface assessment"
+                    : stage === "design"
+                      ? "Solar design"
+                      : stage === "solar"
+                        ? "Solar potential"
+                        : "Site context"
             }
             summary={
               capacityKwp > 0
@@ -263,31 +314,67 @@ export default function App() {
               label:
                 s === "select"
                   ? "Select"
-                  : s === "validate"
-                    ? "Validate"
-                    : s === "design"
-                      ? "Design"
-                      : s === "solar"
-                        ? "Solar"
-                        : "Site",
+                  : s === "model"
+                    ? "Model"
+                    : s === "validate"
+                      ? "Validate"
+                      : s === "design"
+                        ? "Design"
+                        : s === "solar"
+                          ? "Solar"
+                          : "Site",
               disabled:
                 s === "select"
                   ? false
-                  : s === "solar"
-                    ? selection.mode !== "confirmed" || capacityKwp <= 0
-                    : selection.mode !== "confirmed",
+                  : s === "model"
+                    ? selection.mode !== "confirmed"
+                    : s === "solar"
+                      ? selection.mode !== "confirmed" || capacityKwp <= 0
+                      : selection.mode !== "confirmed",
             }))}
             currentId={stage}
-            onSelect={(id) => setStage(id as Stage)}
+            onSelect={(id) => {
+              setStage(id as Stage);
+              setDesignMode(false);
+            }}
             backendLocked={!backendReady}
           />
 
           {stage === "select" && (
             <SelectionPanel
               selection={selection}
-              onStartValidate={() => setStage("validate")}
+              onStartValidate={() => setStage("model")}
               backendReady={backendReady}
             />
+          )}
+          {stage === "model" && selection.vertices.length >= 3 && (
+            <Suspense
+              fallback={
+                <div className="stage-card">
+                  <p className="stage-card__eyebrow">Stage 2 of 6</p>
+                  <h2 className="stage-card__title">Loading 3D workspace…</h2>
+                </div>
+              }
+            >
+              <ModelPanel
+                vertices={selection.vertices}
+                metrics={selection.metrics}
+                buildingHeight={buildingHeight}
+                onSetHeight={handleModelHeight}
+                parapetHeight={parapetHeight}
+                onSetParapetHeight={setParapetHeight}
+                onContinue={() => setStage("validate")}
+                backendReady={backendReady}
+                siteCountry={place?.country}
+                obstacles={obstacleStore.obstacles}
+                onAddObstacle={obstacleStore.add}
+                onUpdateObstacle={obstacleStore.update}
+                onRemoveObstacle={obstacleStore.remove}
+                designMode={designMode}
+                onEnterDesign={() => setDesignMode(true)}
+                onExitDesign={() => setDesignMode(false)}
+              />
+            </Suspense>
           )}
           {stage === "validate" && selection.vertices.length >= 3 && (
             <ValidatePanel
@@ -348,7 +435,15 @@ export default function App() {
           </div>
         )}
 
-        <ImagerySelector onOpenLayers={() => setLayersOpen(true)} />
+        {/*
+          Map-only chrome is unmounted (not merely hidden) in design mode:
+          the imagery selector, drawing toolbar, map controls and layer panel
+          belong to the 2D workspace. Their state lives in App, so exiting
+          design mode restores them untouched.
+        */}
+        {!designMode && (
+          <>
+            <ImagerySelector onOpenLayers={() => setLayersOpen(true)} />
 
         <MapToolbar
           mode={selection.mode}
@@ -385,6 +480,8 @@ export default function App() {
           onClose={() => setLayersOpen(false)}
           onJumpTo={handleSelectPlace}
         />
+          </>
+        )}
 
       </main>
 

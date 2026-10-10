@@ -37,7 +37,7 @@ export function SolarPanel({ latitude, longitude, capacityKwp, onContinue, backe
 
   return (
     <div className="stage-card">
-      <p className="stage-card__eyebrow">Stage 4 of 5</p>
+      <p className="stage-card__eyebrow">Stage 5 of 6</p>
       <h2 className="stage-card__title">Solar potential</h2>
       <p className="stage-card__body">
         {capacityKwp} kWp system at {latitude.toFixed(4)}°, {longitude.toFixed(4)}°. Different tilt/azimuth combos are

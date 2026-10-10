@@ -25,7 +25,7 @@ describe("BackendStatusIndicator", () => {
     expect(container.querySelector(".backend-status__dot--unknown")).toBeInTheDocument();
   });
 
-  it("shows the starting state while the backend wakes", async () => {
+  it("shows the checking state while the first request is in flight", async () => {
     let resolveFetch!: (response: Response) => void;
     vi.stubGlobal(
       "fetch",
@@ -37,7 +37,8 @@ describe("BackendStatusIndicator", () => {
       pending = requestBackend("http://t/health");
     });
     render(<BackendStatusIndicator />);
-    expect(screen.getByText("Starting analysis server…")).toBeInTheDocument();
+    expect(screen.getByText("Checking local server…")).toBeInTheDocument();
+    expect(screen.queryByText("Starting analysis server…")).toBeNull();
     await act(async () => {
       resolveFetch(jsonResponse(200, { status: "ok" }));
       await pending;

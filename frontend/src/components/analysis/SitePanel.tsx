@@ -49,7 +49,7 @@ export function SitePanel({ vertices, onShadows, backendReady }: SitePanelProps)
 
   return (
     <div className="stage-card">
-      <p className="stage-card__eyebrow">Stage 5 of 5</p>
+      <p className="stage-card__eyebrow">Stage 6 of 6</p>
       <h2 className="stage-card__title">Site context</h2>
 
       <div className="stage-card__actions">

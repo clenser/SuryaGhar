@@ -7,12 +7,7 @@ export default defineConfig({
   plugins: [react()],
   build: {
     chunkSizeWarningLimit: 1100,
-    rollupOptions: {
-      output: {
-        // MapLibre is large and changes rarely; keep it in its own cacheable chunk.
-        manualChunks: { maplibre: ["maplibre-gl"] },
-      },
-    },
+    rollupOptions: {},
   },
   server: {
     port: 5173,

@@ -1,1361 +1,1527 @@
-# AGENTS.md
-# Solar Rooftop Analysis Platform
-# Engineering instructions for AI coding agents
+# AGENTS.md — Surya-Ghar
 
-## 1. Mission
+## 1. Project Overview
 
-Build a production-quality, India-focused solar rooftop and open-ground analysis platform.
+Surya-Ghar is a professional solar rooftop and open-ground planning application for India.
 
-The platform must let a user:
+The application allows a user to:
 
-1. Open a high-quality satellite map.
-2. Search/navigate to a property.
-3. Select a rooftop or usable ground area.
-4. Validate whether the selected area is actually suitable.
-5. Calculate usable area and solar-panel capacity.
-6. Place panels using deterministic geometry.
-7. Optimize panel orientation and tilt.
-8. Analyze surrounding buildings, trees, and terrain.
-9. Estimate shading and solar irradiation.
-10. Estimate annual energy generation.
-11. Clearly communicate confidence, assumptions, limitations, and data resolution.
+1. Search for a location.
+2. Select a building/rooftop or open-ground area.
+3. Validate that the selected area is suitable.
+4. Measure the selected area using real geographic coordinates.
+5. Design the selected building/terrace as a 3D structure.
+6. Enter building height and generate a 3D building model.
+7. Add rooftop obstacles with real dimensions and heights.
+8. Simulate the sun throughout the day.
+9. Visualize realistic shadows from buildings and rooftop obstacles.
+10. Select different solar-panel types.
+11. Place solar panels on the rooftop in 3D.
+12. Visualize panel and obstacle shadows.
+13. Analyze panel orientation, tilt, shading, and solar production.
+14. Produce a final solar-layout recommendation.
 
-The application must be engineered incrementally. Do not build the entire product in one step.
+The application should remain technically grounded in real geographic coordinates, real dimensions, deterministic geometry, and established solar-physics calculations.
 
-The current priority is to establish a reliable map foundation and then implement rooftop/ground selection and validation.
-
----
-
-## 2. Critical Engineering Principles
-
-### 2.1 Incremental implementation
-
-Implement one independently testable capability at a time.
-
-Preferred order:
-
-Phase 1:
-- Map
-- Satellite imagery
-- Base/context layers
-- Terrain
-- Location search
-- Polygon selection
-- Area calculation
-
-Phase 2:
-- Surface validation
-- Segmentation
-- Panel geometry
-- Panel placement
-
-Phase 3:
-- Solar optimization
-- Surrounding-object analysis
-- Height estimation
-- Shadows
-- Irradiation
-- Generation estimates
-
-Do not implement later phases merely because they are described here.
-
-### 2.2 Preserve working functionality
-
-If an existing component works, do not rewrite it without evidence that the rewrite is necessary.
-
-Before modifying a working map/provider:
-
-1. Reproduce the issue.
-2. Identify the actual cause.
-3. Make the smallest appropriate change.
-4. Retest the affected behavior.
-
-Do not replace a functioning provider simply because another provider appears theoretically better.
-
-### 2.3 Free-first development
-
-The initial prototype should use free/open-source or freely testable services wherever practical.
-
-Do not introduce paid APIs unless:
-- there is a clear technical requirement,
-- the free option is inadequate,
-- and the user explicitly approves the cost.
-
-Never add a billing dependency merely for convenience.
-
-### 2.4 No undocumented/scraped APIs
-
-Do not use:
-- undocumented Google Maps/Earth endpoints,
-- scraped proprietary tile endpoints,
-- reverse-engineered APIs,
-- browser automation to obtain restricted imagery,
-- services that explicitly prohibit the intended usage.
-
-Use documented APIs, documented tile services, or properly licensed datasets.
-
-### 2.5 No fake precision
-
-Never claim that an estimate is survey-grade.
-
-If imagery resolution, DEM resolution, building height, tree height, shadow geometry, or solar resource data limits accuracy, expose that limitation.
+AI/ML may assist with validation, recognition, ranking, or optimization, but AI must not replace deterministic geometric or solar calculations.
 
 ---
 
-# 3. Technology Stack
+# 2. Core Product Principle
 
-## Frontend
+Surya-Ghar is a combination of:
 
-Preferred:
+- Geographic mapping
+- Rooftop geometry
+- 3D architectural visualization
+- Solar-position calculation
+- Shadow simulation
+- Solar-panel layout
+- Solar-energy analysis
 
+The architecture should therefore separate:
+
+```text
+MAP / GEOGRAPHY
+        ↓
+2D GEOMETRY
+        ↓
+3D MODEL
+        ↓
+SUN / SHADOW SIMULATION
+        ↓
+SOLAR PANEL PLACEMENT
+        ↓
+SOLAR ENERGY ANALYSIS
+
+3. Existing Technology Stack
+Frontend
 - React
 - TypeScript
 - Vite
-- MapLibre GL JS
-
-Use a clean component architecture.
-
-Do not introduce a second frontend framework unless there is a demonstrated need.
-
-## Backend
-
-Preferred:
-
+- MapLibre GL JS / existing map implementation
+- Google Maps APIs where already integrated
+- Turf.js where appropriate
+- Three.js for the new 3D design environment
+- Three.js GLTFLoader for 3D assets
+- Three.js OrbitControls for controlled 3D navigation
+Backend
 - Python
 - FastAPI
-
-The backend should own:
-- AI/vision calls
-- segmentation
-- geospatial processing
-- solar calculations
-- analysis pipelines
-- provider abstraction
-- validation
-- secrets
-
-The browser must not receive private API keys.
-
-## Geospatial
-
-Preferred:
-
 - Shapely
-- GeoPandas
-- pyproj
-- Rasterio
+- GeoPandas where required
+- pyproj / PROJ
+- Rasterio where required
 - NumPy
 - OpenCV
-
-Use appropriate projected coordinate systems for metric calculations.
-
-Do not calculate rooftop area by treating latitude/longitude degrees as meters.
-
-## Machine learning
-
-Preferred:
-
-- PyTorch
-- OpenCV
-- segmentation models such as SAM/SAM 2 or an appropriate dedicated segmentation model
-- Ultralytics where appropriate
-
-The segmentation architecture must remain replaceable.
-
-## Solar
-
-Preferred:
-
 - pvlib
+- PVGIS
+- existing segmentation/vision providers
+Mapping / Google Services
+The application currently has access to:
+- Google Maps
+- Google Geocoding API
+- Google Static Maps API
+Use existing Google services where already integrated.
+Do not introduce additional Google APIs merely because they appear convenient.
+Do not replace existing map functionality unnecessarily.
+4. Important Architecture Rule
+The current 2D mapping and geometry system remains the foundation.
+The new 3D system is an additional design layer.
+Do NOT rewrite the existing geographic measurement system just to introduce 3D.
+The relationship should be:
+Existing 2D geographic system
+            ↓
+     Real-world geometry
+            ↓
+       3D conversion
+            ↓
+      Three.js renderer
 
-Use pvlib for:
-- solar position
-- irradiance calculations
-- PV performance estimation
-- orientation/tilt analysis
-
-Do not implement a fake solar formula when pvlib can provide the required calculation.
-
----
-
-# 4. Current Map Architecture
-
-The current prototype uses:
-
-```text
-MapLibre GL JS
-        |
-        +-- Satellite imagery
-        |
-        +-- OpenStreetMap/OpenFreeMap context
-        |
-        +-- Terrain / DEM
-        |
-        +-- OSM building data
-        |
-        +-- OSM roads
-        |
-        +-- 3D terrain
-        |
-        +-- 3D building visualization
-```
-
-MapLibre is only the renderer.
-
-It does NOT provide satellite imagery or terrain data itself.
-
-Provider availability, licensing, limits, resolution, and coverage must always be treated separately from the rendering library.
-
-## Current prototype satellite provider
-
-Esri World Imagery is the current prototype candidate because it provides useful satellite coverage for testing.
-
-Important:
-
-- Do not assume anonymous Esri imagery endpoints are suitable for production.
-- Verify current Esri terms/licensing before production deployment.
-- Do not promise universal high-resolution rooftop coverage.
-- Native imagery resolution matters.
-
-If imagery stops becoming more detailed at a location, do not fake additional detail by upscaling and presenting it as higher-resolution imagery.
-
-The provider must be abstracted so another imagery provider can later be substituted.
-
-Example conceptual interface:
-
-```ts
-interface ImageryProvider {
-  getSourceConfig(): unknown;
-  getDisplayName(): string;
-  getAttribution(): string;
-  getCoverageInfo?(): unknown;
-}
-```
-
-Do not hard-code provider-specific assumptions throughout the application.
-
----
-
-# 5. MapLibre Requirements
-
-Use MapLibre GL JS for:
-
-- pan
-- zoom
-- rotation
-- pitch
-- raster imagery
-- vector layers
-- raster DEM terrain
-- hillshade
-- 3D building extrusion
-- drawing/editing overlays
-
-The map must remain responsive.
-
-Do not create hundreds or thousands of DOM markers for geospatial visualization when a MapLibre source/layer can handle the data.
-
-Prefer:
-- GeoJSON sources
-- vector sources
-- raster sources
-- MapLibre layers
-
-over manually created HTML elements.
-
----
-
-# 6. Map Layers
-
-Conceptual layers:
-
-### Satellite imagery
-Primary visual layer.
-
-### OSM/base context
-Used for:
-- roads
-- place names
-- boundaries
-- orientation
-
-### OSM buildings
-Used as contextual building footprints and later as inputs to surrounding-object analysis.
-
-### OSM roads
-Context only unless explicitly required by analysis.
-
-### 3D buildings
-Visualization and future shadow-analysis support.
-
-OSM building height/tag data must not automatically be treated as accurate surveyed height.
-
-### Terrain hillshade
-Optional visual enhancement.
-
-### 3D terrain
-Important for later terrain/shadow analysis.
-
-Keep technical/debug layer controls separate from the normal user workflow.
-
----
-
-# 7. Terrain
-
-Possible sources include:
-
-- AWS terrain datasets/tiles
-- OpenTopography
-- SRTM
-- Copernicus DEM
-- another properly licensed DEM provider
-
-Do not assume a particular DEM provider will always remain free or unrestricted.
-
-Abstract the terrain provider.
-
-Terrain resolution must be recorded.
-
-A 30 m DEM cannot accurately represent a small rooftop parapet.
-
-Do not use coarse terrain data to make precise building-height claims.
-
----
-
-# 8. Location Search
-
-Location search should be implemented behind a geocoding abstraction.
-
-Example:
-
-```ts
-interface Geocoder {
-  search(query: string): Promise<LocationResult[]>;
-}
-
-interface LocationResult {
-  name: string;
-  latitude: number;
-  longitude: number;
-  bounds?: BoundingBox;
-}
-```
-
-Initial scope:
-- India-focused search
-- city/locality/address search
-- map fly-to behavior
-
-Do not permanently couple the UI to one geocoding provider.
-
-Respect provider attribution, rate limits, and usage policies.
-
----
-
-# 9. Rooftop / Ground Selection
-
-This is the next major feature after the map foundation.
-
-User workflow:
-
-```text
+The 3D renderer should consume real-world dimensions from the existing geometry system.
+5. Location Workflow
+The first stage remains location selection.
+User flow:
 Search location
       ↓
-Navigate map
+Autocomplete suggestions
       ↓
-Zoom to property
+Select location
       ↓
-Select Area
+Map flies to location
       ↓
-Draw polygon
+Building/site becomes working area
       ↓
-Edit polygon
+Map is effectively fixed on selected site
       ↓
-Calculate area/perimeter
-      ↓
-Validate selection
-      ↓
-Confirm
-```
-
-Required functionality:
-
-- Draw polygon
-- Add vertices
-- Move vertices
-- Delete vertices
-- Undo/redo where practical
-- Clear selection
-- Confirm selection
-- Calculate area in m²
-- Calculate perimeter
-- Calculate centroid
-- Store GeoJSON representation
-
-Use GeoJSON for interchange.
-
-Example:
-
-```json
-{
-  "type": "Polygon",
-  "coordinates": []
-}
-```
-
-For metric calculations, transform coordinates into an appropriate projected CRS before calculating area.
-
----
-
-# 10. Selection Validation
-
-The validation system must distinguish between:
-
-- roof
-- usable ground
-- road
-- water
-- vegetation/tree
-- other building surface
-- unknown
-
-The system must NOT silently replace the user's polygon.
-
-Instead return structured information such as:
-
-```json
-{
-  "classification": "roof",
-  "confidence": 0.91,
-  "coverage": 0.87,
-  "warnings": [],
-  "mask": null
-}
-```
-
-For mixed selections:
-
-```json
-{
-  "classification": "mixed",
-  "confidence": 0.72,
-  "coverage": 0.81,
-  "components": {
-    "roof": 0.81,
-    "vegetation": 0.12,
-    "unknown": 0.07
-  }
-}
-```
-
-The UI should explain why a selection is questionable.
-
----
-
-# 11. Groq Vision
-
-Groq is intended for semantic visual validation and structured reasoning.
-
-Environment variable:
-
-```env
-GROQ_API_KEY=
-```
-
-The actual key must NEVER be committed.
-
-Never put the actual API key in:
-- AGENTS.md
-- MASTER_PROMPT.md
-- source code
-- frontend code
-- Git history
-- logs
-- screenshots
-- test fixtures
-
-Use:
-
-```text
-.env
-```
-
-and ensure `.env` is ignored by Git.
-
-Provide:
-
-```text
-.env.example
-```
-
-containing only:
-
-```env
-GROQ_API_KEY=
-```
-
-## Critical architecture rule
-
-Do NOT make Groq the core pixel-accurate segmentation engine.
-
-Use:
-
-```text
-Satellite crop
-      ↓
-Segmentation model
-      ↓
-Pixel-level mask
-      ↓
-Groq Vision
-      ↓
-Semantic validation + reasoning
-```
-
-Groq should answer questions such as:
-
-- Is this likely a roof?
-- Is this likely usable ground?
-- Does the selected region contain obvious vegetation?
-- Does it look like a road?
-- Does it contain water?
-- Is the selection visually ambiguous?
-
-The segmentation layer must remain independent so that Groq can later be replaced or supplemented.
-
----
-
-# 12. Segmentation Layer
-
-The segmentation layer should initially be local.
-
-No paid segmentation API is required for the first implementation.
-
-Candidate models:
-
-- SAM 2
-- suitable lightweight segmentation models
-- dedicated roof segmentation models
-- other properly licensed open-source segmentation models
-
-The implementation must use an abstraction such as:
-
-```python
-class SegmentationProvider:
-    def segment(self, image, context):
-        raise NotImplementedError
-```
-
-or an equivalent clean interface.
-
-The rest of the application must not depend directly on SAM 2.
-
-The segmentation output should contain:
-
-```json
-{
-  "mask": "...",
-  "classes": [],
-  "confidence": 0.0,
-  "resolution": {
-    "width": 0,
-    "height": 0
-  }
-}
-```
-
-The exact representation can differ depending on implementation.
-
----
-
-# 13. Image Preparation
-
-Do not send an unnecessarily huge satellite image to the vision system.
-
-The backend should:
-
-1. Receive the selected geographic polygon.
-2. Determine the relevant image bounds.
-3. Retrieve/crop imagery.
-4. Convert the geographic selection into image coordinates.
-5. Generate a suitable crop.
-6. Run segmentation.
-7. Run semantic validation.
-8. Return structured results.
-
-Preserve the relationship between:
-- geographic coordinates
-- image pixels
-- segmentation mask
-
-Do not lose georeferencing.
-
----
-
-# 14. Panel Placement
-
-Panel placement must be deterministic and geometry-based.
-
-Inputs should eventually include:
-
-- panel width
-- panel height
-- orientation
-- tilt
-- row spacing
-- edge setback
-- obstacle exclusion zones
-- walkway requirements
-- user-defined spacing
-
-Basic flow:
-
-```text
-Validated polygon
-        ↓
-Convert to metric geometry
-        ↓
-Apply setbacks
-        ↓
-Remove obstacles
-        ↓
-Generate panel candidates
-        ↓
-Rotate/orient candidates
-        ↓
-Pack panels
-        ↓
-Count panels
-        ↓
-Calculate DC capacity
-```
-
-Do not use an LLM to decide panel coordinates.
-
-Geometry determines placement.
-
-AI may assist with interpretation, but not replace deterministic geometry.
-
----
-
-# 15. Panel Capacity
-
-Example:
-
-```text
-panel_count × panel_wattage = total DC capacity
-```
-
-Return:
-
-- panel count
-- panel dimensions
-- panel wattage
-- total kWp
-- usable area
-- unused area
-- assumptions
-
-All assumptions must be visible.
-
----
-
-# 16. Solar Orientation and Tilt
-
-Use pvlib.
-
-Potential variables:
-
+3D design workflow begins
+
+The existing frontend autocomplete architecture should remain fast and independent from backend wake requests.
+Location search must NOT:
+- call /api/health
+- call ensureBackendAwake()
+- unnecessarily wake EC2
+- update backend inactivity tracking
+- send every keystroke through the backend
+The existing application wake mechanism should continue to happen on application mount.
+6. Site / Building Selection
+After selecting a location, the user selects the specific building or site.
+The selected building becomes the active design site.
+The application should retain:
 - latitude
 - longitude
-- azimuth
-- tilt
-- time
-- irradiance
-- weather/solar-resource dataset
-
-Optimization should compare candidate orientations rather than simply claiming that one universal tilt is optimal.
-
-Example:
-
-```text
-Candidate tilt 15°
-Candidate tilt 20°
-Candidate tilt 25°
-Candidate tilt 30°
-...
-```
-
-Then evaluate expected annual irradiation/energy.
-
-The actual search range and resolution should be configurable.
-
----
-
-# 17. Surrounding Object Analysis
-
-Later phases may analyze:
-
-- nearby buildings
-- trees
-- terrain
-- walls
-- other obstacles
-
-Sources can include:
-
-- OSM
-- satellite imagery
-- DEM
-- segmentation
-- computer vision
-- building-height datasets where available
-
-Do not claim exact building/tree heights from a single ordinary satellite image.
-
-Height estimates must have:
-- method
-- source
-- resolution
-- uncertainty/confidence
-
----
-
-# 18. Shadow Analysis
-
-Shadow analysis should eventually combine:
-
-- latitude
-- longitude
-- date/time
-- sun azimuth
-- solar altitude
-- obstacle geometry
-- obstacle height
-- terrain
-
-Use proper solar-position calculations.
-
-Do not use hard-coded sun angles.
-
-The system should support time-based shadow visualization.
-
-Later it can calculate:
-- shaded fraction
-- shading by hour
-- seasonal effects
-- annual shading losses
-
----
-
-# 19. Solar Irradiation and Generation
-
-Generation estimation should clearly separate:
-
-### Resource estimate
-Solar irradiation available at the location.
-
-### System estimate
-Expected PV production after:
-- panel orientation
-- tilt
-- temperature
-- system losses
-- shading
-- inverter assumptions
-
-Use pvlib and documented datasets.
-
-Do not present a single number without assumptions.
-
-Prefer:
-
-```text
-Estimated annual generation:
-X to Y kWh/year
-
-Confidence:
-Medium
-
-Major uncertainties:
-- imagery resolution
-- surrounding-object height
-- weather/resource dataset
-- shading assumptions
-```
-
----
-
-# 20. Confidence System
-
-Every AI/geospatial estimate should expose confidence or uncertainty where meaningful.
-
-Potential confidence categories:
-
-- High
-- Medium
-- Low
-
-Examples:
-
-```text
-Roof classification: High
-Building height: Medium
-Tree height: Low
-Shadow estimate: Medium
-Annual generation: Medium
-```
-
-Confidence should be based on actual evidence, not arbitrary UI decoration.
-
----
-
-# 21. Provider Abstraction
-
-External providers must be replaceable.
-
-Create clear interfaces for:
-
-```text
-ImageryProvider
-TerrainProvider
-Geocoder
-SegmentationProvider
-VisionValidator
-SolarResourceProvider
-BuildingDataProvider
-```
-
-Do not scatter provider URLs throughout the codebase.
-
-Configuration should select providers.
-
-Example:
-
-```env
-IMAGERY_PROVIDER=esri
-TERRAIN_PROVIDER=...
-VISION_PROVIDER=groq
-SEGMENTATION_PROVIDER=local
-```
-
-Provider-specific code belongs inside provider modules.
-
----
-
-# 22. Secrets and Security
-
-Never expose backend secrets to the browser.
-
-Frontend may contain public configuration only.
-
-Private keys belong in backend environment variables or a proper secrets manager.
-
-Required:
-
-```gitignore
-.env
-.env.*
-!.env.example
-```
-
-Never log:
-- API keys
-- authorization headers
-- private tokens
-- uploaded image contents unless explicitly required for debugging
-
-Validate uploaded files.
-
-Apply:
-- file-size limits
-- MIME/type validation
-- request-size limits
-- timeouts
-- rate limits where appropriate
-
----
-
-# 23. API Design
-
-Keep backend APIs small and explicit.
-
-Suggested endpoints:
-
-```text
-GET  /health
-GET  /config
-POST /geocode
-POST /selection/validate
-POST /segmentation
-POST /panel-layout
-POST /solar-analysis
-POST /shadow-analysis
-```
-
-Do not create endpoints simply because a function exists.
-
-Group related operations logically.
-
-Use Pydantic models for request/response validation.
-
-Return structured errors.
-
----
-
-# 24. Testing
-
-Every feature must have tests.
-
-Minimum expectations:
-
-### Frontend
-- component tests
-- map initialization tests where practical
-- selection interaction tests
-- build test
-
-### Backend
-- unit tests
-- API tests
-- geospatial geometry tests
-- validation tests
-- provider mock tests
-
-### AI
-Do not require a live Groq API call for every automated test.
-
-Use mocked responses for normal CI tests.
-
-Create a separate optional integration test for the live Groq API.
-
-### Geospatial
-Test:
-- polygon area
-- CRS transformation
-- invalid polygons
-- self-intersecting polygons
-- multipolygons
-- tiny polygons
-- large polygons
-
----
-
-# 25. Map Diagnostic Testing
-
-When diagnosing map imagery:
-
-Do not assume a grey tile means a frontend bug.
-
-Determine whether:
-
-1. The map requested the tile.
-2. The provider returned a response.
-3. The response contained imagery.
-4. The provider has native imagery at that zoom.
-5. The browser rejected the request.
-6. CORS/network policy blocked it.
-
-Log enough information to identify the actual failure.
-
-Never increase `maxzoom` and claim that this creates higher-resolution imagery.
-
----
-
-# 26. Indian Test Locations
-
-Use multiple locations to prevent provider-specific assumptions.
-
-Initial test locations:
-
-- Kolkata
-- Kalna
-- Delhi
-- Mumbai
-- Bengaluru
-
-At minimum test:
-
-- urban dense area
-- suburban area
-- smaller town
-- rural/open area
-- rooftop area
-
-The system should not be considered map-ready after testing only one location.
-
----
-
-# 27. UI Principles
-
-The normal interface should be simple.
-
-Do not expose every technical layer to ordinary users.
-
-Recommended main workflow:
-
-```text
-Search
-   ↓
-Select area
-   ↓
-Validate
-   ↓
-Place panels
-   ↓
-Analyze solar
-   ↓
-Results
-```
-
-Advanced/debug controls can contain:
-
-- satellite opacity
-- OSM opacity
-- terrain exaggeration
-- 3D buildings
-- terrain
-- provider diagnostics
-- imagery metadata
-
-The interface should not look like an engineering debugging console unless the user explicitly enters an advanced mode.
-
----
-
-# 28. UX Requirements
-
-Important interactions:
-
-- Smooth map navigation
-- Clear selected polygon
-- Clear editing state
-- Undo/cancel
-- Loading indicators
-- Error messages
-- Provider/data warnings
-- Confidence indicators
-- Explainable validation results
-
-Do not hide failed API/provider operations behind an indefinite spinner.
-
-Every long-running operation should have:
-- loading state
-- success state
-- error state
-- timeout/failure handling
-
----
-
-# 29. Performance
-
-Avoid unnecessary processing.
-
-For imagery:
-
-- crop only relevant regions
-- resize intelligently
-- cache repeated requests where allowed
-- avoid downloading massive images for small selections
-
-For segmentation:
-
-- run inference only on relevant image regions
-- use GPU if available
-- allow CPU fallback
-- expose inference timing during development
-
-For map:
-
-- use vector/raster sources efficiently
-- avoid excessive DOM nodes
-- avoid unnecessary re-renders
-
----
-
-# 30. Caching
-
-Caching may be used for:
-- imagery metadata
-- geocoding
-- DEM data
-- AI results
-- segmentation results
-
-Cache keys must include enough context to prevent incorrect reuse.
-
-For example:
-
-```text
-provider
-location
-zoom/resolution
-polygon
-model/version
-prompt/version
-```
-
-Do not reuse an old AI result after changing the model or validation logic without considering invalidation.
-
----
-
-# 31. Reproducibility
-
-Analysis results should record enough metadata to reproduce them.
-
-Record, where applicable:
-
-- imagery provider
-- imagery date if available
-- imagery resolution
-- DEM provider
-- DEM resolution
-- segmentation model
-- segmentation model version
-- vision model
-- solar-resource dataset
-- panel specifications
-- assumptions
-- algorithm version
-
----
-
-# 32. Error Handling
-
-Never silently fall back from one provider to another if the change materially affects accuracy.
-
-If fallback occurs, tell the user.
-
-Example:
-
-```text
-Primary satellite imagery unavailable.
-Showing alternate imagery.
-Analysis accuracy may differ.
-```
-
-Do not hide degraded data quality.
-
----
-
-# 33. AI Agent Working Rules
-
-When working on this project:
-
-1. Inspect the existing code before modifying it.
-2. Identify the current architecture.
-3. Run the relevant tests before changing code.
-4. Make a focused change.
-5. Run tests again.
-6. Report exactly what changed.
-7. Report remaining limitations.
-8. Do not claim a feature works unless it was actually tested.
-
-Do not fabricate:
-- API responses
-- imagery coverage
-- model accuracy
-- test results
-- solar estimates
-- provider availability
-
----
-
-# 34. Do Not Overengineer Early
-
-Avoid adding:
-- microservices
-- Kubernetes
-- complex queues
-- unnecessary databases
-- expensive cloud infrastructure
-- paid APIs
-- unnecessary authentication
-- premature distributed processing
-
-The initial application can be a well-structured frontend + FastAPI backend.
-
-Introduce complexity only when justified by a real requirement.
-
----
-
-# 35. Database
-
-A database is not required for the earliest map prototype.
-
-When persistence becomes necessary, prefer:
-
-- PostgreSQL
-- PostGIS
-
-Potential persisted objects:
-
-- users
-- projects
-- site locations
-- selected polygons
-- panel layouts
-- analysis runs
-- analysis metadata
-- results
-
-Use PostGIS for geographic data.
-
----
-
-# 36. Recommended Development Milestones
-
-## Milestone 1: Map foundation
-
-Must demonstrate:
-
-- MapLibre works
-- satellite imagery works
-- map navigation works
-- multiple Indian locations work
-- OSM/context works
-- terrain works where available
-- 3D terrain works where available
-- no major console errors
-
-Do not proceed until this is stable.
-
-## Milestone 2: Area selection
-
-Implement:
-
-- polygon drawing
-- polygon editing
-- area calculation
+- selected polygon
+- coordinate reference system
+- UTM zone
+- real-world dimensions
+- area
 - perimeter
 - centroid
-- GeoJSON export
-- confirmation
+The map should zoom appropriately to the selected building.
+Once the user enters the 3D design workflow, the selected site should remain the primary working context.
+7. Terrace Outline Workflow
+The user should first define the terrace/building outline.
+Example:
+Define Terrace
+      ↓
+Draw polygon around rooftop
+      ↓
+Display real-world measurements
+      ↓
+Confirm terrace
 
-## Milestone 3: Surface validation
+The existing measurement system should be reused.
+Do not estimate dimensions from screen pixels.
+Do not calculate area directly from raw latitude/longitude degrees.
+8. Geographic Geometry
+User-drawn coordinates normally originate as:
+Latitude / Longitude
+WGS84 / EPSG:4326
 
-Implement:
+Convert them to an appropriate projected CRS for metric calculations.
+For example, areas around Kolkata/West Bengal commonly fall within UTM Zone 45N:
+EPSG:32645
 
-- imagery crop
-- local segmentation
-- Groq semantic validation
-- confidence
-- structured result
-- warning/rejection logic
+However, the implementation must determine the appropriate UTM zone from the actual site location rather than blindly assuming one EPSG code globally.
+Use:
+pyproj / PROJ
 
-## Milestone 4: Panel placement
+for coordinate transformation.
+Then use:
+Shapely
 
-Implement:
+for geometric calculations.
+Because projected coordinates are in metres:
+area = polygon.area
 
-- panel dimensions
-- setbacks
-- deterministic packing
-- panel count
-- kWp
+produces:
+square metres (m²)
 
-## Milestone 5: Solar optimization
+Similarly:
+polygon.length
 
-Implement:
+produces the perimeter in metres.
+Individual edge lengths should be calculated from the projected geometry.
+9. Existing Measurement UI
+The existing CAD-like measurement UI should remain.
+It should support:
+- Edge length labels
+- Area label
+- Perpendicular measurement indicators
+- Polygon editing
+- Real-time measurement updates
+- Centroid information
+- Clear visual distinction between geometry and satellite imagery
+Example:
+26.6 m
+34.1 m
+18.3 m
+3.4 m
+3.5 m
 
-- orientation
-- tilt
-- pvlib
-- solar resource
-- generation estimate
+These values must come from actual projected geometry.
+Never fabricate or visually estimate measurements.
+10. New 3D Design Environment
+After the terrace outline is confirmed, transition to the 3D design environment.
+Recommended renderer:
+Three.js
 
-## Milestone 6: Surroundings
+The 3D environment should use the real-world dimensions obtained from the geographic geometry.
+The basic transformation is:
+2D UTM polygon
+       ↓
+X/Y coordinates in metres
+       ↓
+User enters building height
+       ↓
+Extrude polygon along Z axis
+       ↓
+3D building
 
-Implement:
+Three.js should visualize the model.
+Shapely/pyproj remain responsible for authoritative geometry.
+11. Building Height
+After defining the terrace, prompt the user:
+Enter building height
 
-- buildings
-- terrain
-- trees where feasible
-- height estimates
-- confidence
+Example:
+Building height: 17.2 m
 
-## Milestone 7: Shadows
+The entered height becomes the Z dimension of the building.
+Example:
+Terrace polygon
+      +
+17.2 m height
+      ↓
+3D building
 
-Implement:
+The system should not pretend that height is known if the user has not provided reliable height data.
+If external elevation/height data is introduced later, it must be clearly identified as an estimate unless authoritative data exists.
+12. 3D Building Generation
+The terrace polygon becomes the top face of the building.
+The building should be generated by extruding the polygon vertically.
+Conceptually:
+        Terrace
+     ┌───────────┐
+    /           /|
+   /___________/ |
+   |           | |
+   |           | |  Height
+   |           | |
+   |           |/
+   └───────────┘
 
-- solar position
-- obstacle geometry
-- shadow projection
-- time/season analysis
-- shading loss
+The 3D building is primarily a visualization and simulation model.
+The original geographic polygon remains authoritative.
+Do not permanently modify the original geographic coordinates just because the 3D model changes.
+13. Three.js Coordinate System
+The 3D scene should use a local engineering coordinate system.
+Recommended concept:
+UTM metres
+     ↓
+local origin near selected building
+     ↓
+Three.js coordinates
 
-## Milestone 8: Production hardening
+Do not render large global UTM coordinates directly into Three.js if unnecessary.
+Use a local origin near the selected site to maintain numerical stability.
+Example:
+UTM:
+X = 326500.23
+Y = 2512345.42
 
-Implement:
+Local:
+X = 0
+Y = 0
 
-- provider licensing verification
-- authentication if required
-- persistence
-- rate limiting
-- monitoring
-- caching
-- deployment
-- security review
+Relative local coordinates should be used for the 3D scene.
+14. 3D Camera
+The user specifically wants controlled viewing.
+The initial camera system should use:
+Three.js OrbitControls
 
----
+The camera should support:
+- Horizontal rotation
+- Vertical/elevation rotation
+- Zoom
+The application should NOT behave like an unrestricted first-person game.
+The camera should remain focused around the selected building.
+The building should remain the primary target.
+Avoid unnecessary:
+- Free flying
+- Roll rotation
+- First-person movement
+- Arbitrary camera teleportation
+The intended interaction is an architectural/site-design viewer.
+15. Rooftop Obstacles
+The user must be able to add obstacles to the rooftop.
+Examples:
+- Water tanks
+- Staircase rooms
+- Lift rooms
+- HVAC units
+- AC units
+- Parapet structures
+- Utility rooms
+- Other rooftop equipment
+Workflow:
+Add obstacle
+      ↓
+Draw/select footprint
+      ↓
+Enter dimensions or use measured footprint
+      ↓
+Enter obstacle height
+      ↓
+Create 3D obstacle
+      ↓
+Place on rooftop
 
-# 37. Definition of Done
+Each obstacle should have:
+ID
+type
+footprint
+position
+width
+length
+height
+rotation
 
-A feature is complete only when:
+The footprint should ideally be represented using the same local/metric coordinate system as the terrace.
+16. Obstacle Geometry
+Obstacles are not just visual decorations.
+Their actual geometry must participate in:
+- Panel placement
+- Clearance calculations
+- Shadow calculation
+- Shading analysis
+- 3D visualization
+Example:
+Obstacle:
+2.5 m × 1.8 m
+Height:
+1.2 m
 
-- implementation exists
-- UI exists where required
-- backend/API exists where required
-- tests exist
-- relevant tests pass
-- failure cases are handled
-- no secrets are exposed
-- assumptions are documented
-- actual behavior has been manually verified where appropriate
+This should create a corresponding 3D mesh.
+17. Obstacle Placement
+An obstacle should be constrained to the terrace where appropriate.
+The system should validate:
+obstacle footprint ⊂ terrace usable geometry
 
-Do not mark a feature complete because the code compiles.
+or clearly indicate if the obstacle extends outside the terrace.
+Obstacle overlap should be detected.
+Obstacles should not silently overlap each other.
+18. Parapet / Roof Edge
+The design should eventually support roof-edge/parapet representation.
+Parapet height can be entered by the user.
+Example:
+Parapet height: 1.0 m
 
----
+The parapet can then participate in:
+- 3D visualization
+- shadow simulation
+- panel clearance
+- shading analysis
+This should be implemented as a separate geometry layer rather than altering the base terrace polygon.
+19. Sun Position
+Solar position must be calculated scientifically.
+Use:
+pvlib
 
-# 38. Immediate Priority
+The primary inputs are:
+Latitude
+Longitude
+Date
+Time
+Timezone
 
-At the beginning of a new implementation session:
+pvlib can provide:
+solar azimuth
+solar elevation
 
-1. Inspect the repository.
-2. Read this AGENTS.md.
-3. Read MASTER_PROMPT.md if present.
-4. Identify what has already been implemented.
-5. Do not rebuild the map if the map foundation is already working.
-6. Run the existing tests.
-7. Continue from the next unfinished milestone.
+These values define the direction of sunlight.
+Do not use arbitrary animation angles for solar analysis.
+20. Three.js Sun Simulation
+Three.js should visualize the calculated sun.
+Recommended approach:
+pvlib
+  ↓
+Sun azimuth/elevation
+  ↓
+Convert to local 3D direction
+  ↓
+Three.js DirectionalLight
+  ↓
+Shadow camera
+  ↓
+Real-time shadows
 
-The intended immediate development path is:
+The Three.js light is the visualization layer.
+pvlib remains the authoritative source for solar position.
+21. Time-of-Day Control
+The user must be able to change the time.
+Example:
+08:00
+09:00
+10:00
+11:00
+12:00
+13:00
+14:00
+15:00
+16:00
+17:00
 
-```text
-Working map
+Changing the time should update:
+- Sun position
+- Light direction
+- Shadow direction
+- Shadow length
+- Panel shading
+The UI should support both:
+Manual time selection
+
+and:
+Play / simulate full day
+
+22. Full-Day Sun Simulation
+The application should eventually support:
+▶ Simulate Day
+
+The simulation should move the sun continuously according to calculated solar positions.
+It should not simply rotate a light at a constant arbitrary speed.
+The animation should be driven by actual time progression.
+Example:
+06:00 → sunrise
+08:00
+10:00
+12:00 → solar noon
+14:00
+16:00
+18:00 → sunset
+
+The exact available period depends on the selected date and geographic location.
+23. Shadow Rendering
+Use Three.js shadow maps for interactive visualization.
+The scene should support:
+Building
++
+Rooftop obstacles
++
+Solar panels
++
+DirectionalLight
+=
+Visible shadows
+
+The shadows should update whenever:
+- Time changes
+- Date changes
+- Object moves
+- Object height changes
+- Panel tilt changes
+- Panel position changes
+Optimize shadow-map resolution carefully.
+Do not use unnecessarily high shadow resolution because the application must remain responsive in a browser.
+24. Visualization vs Scientific Shading Analysis
+Separate these two concepts.
+Visual shadow
+Use:
+Three.js shadow maps
+
+for immediate interactive visualization.
+Quantitative solar shading
+Use deterministic solar/geometric calculations for final analysis.
+The final solar analysis should not depend on the visual renderer's shadow-map pixels.
+Three.js is for:
+"What does the shadow look like?"
+
+The analytical engine is for:
+"How much solar energy is actually lost?"
+
+25. Solar Panel Model Library
+The application should use lightweight 3D solar-panel models.
+Do NOT use a large, highly detailed model for every individual panel.
+Use a small collection of reusable low-poly GLB/glTF assets.
+Recommended formats:
+GLB
+glTF
+
+Recommended frontend loader:
+Three.js GLTFLoader
+
+26. Solar Panel Types
+The application should support several panel types.
+Example categories:
+Panel A
+450 W
+
+Panel B
+550 W
+
+Panel C
+600 W
+
+The exact models/specifications should be configurable.
+Each panel type should have metadata such as:
+{
+  "id": "panel-550w",
+  "name": "550 W Solar Panel",
+  "wattage": 550,
+  "width_m": 1.13,
+  "length_m": 2.28,
+  "thickness_m": 0.035,
+  "weight_kg": 28
+}
+
+Do not hard-code these values into rendering components.
+27. Panel 3D Assets
+Each panel asset should contain only the geometry necessary for useful visualization.
+Prefer:
+- Low polygon count
+- Realistic proportions
+- Aluminium frame
+- Dark photovoltaic surface
+- Basic cell grid
+- Basic mounting/support geometry where useful
+Avoid:
+- Excessively detailed bolts
+- Tiny wires
+- High-resolution textures
+- Extremely dense meshes
+- Heavy animations
+The application may display hundreds of panels.
+Performance is more important than microscopic visual detail.
+28. Instanced Rendering
+When many identical panels are displayed, prefer:
+THREE.InstancedMesh
+
+where appropriate.
+For example:
+One 550 W panel model
+       ↓
+Instance × 100
+       ↓
+100 panels
+
+This is substantially preferable to loading 100 independent copies of the same detailed mesh.
+29. Panel Placement
+Panel placement must be based on physical dimensions.
+The 3D model is only the visual representation.
+The authoritative panel footprint is:
+panel width
+panel length
+panel orientation
+panel tilt
+panel position
+
+The placement engine should determine whether a panel physically fits.
+Do not determine placement based on rendered pixels.
+30. Panel Layout Pipeline
+Use:
+Terrace polygon
+      ↓
+Setbacks
+      ↓
+Obstacle exclusion
+      ↓
+Panel dimensions
+      ↓
+Candidate orientation
+      ↓
+Geometric packing
+      ↓
+Valid panel positions
+      ↓
+3D visualization
+
+Shapely should remain authoritative for geometric feasibility.
+Three.js should visualize the result.
+31. Panel Setbacks
+Panel placement must respect required setbacks.
+Conceptually:
+Terrace polygon
+      ↓
+Negative buffer
+      ↓
+Usable roof polygon
+
+Use Shapely's metric buffering for the authoritative calculation.
+Do not fake setbacks visually in Three.js.
+32. Obstacle Clearance
+Panels should maintain configurable clearance from obstacles.
+Conceptually:
+Obstacle footprint
+      ↓
+buffer by required clearance
+      ↓
+exclusion zone
+      ↓
+remove overlapping panel positions
+
+This allows obstacles to affect both:
+- Panel placement
+- Shading
+33. Panel Orientation
+Panel orientation must distinguish between:
+Geographic azimuth
+The direction the panel faces.
+Tilt
+The angle of the panel relative to horizontal.
+These values must remain separate.
+The system should allow:
+Azimuth
+Tilt
+
+to be modified independently.
+34. Solar Optimization
+The existing deterministic solar analysis remains authoritative.
+Recommended pipeline:
+PVGIS weather/resource data
+        ↓
+pvlib
+        ↓
+Tilt × Azimuth sweep
+        ↓
+Energy estimate
+        ↓
+Best configuration
+
+Do not replace this with an LLM.
+AI may later rank or optimize valid configurations, but it must not replace pvlib/PVGIS or geometric validation.
+35. Future AI Optimization Layer
+AI/ML may eventually be added above the deterministic engine.
+Recommended architecture:
+Generate valid configurations
+            ↓
+Deterministic solar calculations
+            ↓
+Candidate dataset
+            ↓
+AI/ML optimizer/ranker
+            ↓
+Top configurations
+            ↓
+Final deterministic verification
+            ↓
+Recommendation
+
+Possible objectives:
+- Annual energy
+- Panel count
+- Roof utilization
+- Shading loss
+- Installation complexity
+- Self-consumption
+- Estimated cost
+The AI layer must never output an invalid geometric layout.
+36. 3D Panel Shadows
+Solar panels themselves must participate in the 3D shadow system.
+Therefore:
+Panel mesh
++
+DirectionalLight
+=
+Panel shadow
+
+Panel shadows should update when:
+- Sun moves
+- Panel moves
+- Panel rotates
+- Panel tilt changes
+This allows users to visually understand:
+Building shadow
+Obstacle shadow
+Panel shadow
+Panel-to-panel shadow
+
+37. Panel Placement Interaction
+The 3D editor should eventually support:
+Select panel
+Move panel
+Rotate panel
+Change tilt
+Duplicate panel
+Delete panel
+
+However, free placement must still be validated.
+Invalid placement should be visually indicated.
+Examples:
+Valid:
+Panel fully inside usable roof
+No obstacle collision
+Required clearance satisfied
+
+Invalid:
+Panel crosses roof edge
+Panel intersects obstacle
+Panel violates required clearance
+
+38. Panel Types UI
+The UI should provide a panel-type selector.
+Example:
+Solar Panels
+
+┌──────────────────────┐
+│ 450 W                │
+│ 1.72 × 1.13 m        │
+└──────────────────────┘
+
+┌──────────────────────┐
+│ 550 W                │
+│ 2.28 × 1.13 m        │
+└──────────────────────┘
+
+┌──────────────────────┐
+│ 600 W                │
+│ 2.38 × 1.13 m        │
+└──────────────────────┘
+
+The actual available panel library should be configurable.
+39. 3D Scene Layers
+Keep the 3D scene logically separated.
+Recommended structure:
+Scene
+├── Terrain / map reference
+├── Building
+├── Roof
+├── Parapets
+├── Obstacles
+├── Solar panels
+├── Solar shadows
+├── Measurement helpers
+├── Selection helpers
+└── Lighting
+
+Do not put all geometry into one giant mesh.
+40. 3D Object Metadata
+Every editable 3D object should have application-level metadata.
+Example:
+interface SiteObject {
+  id: string;
+  type: "building" | "obstacle" | "panel";
+  position: Vector3;
+  rotation: Vector3;
+  dimensions: {
+    width: number;
+    length: number;
+    height: number;
+  };
+}
+
+For solar panels, additionally store:
+interface SolarPanelObject extends SiteObject {
+  panelTypeId: string;
+  wattage: number;
+  tilt: number;
+  azimuth: number;
+}
+
+The exact implementation may differ, but object state must be separable from Three.js mesh instances.
+41. Persistence
+The application should be able to serialize a 3D design.
+A saved project should contain enough information to reconstruct the scene without saving raw Three.js objects.
+Store:
+Location
+Terrace polygon
+CRS / projection information
+Building height
+Parapet information
+Obstacles
+Obstacle dimensions
+Obstacle heights
+Panel type
+Panel positions
+Panel rotations
+Panel tilt
+Panel azimuth
+Design settings
+Simulation date/time
+
+Do not serialize the Three.js renderer itself.
+42. Satellite Imagery
+Satellite imagery remains the geographic reference.
+It should not be treated as a 3D model.
+The workflow is:
+Satellite map
+     ↓
+Geographic reference
+     ↓
+User geometry
+     ↓
+3D reconstruction
+
+The 3D building model is based on measured/user-provided geometry and height.
+Do not claim that satellite imagery alone provides exact building height.
+43. Google Maps / Geocoding / Static Maps
+Existing Google services may continue to provide:
+- Location search
+- Geocoding
+- Map context
+- Static map imagery where already used
+Do not introduce unnecessary duplicate providers.
+Keep API keys/secrets out of the frontend where the relevant Google API architecture requires server-side protection.
+Never expose sensitive backend keys such as:
+GROQ_API_KEY
+
+to the frontend.
+44. 3D Terrain / External 3D Data
+If external 3D terrain/building datasets are introduced later, they must be treated as separate data providers.
+Possible future providers can include:
+- Google 3D Tiles / Photorealistic 3D Tiles where licensing/API access permits
+- Cesium ecosystem
+- OpenStreetMap building footprints
+- DEM/DSM providers
+- LiDAR/photogrammetry datasets where available
+Do not make the application's core rooftop model dependent on availability of these datasets.
+The user-created terrace model must work independently.
+45. Rendering Performance
+The 3D editor must remain usable on normal laptops and mobile devices.
+Priorities:
+1. Low-poly assets
+2. Reusable models
+3. InstancedMesh for repeated panels
+4. Controlled shadow-map resolution
+5. Frustum culling
+6. Avoid unnecessary post-processing
+7. Dispose unused geometries/materials/textures
+8. Avoid rendering invisible objects
+9. Avoid loading all panel models at startup
+10. Lazy-load 3D assets when entering the design workflow
+Do not sacrifice the entire application performance for visual realism.
+46. Mobile 3D Experience
+The existing mobile redesign must remain functional.
+On mobile:
+- Use touch-friendly controls
+- Maintain minimum ~44px touch targets
+- Avoid excessive UI overlays
+- Keep the 3D scene usable
+- Provide simplified controls
+- Avoid loading unnecessary high-detail assets
+- Use lower rendering quality when necessary
+The 3D editor should not force the desktop layout onto a mobile screen.
+47. Dark Theme
+The existing light/dark theme architecture must apply to the 3D design UI.
+The 3D scene itself should remain physically readable.
+Do not simply invert satellite imagery.
+The UI around the scene should use the application's dark theme tokens.
+48. UI Design Principles
+Maintain the existing Surya-Ghar design system.
+Important principles:
+- Professional
+- Minimal
+- Engineering-oriented
+- Clear hierarchy
+- No unnecessary decorative UI
+- Strong spatial feedback
+- Clear measurements
+- Clear object selection
+- Clear simulation state
+The 3D workspace should feel like a lightweight architectural/solar-design tool rather than a video game.
+49. Recommended 3D UI Structure
+A possible structure:
+┌──────────────────────────────────────────────────────────┐
+│ Surya-Ghar   Site Name             Sun: 12:30   Controls │
+├──────────────────────────────────────────────────────────┤
+│                                                          │
+│                                                          │
+│                    3D BUILDING                           │
+│                                                          │
+│              panels / obstacles / shadows               │
+│                                                          │
+│                                                          │
+├──────────────────────────────────────────────────────────┤
+│  Select   Measure   Obstacle   Panel   Sun Simulation    │
+└──────────────────────────────────────────────────────────┘
+
+The exact UI may evolve.
+Do not copy this literally if it conflicts with the existing design system.
+50. Design Workflow / Stages
+The application should conceptually progress through:
+1. Location
+      ↓
+2. Site Selection
+      ↓
+3. Terrace Outline
+      ↓
+4. Building Height
+      ↓
+5. 3D Model
+      ↓
+6. Obstacles
+      ↓
+7. Sun Simulation
+      ↓
+8. Solar Panels
+      ↓
+9. Shading Analysis
+      ↓
+10. Solar Energy Analysis
+      ↓
+11. Final Recommendation
+
+The existing StageProgress component should be extended carefully rather than replaced blindly.
+51. Validation Rules
+Every stage should validate the required inputs before allowing the next stage.
+Examples:
+Terrace
+Must contain:
+valid polygon
+minimum area
+non-self-intersecting geometry
+
+Building
+Must contain:
+valid terrace
+positive building height
+
+Obstacle
+Must contain:
+valid footprint
+positive height
+valid position
+
+Solar panel
+Must contain:
+valid panel type
+valid dimensions
+valid position
+valid orientation
+
+52. Measurement Accuracy
+The following are authoritative:
+pyproj / UTM
+Shapely
+
+Three.js measurement overlays are visualization only.
+Never derive authoritative dimensions from:
+- screen coordinates
+- camera distance
+- pixel measurements
+- mesh bounding boxes after arbitrary scaling
+All physical dimensions must originate from the geographic/engineering coordinate system.
+53. Shadow Accuracy
+There are two levels.
+Level 1 — Interactive
+Three.js:
+DirectionalLight
+shadowMap
+
+provides real-time visual shadows.
+Level 2 — Analytical
+Use:
+pvlib
++
+3D geometry
+
+for quantitative shading calculations.
+The analytical result should not depend on the GPU's shadow-map resolution.
+54. Solar Simulation Date
+Solar position depends on both:
+time
+date
+
+The application should eventually allow the user to select:
+Date
+Time
+
+and optionally:
+Entire day
+
+For energy analysis, use representative meteorological data such as PVGIS TMY where appropriate.
+55. Existing Solar Analysis
+Do not remove the current solar-analysis system.
+The existing pipeline remains useful:
+PVGIS
+  ↓
+pvlib
+  ↓
+Tilt/Azimuth sweep
+  ↓
+PV output
+
+The 3D system adds physical geometry and shading context.
+It does not replace the existing solar engine.
+56. 3D + Existing Solar Engine
+The intended final architecture is:
+                  LOCATION
+                     │
+                     ▼
+              TERRACE POLYGON
+                     │
+          ┌──────────┴──────────┐
+          │                     │
+          ▼                     ▼
+   2D GEOMETRY             3D MODEL
+   Shapely/pyproj          Three.js
+          │                     │
+          │             ┌───────┴────────┐
+          │             │                │
+          │             ▼                ▼
+          │         OBSTACLES        PANELS
+          │             │                │
+          └─────────────┴────────────────┘
+                        │
+                        ▼
+                 SUN POSITION
+                     pvlib
+                        │
+                        ▼
+                  SHADOW MODEL
+                        │
+             ┌──────────┴──────────┐
+             ▼                     ▼
+        VISUAL SHADOW         ANALYTICAL
+        Three.js              SHADING
+                                   │
+                                   ▼
+                            SOLAR ANALYSIS
+                            pvlib + PVGIS
+
+57. AI/ML Usage
+AI/ML is allowed for:
+- Rooftop validation
+- Building detection
+- Object recognition
+- Obstacle recognition
+- Layout ranking
+- Configuration optimization
+- User assistance
+AI/ML must not be the authoritative source for:
+- Geographic distance
+- Polygon area
+- Panel collision
+- Panel physical fit
+- Solar position
+- Solar azimuth
+- Solar elevation
+- Final geometric validity
+Use deterministic mathematics for these.
+58. Existing AI / Vision Architecture
+The current validation architecture may continue using:
+Satellite crop
+      ↓
+Building detection
+      ↓
+OSM evidence
+      ↓
+Semantic/segmentation evidence
+      ↓
+Vision model
+      ↓
+Combined validation
+
+The new 3D workflow does not remove this.
+59. Backend API Design
+3D-specific APIs should be introduced only when server-side persistence or computation is required.
+Do not create an API endpoint merely to perform a calculation that can safely be done locally in the browser.
+Examples that can potentially remain frontend-only:
+- Camera movement
+- 3D mesh creation
+- Visual shadow rendering
+- Panel model rendering
+- UI state
+- Local object manipulation
+Examples appropriate for backend:
+- Persistent project storage
+- Heavy solar analysis
+- PVGIS processing
+- Large-scale shading calculations
+- AI/ML processing
+- Server-side report generation
+60. Frontend / Backend Boundary
+The browser should own:
+Interaction
+Visualization
+Camera
+3D rendering
+Immediate geometry feedback
+Panel manipulation
+Visual sun simulation
+
+The backend should own:
+Authoritative analysis
+Heavy computation
+External data providers
+AI/ML
+Persistent analysis
+Reports
+
+Do not send every mouse movement or camera movement to FastAPI.
+61. Asset Management
+3D assets should be stored in a dedicated frontend asset directory.
+Example:
+frontend/
+  public/
+    models/
+      solar-panels/
+        panel-450w.glb
+        panel-550w.glb
+        panel-600w.glb
+
+The exact location can differ according to the existing project structure.
+Each model must have associated metadata.
+Do not duplicate the same model file under multiple names.
+62. 3D Asset Licensing
+Every externally sourced 3D model must have a clear license compatible with the application.
+Before adding a model:
+- Verify license
+- Record source
+- Record attribution requirements
+- Record whether commercial use is permitted
+- Record whether modification is permitted
+Do not add random Sketchfab/CGTrader/Fab models without checking licensing.
+63. Model Quality Requirement
+Models should be:
+Low-poly
+Realistic proportions
+Correct physical dimensions
+GLB/glTF preferred
+Fast to load
+Suitable for repeated rendering
+
+Visual realism is secondary to:
+correct dimensions
+performance
+license
+
+64. 3D Scene Units
+All 3D engineering geometry should use:
+1 Three.js unit = 1 metre
+
+unless there is a strong technical reason otherwise.
+For example:
+Building:
+30 m × 20 m × 17 m
+
+Three.js:
+30 × 20 × 17
+
+This keeps calculations intuitive and reduces conversion mistakes.
+65. Avoid Hidden Unit Conversions
+Do not silently mix:
+pixels
+degrees
+metres
+centimetres
+Three.js units
+
+Every conversion must be explicit.
+Preferred:
+geographic coordinates
+      ↓
+UTM metres
+      ↓
+local metres
+      ↓
+Three.js units
+
+66. Testing Requirements
+Any significant 3D feature should include tests where practical.
+Test:
+- Polygon extrusion
+- Height conversion
+- Coordinate transformation
+- Panel dimensions
+- Panel placement
+- Obstacle collision
+- Setback calculation
+- Shadow direction conversion
+- Solar-position conversion
+- Serialization/deserialization
+Visual-only Three.js behaviour may require manual browser testing in addition to unit tests.
+67. Browser Testing
+For the 3D editor, manually verify at minimum:
+Desktop Chrome
+Desktop Edge
+Mobile Chrome
+Mobile Safari
+
+Check:
+- Camera interaction
+- Touch rotation
+- Zoom
+- Panel placement
+- Shadow rendering
+- Theme
+- Responsive UI
+- Performance
+- WebGL availability
+Provide a graceful fallback if WebGL is unavailable.
+68. Performance Testing
+Test with:
+10 panels
+50 panels
+100 panels
+250 panels
+500 panels
+
+The application should remain usable.
+If performance degrades:
+1. Instance repeated meshes
+2. Reduce model complexity
+3. Reduce shadow resolution
+4. Reduce unnecessary lights
+5. Reduce draw calls
+6. Use level-of-detail where appropriate
+Do not immediately remove features.
+69. Existing Backend Wake Architecture
+The existing backend wake architecture must remain intact.
+Current conceptual flow:
+Page load
    ↓
-Rooftop/ground polygon selection
+ensureBackendAwake()
    ↓
-Area + geometry
+/api/health
    ↓
-Local segmentation
+API Gateway
    ↓
-Groq semantic validation
+Wake Lambda
    ↓
+EC2
+   ↓
+FastAPI
+
+Do not cause every frontend interaction to wake the backend.
+Especially:
+Location autocomplete
+Camera movement
+3D rotation
+3D zoom
+Panel dragging
+Sun animation
+
+must not unnecessarily call the backend.
+70. Backend Activity Tracking
+Existing inactivity tracking must remain functional.
+The application already uses SSM-backed activity tracking for automatic EC2 lifecycle management.
+Do not introduce unnecessary API requests from the 3D renderer.
+The 3D scene should remain primarily client-side.
+71. Code Organization
+Avoid putting the entire 3D system into one React component.
+Prefer separation such as:
+src/
+  components/
+    3d/
+      Site3DViewer.tsx
+      BuildingModel.tsx
+      ObstacleModel.tsx
+      SolarPanelModel.tsx
+      SunControls.tsx
+      ShadowControls.tsx
+
+  services/
+    solar/
+    geometry/
+    geocode/
+
+  lib/
+    3d/
+      scene.ts
+      camera.ts
+      lighting.ts
+      shadows.ts
+      coordinates.ts
+
+  data/
+    panels/
+      panelTypes.ts
+
+The exact structure should follow the existing project conventions.
+Do not create duplicate abstractions when equivalent existing utilities already exist.
+72. React and Three.js Boundary
+React should manage:
+- UI
+- application state
+- controls
+- panels
+- forms
+- stage progression
+Three.js should manage:
+- Scene
+- Camera
+- Meshes
+- Lights
+- Shadows
+- Rendering
+Do not trigger unnecessary React re-renders for every animation frame.
+Use refs and Three.js state appropriately.
+73. Animation
+Sun simulation should use an animation loop efficiently.
+Do not cause:
+React state update
+→ render
+→ Three.js update
+
+60 times per second unless necessary.
+Use Three.js's rendering loop for continuous animation.
+React state should be synchronized at meaningful interaction points.
+74. Error Handling
+The 3D system must gracefully handle:
+- WebGL unavailable
+- Model loading failure
+- Invalid geometry
+- Invalid height
+- Invalid obstacle
+- Invalid panel placement
+- Shadow rendering failure
+- Solar calculation failure
+Never leave the user with a silent blank/black area.
+Provide a clear message and recovery action.
+75. Progressive Loading
+The 3D editor should load progressively.
+Recommended:
+Enter 3D mode
+      ↓
+Initialize renderer
+      ↓
+Show building
+      ↓
+Load panel assets when required
+      ↓
+Load additional assets lazily
+
+Do not preload every possible panel model if the user has not selected them.
+76. Important UX Rule
+The 3D model must always correspond to the real selected site.
+Do not make the user feel that the application has switched to an unrelated generic 3D scene.
+The satellite imagery, terrace outline, measurements, building dimensions, obstacles, and panels should all correspond to the same geographic site.
+77. Current Development Priority
+Implement the new 3D system incrementally.
+Recommended order:
+Phase 1
+Existing location selection
+        ↓
+Terrace polygon
+        ↓
+Building height
+        ↓
+Basic 3D extrusion
+
+Phase 2
+3D camera
+3D measurements
+Obstacle creation
+Obstacle height
+
+Phase 3
+pvlib sun position
+Three.js directional light
+Real-time shadows
+Time controls
+Full-day simulation
+
+Phase 4
+Solar panel asset library
+450 W
+550 W
+600 W
+
+Phase 5
 Panel placement
-   ↓
+Panel rotation
+Panel tilt
+Panel clearance
+Obstacle collision
+
+Phase 6
+Panel/obstacle shading
 Solar analysis
-   ↓
-Surrounding/shadow analysis
-```
+Energy estimation
 
----
+Phase 7
+Optimization
+Reports
+Project persistence
+Advanced AI ranking
 
-# 39. Final Rule
+Do not attempt to implement the entire 3D system in one rewrite.
+78. Non-Negotiable Engineering Rules
+1. Do not replace the existing working application unnecessarily.
+2. Do not rewrite the existing 2D geometry engine just to add 3D.
+3. Do not calculate physical distances from screen pixels.
+4. Do not calculate area directly from latitude/longitude degrees.
+5. Do not use Three.js as the authoritative geographic geometry engine.
+6. Do not use AI/LLMs for authoritative solar physics.
+7. Do not use visual shadow maps as the final quantitative energy calculation.
+8. Do not send every 3D interaction to the backend.
+9. Do not expose backend/API secrets.
+10. Do not add unlicensed 3D assets.
+11. Do not use huge high-poly models for repeated solar panels.
+12. Prefer GLB/glTF for web 3D assets.
+13. Prefer InstancedMesh for repeated panels.
+14. Keep 3D units in metres.
+15. Keep geographic calculations in projected metric coordinates.
+16. Keep the 3D model and geographic geometry logically separate.
+17. Preserve existing backend wake/autostop behaviour.
+18. Preserve the existing light/dark theme.
+19. Preserve responsive/mobile behaviour.
+20. Do not introduce undocumented or scraped Google APIs.
+79. Target End-State
+The final Surya-Ghar experience should feel like a lightweight professional solar-design tool.
+A user should be able to:
+Search:
+"ABC Building, Kolkata"
 
-Accuracy is more important than feature count.
+        ↓
 
-A smaller system that correctly states:
-"imagery resolution is insufficient for reliable rooftop analysis here"
+Select building
 
-is better than a larger system that produces a precise-looking but unsupported result.
+        ↓
 
-Build incrementally, test independently, preserve working components, keep providers replaceable, protect secrets, and never invent accuracy.
+Map zooms to site
+
+        ↓
+
+Define terrace
+
+        ↓
+
+See real dimensions:
+
+26.6 m
+34.1 m
+18.3 m
+...
+
+        ↓
+
+Enter:
+
+Building height = 17.2 m
+
+        ↓
+
+3D building appears
+
+        ↓
+
+Add rooftop obstacles
+
+        ↓
+
+Enter obstacle heights
+
+        ↓
+
+Obstacles appear in 3D
+
+        ↓
+
+Choose:
+
+12:00 PM
+
+        ↓
+
+Real sun direction appears
+
+        ↓
+
+Real-time shadows appear
+
+        ↓
+
+Change time:
+
+08:00 → 10:00 → 12:00 → 14:00 → 16:00
+
+        ↓
+
+Shadows move
+
+        ↓
+
+Select:
+
+550 W Solar Panel
+
+        ↓
+
+Place panels on rooftop
+
+        ↓
+
+Panels appear as lightweight 3D models
+
+        ↓
+
+Panel shadows update
+
+        ↓
+
+System validates:
+
+Roof boundary
+Setbacks
+Obstacles
+Clearances
+Panel orientation
+Shading
+
+        ↓
+
+Solar analysis
+
+        ↓
+
+Final recommended layout
+
+The end result should combine:
+Google Maps / geographic context
++
+existing Surya-Ghar 2D geometry
++
+Three.js 3D modeling
++
+pvlib solar-position calculations
++
+Three.js real-time shadows
++
+lightweight GLB solar-panel assets
++
+Shapely geometric validation
++
+PVGIS solar-resource analysis
+
+without making any one technology responsible for tasks it is not designed to perform.

@@ -52,7 +52,7 @@ export function ValidatePanel({
 
   return (
     <div className="stage-card">
-      <p className="stage-card__eyebrow">Stage 2 of 5</p>
+      <p className="stage-card__eyebrow">Stage 3 of 6</p>
       <h2 className="stage-card__title">Surface assessment</h2>
 
       <div className="seg-switch" role="group" aria-label="Segmentation model">

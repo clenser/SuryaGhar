@@ -101,7 +101,7 @@ export function DesignPanel({ vertices, onResult, onContinue, backendReady }: De
 
   return (
     <div className="stage-card">
-      <p className="stage-card__eyebrow">Stage 3 of 5</p>
+      <p className="stage-card__eyebrow">Stage 4 of 6</p>
       <h2 className="stage-card__title">Solar design</h2>
       <p className="stage-card__body">Configure the solar panel layout for your selected area.</p>
 

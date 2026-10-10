@@ -98,6 +98,13 @@
   animation: backend-status-pulse 1.2s ease-in-out infinite;
 }
 
+/* Checking: bounded initial health probe — teal, gently pulsing, distinct
+   from the amber "server is starting" state. */
+.backend-status__dot--checking {
+  background: var(--color-primary);
+  animation: backend-status-pulse 1.2s ease-in-out infinite;
+}
+
 @keyframes backend-status-pulse {
   0%,
   100% {
@@ -134,7 +141,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .backend-status__dot--starting {
+  .backend-status__dot--starting,
+  .backend-status__dot--checking {
     animation: none;
   }
 }
@@ -150,6 +158,119 @@
   .backend-status {
     padding: 6px 12px;
   }
+}
+
+/* Map-provider pill: same dark badge language as the API pill, distinct
+   dot colors per provider state so map status never reads as backend
+   health. Countdown text is plain text — no motion needed to follow it. */
+.map-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: var(--color-text);
+  color: #ffffff;
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.map-status__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--color-text-faint);
+}
+
+.map-status__dot--google-loading {
+  background: var(--color-text-faint);
+  animation: backend-status-pulse 1.2s ease-in-out infinite;
+}
+
+.map-status__dot--fallback-countdown {
+  background: var(--color-warning);
+  animation: backend-status-pulse 1.2s ease-in-out infinite;
+}
+
+.map-status__dot--maplibre-loading {
+  background: var(--color-primary);
+  animation: backend-status-pulse 1.2s ease-in-out infinite;
+}
+
+.map-status__dot--maplibre-ready {
+  background: var(--color-success);
+}
+
+.map-status__dot--map-error {
+  background: var(--color-danger);
+}
+
+.map-status__short {
+  display: none;
+}
+
+.map-status__retry {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+  cursor: pointer;
+  padding: 0;
+}
+
+.map-status__retry:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .map-status__dot {
+    animation: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .map-status__full {
+    display: none;
+  }
+  .map-status__short {
+    display: inline;
+  }
+  .map-status {
+    padding: 6px 12px;
+  }
+}
+
+/* map-error placeholder inside the map shell (never a blank/black area). */
+.map-view--error {
+  display: grid;
+  place-items: center;
+  background: #0d1822;
+}
+
+.map-view__error {
+  max-width: 340px;
+  margin: 16px;
+  padding: 14px 18px;
+  border-radius: 12px;
+  background: rgba(11, 31, 51, 0.92);
+  color: #ffffff;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1.45;
+  text-align: center;
+  border: 1px solid rgba(255, 255, 255, 0.14);
 }
 
 .header-btn {
@@ -400,7 +521,11 @@
   inset: 0;
 }
 
-.map-view__canvas {
+/* Specificity (0,2,0) keeps this above maplibre-gl.css `.maplibregl-map`
+   (0,1,0) no matter which chunk loads first: MapLibre adds its own classes
+   to this container at runtime, and the holder must stay inset-0 absolute or
+   the canvas is clipped to zero height (black map) while tiles still load. */
+.map-view .map-view__canvas {
   position: absolute;
   inset: 0;
 }
@@ -1114,6 +1239,74 @@
   scrollbar-color: var(--color-border-strong) transparent;
 }
 
+/* ---------- 3D design workspace (desktop only) ----------
+   Deliberate mode switch: the map unmounts completely (no inset, no hidden
+   GPU work — provider state is preserved and resumes on exit) and the stage
+   panel becomes the design surface: the 3D viewport takes ~3/4 width while
+   the controls form an independently scrolling inspector column. Gated to
+   wide screens so phone/tablet bottom-sheet layouts are untouched. */
+@media (min-width: 900px) {
+  .workspace.design-mode .stage-panel {
+    top: var(--space-4);
+    right: var(--space-4);
+    bottom: var(--space-4);
+    left: var(--space-4);
+    width: auto;
+    max-width: none;
+    z-index: 8;
+  }
+
+  .workspace.design-mode .stage-card {
+    min-width: 0;
+  }
+
+  /* Inspector split: sticky 3D viewport left (~3/4), independently
+     scrolling control column right (~1/4). Plain flex row — no row-span
+     distribution, so sections stack compactly with zero artificial gaps. */
+  .workspace.design-mode .design-layout {
+    display: flex;
+    gap: var(--space-4);
+    align-items: flex-start;
+  }
+
+  .workspace.design-mode .design-view {
+    flex: 3 1 0;
+    min-width: 0;
+    position: sticky;
+    top: 0;
+  }
+
+  .workspace.design-mode .design-view .stage-3d-viewport {
+    aspect-ratio: auto;
+    height: calc(100dvh - 170px);
+    min-height: 380px;
+    margin-bottom: var(--space-3);
+  }
+
+  .workspace.design-mode .design-side {
+    flex: 1 1 300px;
+    max-width: 380px;
+    min-width: 0;
+  }
+
+  /* Map editing affordances move aside: site editing resumes after
+     "Back to map". */
+  .workspace.design-mode .map-toolbar,
+  .workspace.design-mode .map-controls {
+    display: none;
+  }
+
+  /* The inspector starts at the Building section: location card, stage
+     progress and readiness notices are navigation chrome, not design
+     controls. They return untouched with "Back to map". */
+  .workspace.design-mode .location-card,
+  .workspace.design-mode .stage-progress,
+  .workspace.design-mode .stage-progress__caption,
+  .workspace.design-mode .readiness-lock {
+    display: none;
+  }
+}
+
 .stage-panel::-webkit-scrollbar {
   width: 8px;
 }
@@ -1494,6 +1687,38 @@
   font-size: var(--text-sm);
   color: var(--color-text-muted);
   line-height: 1.4;
+}
+
+/*
+ * Viewer footer actions (Reset view / Back to map / X-ray / Open 3D design
+ * view) share the hint row with its help text. Left to plain flex, each
+ * button shrinks independently and its label breaks mid-word into stacked
+ * fragments, so the footer becomes unreadable at narrow widths.
+ * Nowrap + a shared minimum width keeps every label on one line; the row is
+ * allowed to wrap as whole buttons when the space genuinely runs out.
+ */
+.stage-card__hint .btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  align-items: center;
+  justify-content: center;
+  min-width: 7.5rem;
+  padding-inline: var(--space-3);
+}
+
+/* Icons inside the hint row sit inline with the text, never on their own
+ * line, and never shrink below their glyph size. */
+.stage-card__hint > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+/* Narrow viewports: let the action row wrap as whole buttons rather than
+ * squeezing or stacking individual labels internally. */
+@media (max-width: 720px) {
+  .stage-card__hint {
+    flex-wrap: wrap;
+  }
 }
 
 .stage-card__warning {
@@ -2786,6 +3011,12 @@
     gap: var(--space-3);
   }
 
+  /* Obstacle form: stack the metric fields — two columns would clip the
+     right-hand inputs on a phone-sized card. */
+  .obstacle-form .field-grid {
+    grid-template-columns: 1fr;
+  }
+
   /* ---------- Mobile typography (readable, never shrunken) ---------- */
   .stage-card__title {
     font-size: 1.1875rem;
@@ -2818,6 +3049,554 @@
 
   .vis-thumbs {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* ---------- 3D Viewport Styles ---------- */
+/* The stage card owns the frame (size, border, responsive aspect ratio);
+   the viewer itself fills this box so there is never a nested double frame. */
+.stage-3d-viewport {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  min-height: 300px;
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  position: relative;
+}
+
+.stage-3d-viewport canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* OrbitControls owns every gesture: drag = orbit, wheel/pinch = zoom. */
+  touch-action: none;
+}
+
+/* Loading state inside viewport */
+.stage-3d-viewport .stage-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-surface-muted);
+  border-radius: var(--radius-lg);
+  z-index: 10;
+}
+
+/* Error fallback inside viewport */
+.stage-3d-viewport[role="alert"] {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Site3DViewer: fills the .stage-3d-viewport frame provided by its parent */
+.site-3d-viewer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.site-3d-viewer canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+.site-3d-viewer__loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-surface-muted);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  pointer-events: none;
+}
+
+.site-3d-viewer--error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-surface-muted);
+}
+
+.site-3d-viewer__message {
+  padding: var(--space-4);
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+.site-3d-viewer__message svg {
+  margin: 0 auto var(--space-3);
+  opacity: 0.5;
+}
+
+.site-3d-viewer__message p {
+  font-size: var(--text-base);
+  margin: 0;
+}
+
+/* Height input row for building height panel */
+.height-input-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.height-input-row input {
+  flex: 1;
+  width: auto;
+}
+
+.height-unit {
+  font-size: var(--text-base);
+  color: var(--color-text-muted);
+  font-weight: 500;
+  padding-bottom: 2px; /* Align with input baseline */
+}
+
+/* Building preview icon */
+.building-preview {
+  display: flex;
+  justify-content: center;
+  margin-top: var(--space-3);
+  opacity: 0.6;
+}
+
+/* Field input error state */
+.field-input--error {
+  border-color: var(--color-danger) !important;
+  box-shadow: 0 0 0 3px rgba(217, 75, 75, 0.15);
+}
+
+/* ---------- Rooftop obstacles (Phase 3) ---------- */
+.obstacle-section {
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.obstacle-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-2);
+}
+
+.obstacle-toolbar__labels {
+  min-width: 0;
+}
+
+.obstacle-section__title {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.obstacle-count {
+  margin: 2px 0 0;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+
+.obstacle-form {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-muted);
+  padding: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.obstacle-form__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.obstacle-form__title {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-faint);
+}
+
+.obstacle-form .field-grid {
+  margin-bottom: var(--space-2);
+}
+
+/* Grid items default to min-width:auto and refuse to shrink below the inputs'
+   intrinsic width, which would push the right-hand column off the card. */
+.obstacle-form .field {
+  min-width: 0;
+}
+
+/*
+ * Obstacle editor readability: the height / rotation / position labels are
+ * short uppercase strings in a shared grid. Without a nowrap rule they break
+ * onto a second line at narrow widths, which desynchronises the rows below
+ * them and makes the columns read as ragged. Truncating instead keeps every
+ * label on one line so the grid stays a stable two-column table.
+ */
+.obstacle-form .field label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The numeric rows stay aligned to whatever the widest label needs, so the
+   inputs line up across rows instead of each starting at its own width. */
+.obstacle-form .field-grid {
+  align-items: start;
+}
+
+.obstacle-form .height-input-row input {
+  min-width: 0;
+}
+
+.field--full {
+  grid-column: 1 / -1;
+}
+
+.obstacle-form__hint {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+.obstacle-form__error {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--color-danger);
+}
+
+.obstacle-form__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.obstacle-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.obstacle-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  padding: var(--space-2);
+}
+
+.obstacle-item.is-selected {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 1px var(--color-primary);
+}
+
+.obstacle-item.is-invalid {
+  border-color: var(--color-danger);
+}
+
+.obstacle-item__body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 180px;
+}
+
+.obstacle-item__name {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.obstacle-item__meta {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.obstacle-item__actions {
+  display: flex;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+
+.obstacle-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2);
+  border-left: 3px solid var(--color-danger);
+  background: var(--color-surface-muted);
+  color: var(--color-danger);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.obstacle-warning svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+/* Mobile: keep obstacle row actions comfortable to tap */
+@media (max-width: 599px) {
+  .obstacle-item__actions .btn {
+    min-height: 44px;
+    min-width: 44px;
+    justify-content: center;
+  }
+}
+
+/* ---------- Solar panels (Phase 5) ---------- */
+.panel-group {
+  margin-bottom: var(--space-2);
+}
+
+.panel-group__label {
+  display: block;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-faint);
+  margin-bottom: 6px;
+}
+
+.panel-group__hint {
+  margin: 6px 0 0;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+.segmented {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 6px;
+}
+
+.segmented__btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: 40px;
+  padding: var(--space-2) var(--space-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.segmented__btn:hover {
+  border-color: var(--color-primary);
+}
+
+.segmented__btn.is-active {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft, var(--color-surface-muted));
+  box-shadow: 0 0 0 1px var(--color-primary);
+}
+
+.segmented__meta {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--color-text-muted);
+}
+
+.segmented__btn.is-active .segmented__meta {
+  color: var(--color-text);
+}
+
+/* ---------- Sun simulation (Phase 4) ---------- */
+.sun-section {
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.sun-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-2);
+}
+
+.sun-toolbar__labels {
+  min-width: 0;
+}
+
+.sun-section__title {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.sun-clock {
+  margin: 2px 0 0;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+
+.sun-clock__time {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.sun-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 190px) minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: end;
+  margin-bottom: var(--space-2);
+}
+
+.sun-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.sun-field__label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-faint);
+}
+
+.sun-field__value {
+  font-size: var(--text-sm);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.sun-field__input {
+  width: 100%;
+}
+
+/* Native range slider styled with accent-color: keeps the platform's touch
+   behaviour while matching the design tokens. */
+.sun-time-slider {
+  width: 100%;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}
+
+.sun-readout {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  padding: var(--space-2);
+  border-left: 3px solid var(--color-primary);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+.sun-readout strong {
+  font-weight: 600;
+}
+
+.sun-readout svg {
+  flex-shrink: 0;
+}
+
+.sun-readout--night {
+  border-left-color: var(--color-text-faint);
+  color: var(--color-text-muted);
+}
+
+.sun-readout--error {
+  border-left-color: var(--color-danger);
+  color: var(--color-danger);
+}
+
+.sun-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+
+.sun-meta__note {
+  color: var(--color-text-faint);
+}
+
+/* Mobile: comfortable date, slider and play targets (≥44px) */
+@media (max-width: 599px) {
+  .sun-fields {
+    grid-template-columns: 1fr;
+    gap: var(--space-2);
+  }
+
+  .sun-play {
+    min-height: 44px;
+    justify-content: center;
+  }
+
+  .sun-field__input,
+  .sun-time-slider {
+    min-height: 44px;
+  }
+}
+
+/* Mobile: 3D viewport adjustments */
+@media (max-width: 599px), (max-height: 500px) and (pointer: coarse) {
+  .stage-3d-viewport {
+    aspect-ratio: 4 / 3;
+    min-height: 280px;
   }
 }
 

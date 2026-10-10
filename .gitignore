@@ -10,3 +10,5 @@ __pycache__/
 coverage/
 # Local EC2 inactivity timestamp (backend/runtime/last_activity.json).
 backend/runtime/
+*.pem
+infrastructure/aws/lambda/*.zip

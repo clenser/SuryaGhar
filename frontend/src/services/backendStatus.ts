@@ -9,12 +9,18 @@
  * BackendStatus state machine (single shared instance in this module):
  *
  *   unknown   → initial page load, before any request settles.
- *   starting  → the backend is reasonably expected to become ready: the wake
- *               request is in flight, /ready answered 503/starting, the
- *               gateway answered backend_starting, or a transient failure
- *               (timeout, reset, 502/504, ...) happened inside the wake
- *               window. Map browsing, search, selection and measurements stay
- *               usable; backend-dependent actions stay locked.
+ *   checking  → a bounded health/readiness check is in flight: the initial
+ *               wake probe entered, a normal request is waiting for its
+ *               first answer, or a transient failure (timeout, reset,
+ *               502/504, ...) is being retried inside the local window.
+ *               Shown as "Checking local server…"; it always resolves to
+ *               ONLINE, STARTING (explicit backend_starting) or OFFLINE.
+ *   starting  → the server itself said it is starting: /ready answered
+ *               503/starting or the gateway answered backend_starting (in
+ *               production, transients inside the cloud wake window also
+ *               stay here). Map browsing, search, selection and
+ *               measurements stay usable; backend-dependent actions stay
+ *               locked.
  *   online    → ONLY when GET /ready answered HTTP 200 with
  *               {"status": "ready"}. Never inferred from /health, EC2 state,
  *               page load, or a bare gateway connection. Locks lift.
@@ -43,13 +49,35 @@
 
 import { API_BASE_URL } from "./apiBase";
 
-export type BackendStatus = "unknown" | "starting" | "online" | "error";
+export type BackendStatus = "unknown" | "checking" | "starting" | "online" | "error";
 
 export const BACKEND_STARTING_CODE = "backend_starting";
 export const DEFAULT_RETRY_AFTER_MS = 3000;
 export const MAX_RETRY_AFTER_MS = 30000;
 /** Upper bound for one wake-and-retry cycle before surfacing failure. */
 export const MAX_WAKE_WAIT_MS = 120_000;
+/**
+ * Local-dev wake window: against the local Vite proxy a failing check can only
+ * mean "backend not running / restarting" — there is no cloud cold start to
+ * wait out. The initial check is therefore bounded to a few seconds before the
+ * pill reports OFFLINE with its retry action, so "Starting analysis server…"
+ * can never linger. Production keeps MAX_WAKE_WAIT_MS for the on-demand
+ * backend; local development never triggers an AWS wake (the /api proxy only
+ * ever targets 127.0.0.1:8000).
+ */
+export const DEV_WAKE_WAIT_MS = 4_000;
+
+/** Window default: bounded in Vite dev, cloud-wake budget in production. */
+function defaultWakeWindowMs(): number {
+  return import.meta.env.DEV ? DEV_WAKE_WAIT_MS : MAX_WAKE_WAIT_MS;
+}
+
+/** Status shown while a transient failure is being retried inside the wake
+ * window. Locally a transient can never mean "server is starting", so dev
+ * stays on CHECKING; production keeps STARTING for the on-demand backend. */
+function transientStatus(): BackendStatus {
+  return import.meta.env.DEV ? "checking" : "starting";
+}
 /** Per-attempt ceiling for a single wake fetch. Beyond the ~30 s gateway
  * cap, so gateway verdicts (e.g. 504) arrive before we give up locally; a
  * hung connection becomes a retryable transient, never instant OFFLINE. */
@@ -102,12 +130,18 @@ function setOnline(): void {
   onlineEpoch += 1;
 }
 
-/** Test-only reset so suites start from a clean state. */
+/** Test-only reset so suites start from a clean state. Aborting the live wake
+ *  loop is part of the reset: otherwise an orphaned loop keeps its deadline
+ *  and its next retry fires into a later test's fetch stub. The abort path is
+ *  quiet by design (loop rejects, callers already swallow it), so no state
+ *  beyond this reset can be touched by the dying loop. */
 export function resetBackendStatusForTests(): void {
   status = "unknown";
   onlineEpoch = 0;
   onlineFailureStreak = 0;
   wakeActive = false;
+  wakeAbort?.abort();
+  wakeAbort = null;
   wakeInflight = null;
   listeners.clear();
 }
@@ -207,13 +241,27 @@ export interface WakeRetryOptions {
  * owner can never flip a live UI to OFFLINE.
  */
 let wakeInflight: Promise<Response> | null = null;
+/** Abort handle for the live wake loop. resetBackendStatusForTests() uses it
+ *  to kill orphaned loops: a still-sleeping loop from a finished test would
+ *  otherwise fire its next /ready retry into whichever test runs later
+ *  (observed as phantom extra wake calls under parallel suite load). */
+let wakeAbort: AbortController | null = null;
 
 export function ensureBackendAwake(
   opts?: WakeRetryOptions & { signal?: AbortSignal },
 ): Promise<Response> {
   if (!wakeInflight) {
     wakeActive = true;
-    const pending = wakeLoop(`${API_BASE_URL}/ready`, opts);
+    // Internal controller so a test reset can cancel the loop; a caller
+    // signal (owner cancel) is merged in by aborting the same controller.
+    const controller = new AbortController();
+    const callerSignal = opts?.signal;
+    if (callerSignal) {
+      if (callerSignal.aborted) controller.abort();
+      else callerSignal.addEventListener("abort", () => controller.abort(), { once: true });
+    }
+    wakeAbort = controller;
+    const pending = wakeLoop(`${API_BASE_URL}/ready`, { ...opts, signal: controller.signal });
     wakeInflight = pending;
     // Settle bookkeeping only; callers observe the returned promise itself,
     // so this extra chain must never produce an unhandled rejection.
@@ -221,6 +269,7 @@ export function ensureBackendAwake(
       .finally(() => {
         wakeActive = false;
         if (wakeInflight === pending) wakeInflight = null;
+        if (wakeAbort === controller) wakeAbort = null;
       })
       .catch(() => {});
   }
@@ -229,18 +278,24 @@ export function ensureBackendAwake(
 
 /**
  * The wake workflow: poll GET /ready until an authoritative ready answer,
- * the window expires, or the owner aborts. Every transient — starting
- * probes, gateway/proxy 5xx (notably gateway timeouts near its budget),
- * 429s, timeouts, resets — keeps STARTING and retries inside the window.
- * OFFLINE is set only on genuine failure evidence (window exhausted with no
- * success, a definitive non-retryable answer) and never over a newer ONLINE.
+ * the window expires, or the owner aborts. Every transient — transport
+ * errors, gateway/proxy 5xx (notably gateway timeouts near its budget),
+ * 429s, timeouts, resets — stays CHECKING in local dev (bounded by
+ * DEV_WAKE_WAIT_MS) and retries inside the window; production keeps
+ * STARTING for the on-demand wake. An explicit backend_starting answer
+ * always shows STARTING. OFFLINE is set only on genuine failure evidence
+ * (window exhausted with no success, a definitive non-retryable answer)
+ * and never over a newer ONLINE.
  */
 async function wakeLoop(url: string, opts?: WakeRetryOptions & { signal?: AbortSignal }): Promise<Response> {
-  const maxWakeWaitMs = opts?.maxWakeWaitMs ?? MAX_WAKE_WAIT_MS;
+  const maxWakeWaitMs = opts?.maxWakeWaitMs ?? defaultWakeWindowMs();
   const defaultRetryMs = opts?.defaultRetryMs ?? DEFAULT_RETRY_AFTER_MS;
   const signal = opts?.signal ?? null;
   const epoch = onlineEpoch;
-  if (getBackendStatus() !== "online") setStatus("starting");
+  // Entry state is CHECKING (bounded local health check), never STARTING:
+  // the message "Starting analysis server…" is reserved for an explicit
+  // backend_starting answer from the server itself.
+  if (getBackendStatus() !== "online") setStatus("checking");
   const deadline = Date.now() + maxWakeWaitMs;
   let lastError: unknown = new Error("Backend wake timed out before any response arrived.");
 
@@ -271,6 +326,12 @@ async function wakeLoop(url: string, opts?: WakeRetryOptions & { signal?: AbortS
     if (onlineEpoch === epoch && getBackendStatus() !== "online") setStatus("starting");
   };
 
+  /** Transport/5xx transient inside the window: CHECKING locally, STARTING
+   * for the production on-demand wake. */
+  const markTransient = () => {
+    if (onlineEpoch === epoch && getBackendStatus() !== "online") setStatus(transientStatus());
+  };
+
   for (;;) {
     let response: Response;
     try {
@@ -281,7 +342,7 @@ async function wakeLoop(url: string, opts?: WakeRetryOptions & { signal?: AbortS
       if (err instanceof DOMException && err.name === "AbortError" && signal?.aborted) throw err;
       // Anything else (attempt timeout, reset, DNS, ...): transient.
       lastError = err;
-      markStarting();
+      markTransient();
       const done = await waitOrGiveUp(fallbackWaitMs()); // eslint-disable-line no-await-in-loop
       if (done) return done;
       continue;
@@ -299,7 +360,7 @@ async function wakeLoop(url: string, opts?: WakeRetryOptions & { signal?: AbortS
     if (response.status === 429 || response.status >= 500) {
       // Gateway/proxy verdicts (502/504/...) while starting are transient:
       // the gateway answers these on the backend's behalf near its budget.
-      markStarting();
+      markTransient();
       const done = await waitOrGiveUp(fallbackWaitMs(), response); // eslint-disable-line no-await-in-loop
       if (done) return done;
       continue;
@@ -329,10 +390,10 @@ export async function requestBackend(
   init?: RequestInit,
   opts?: WakeRetryOptions,
 ): Promise<Response> {
-  const maxWakeWaitMs = opts?.maxWakeWaitMs ?? MAX_WAKE_WAIT_MS;
+  const maxWakeWaitMs = opts?.maxWakeWaitMs ?? defaultWakeWindowMs();
   const defaultRetryMs = opts?.defaultRetryMs ?? DEFAULT_RETRY_AFTER_MS;
   const epoch = onlineEpoch;
-  if (getBackendStatus() !== "online") setStatus("starting");
+  if (getBackendStatus() !== "online") setStatus("checking");
   const deadline = Date.now() + maxWakeWaitMs;
 
   for (;;) {
@@ -349,7 +410,7 @@ export async function requestBackend(
       // (consecutive failures) flips to OFFLINE.
       if (onlineEpoch === epoch) {
         if (getBackendStatus() !== "online") {
-          setStatus(wakeActive ? "starting" : "error");
+          setStatus(wakeActive ? transientStatus() : "error");
         } else if (!wakeActive) {
           onlineFailureStreak += 1;
           if (onlineFailureStreak >= ONLINE_FAILURE_LIMIT) {
@@ -382,7 +443,7 @@ export async function requestBackend(
       // immediately, so one slow/timeout response is not an outage.
       if (onlineEpoch === epoch) {
         if (getBackendStatus() !== "online") {
-          setStatus(wakeActive ? "starting" : "error");
+          setStatus(wakeActive ? transientStatus() : "error");
         } else if (!wakeActive) {
           onlineFailureStreak += 1;
           if (onlineFailureStreak >= ONLINE_FAILURE_LIMIT) {

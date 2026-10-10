@@ -12,33 +12,7 @@ import { SitePanel } from "../components/analysis/SitePanel";
 import { analyzePolygon } from "../lib/geo";
 import type { SelectionState } from "../hooks/useSelection";
 
-const mapInstance = {
-  on: vi.fn(),
-  addControl: vi.fn(),
-  remove: vi.fn(),
-  getCenter: () => ({ lng: 82.5, lat: 22.5 }),
-  getZoom: () => 4.2,
-  getBearing: () => 0,
-  getPitch: () => 0,
-  getLayer: () => undefined,
-  getSource: () => undefined,
-  setPaintProperty: vi.fn(),
-  setLayoutProperty: vi.fn(),
-  setTerrain: vi.fn(),
-  flyTo: vi.fn(),
-  fitBounds: vi.fn(),
-  easeTo: vi.fn(),
-};
 
-vi.mock("maplibre-gl", () => {
-  class FakeMap {
-    constructor() {
-      return mapInstance as unknown as FakeMap;
-    }
-  }
-  class FakeControl {}
-  return { default: { Map: FakeMap, AttributionControl: FakeControl }, Map: FakeMap, AttributionControl: FakeControl };
-});
 
 function jsonResponse(status: number, body: unknown, retryAfter?: string): Response {
   const headers = retryAfter == null ? undefined : { "Retry-After": retryAfter };
@@ -144,9 +118,9 @@ describe("readiness lock (unit)", () => {
     }
   });
 
-  it("locks Continue to Validate but keeps selection editing usable", () => {
+  it("locks Continue to 3D model but keeps selection editing usable", () => {
     render(<SelectionPanel selection={confirmedSelection()} onStartValidate={() => {}} backendReady={false} />);
-    const locked = screen.getByRole("button", { name: "Continue to Validate" });
+    const locked = screen.getByRole("button", { name: "Continue to 3D model" });
     expect(locked).toBeDisabled();
     expect(locked).toHaveAttribute("title", BACKEND_WAITING_LABEL);
     // Local selection work is never locked.
@@ -155,9 +129,9 @@ describe("readiness lock (unit)", () => {
     expect(screen.getByRole("button", { name: "Undo" })).toBeEnabled();
   });
 
-  it("enables Continue to Validate once ready", () => {
+  it("enables Continue to 3D model once ready", () => {
     render(<SelectionPanel selection={confirmedSelection()} onStartValidate={() => {}} backendReady />);
-    const btn = screen.getByRole("button", { name: "Continue to Validate" });
+    const btn = screen.getByRole("button", { name: "Continue to 3D model" });
     expect(btn).toBeEnabled();
     expect(btn).not.toHaveAttribute("title");
   });
@@ -255,9 +229,11 @@ describe("readiness lock (App integration)", () => {
     expect(screen.getByRole("application", { name: /Satellite map of India/ })).toBeInTheDocument();
   });
 
-  it("treats persistent startup failure as STARTING, never OFFLINE", async () => {
-    // Cold-start connection failures (gateway still booting EC2) must not
-    // surface as "API Offline": the backend is reasonably expected to recover.
+  it("bounds persistent startup failure to CHECKING, then OFFLINE with retry", async () => {
+    // Locally a failing probe means the backend is not running — there is no
+    // cloud cold start to wait out. The pill must show a bounded check (never
+    // "Starting analysis server…" and never a falsely online pill), then turn
+    // OFFLINE with a retry once the local wake window expires.
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
@@ -266,16 +242,19 @@ describe("readiness lock (App integration)", () => {
     );
     const { default: App } = await import("../App");
     render(<App />);
-    expect(await screen.findByText("Starting analysis server…")).toBeInTheDocument();
-    expect(screen.queryByText("API Offline")).toBeNull();
+    // The mount effect sets CHECKING synchronously with render, so assert it
+    // in the same tick — never "Starting analysis server…" (no such state on
+    // a local page load) and never a falsely online pill.
+    expect(screen.getByText("Checking local server…")).toBeInTheDocument();
+    expect(screen.queryByText("Starting analysis server…")).toBeNull();
     expect(screen.queryByText("API Online")).toBeNull();
     // Locked, not errored: the notice explains the state, no error is thrown.
     expect(await screen.findByText(/Waiting for analysis server/)).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Validate/ })).toBeDisabled();
     expect(screen.getByRole("tab", { name: /Select/ })).toBeEnabled();
-    // No retry affordance: retry only appears for genuine errors, and a
-    // background wake cycle is still polling (no hammering: paced retries).
+    // Bounded: the window expires into a real OFFLINE with a retry action.
+    expect(await screen.findByText("API Offline", {}, { timeout: 9000 })).toBeInTheDocument();
     const header = screen.getByRole("banner");
-    expect(within(header).queryByRole("button", { name: "Retry connection" })).toBeNull();
+    expect(within(header).getByRole("button", { name: "Retry connection" })).toBeInTheDocument();
   });
 });

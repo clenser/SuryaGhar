@@ -4,39 +4,39 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { resetBackendStatusForTests } from "../services/backendStatus";
 
-const mapInstance = {
-  on: vi.fn(),
-  addControl: vi.fn(),
-  remove: vi.fn(),
-  getCenter: () => ({ lng: 82.5, lat: 22.5 }),
-  getZoom: () => 4.2,
-  getBearing: () => 0,
-  getPitch: () => 0,
-  getLayer: () => undefined,
-  getSource: () => undefined,
-  setPaintProperty: vi.fn(),
-  setLayoutProperty: vi.fn(),
-  setTerrain: vi.fn(),
-  flyTo: vi.fn(),
+export const googleMapSpy = {
+  panTo: vi.fn(),
+  setZoom: vi.fn(),
   fitBounds: vi.fn(),
-  easeTo: vi.fn(),
+  setHeading: vi.fn(),
+  setTilt: vi.fn(),
 };
 
-vi.mock("maplibre-gl", () => {
-  class FakeMap {
-    constructor() {
-      return mapInstance as unknown as FakeMap;
-    }
-  }
-  class FakeControl {}
-  return { default: { Map: FakeMap, AttributionControl: FakeControl }, Map: FakeMap, AttributionControl: FakeControl };
-});
+// Bind spy to Map prototype
+if (typeof window !== "undefined" && window.google?.maps?.Map) {
+  const origPanTo = window.google.maps.Map.prototype.panTo;
+  window.google.maps.Map.prototype.panTo = function (...args: unknown[]) {
+    googleMapSpy.panTo(...args);
+    return origPanTo.apply(this, args as never);
+  };
+  const origSetZoom = window.google.maps.Map.prototype.setZoom;
+  window.google.maps.Map.prototype.setZoom = function (...args: unknown[]) {
+    googleMapSpy.setZoom(...args);
+    return origSetZoom.apply(this, args as never);
+  };
+  const origFitBounds = window.google.maps.Map.prototype.fitBounds;
+  window.google.maps.Map.prototype.fitBounds = function (...args: unknown[]) {
+    googleMapSpy.fitBounds(...args);
+    return origFitBounds.apply(this, args as never);
+  };
+}
+
 
 import App from "../App";
 
 describe("App workspace", () => {
   beforeEach(() => {
-    Object.values(mapInstance).forEach((v) => typeof v === "function" && "mockClear" in v && (v as unknown as { mockClear: () => void }).mockClear());
+    Object.values(googleMapSpy).forEach((v) => typeof v === "function" && "mockClear" in v && (v as unknown as { mockClear: () => void }).mockClear());
     resetBackendStatusForTests();
   });
 
@@ -84,6 +84,15 @@ describe("App workspace", () => {
     render(<App />);
     expect(screen.getByText("Surya-Ghar")).toBeInTheDocument();
     expect(screen.queryByText("Solar Site")).toBeNull();
+  });
+
+  it("includes the 3D building stage in the workflow, locked until an area is confirmed", () => {
+    render(<App />);
+    const tabs = screen.getAllByRole("tab").map((tab) => tab.getAttribute("aria-label") ?? "");
+    expect(tabs.some((label) => label.startsWith("Model"))).toBe(true);
+    expect(screen.getByRole("tab", { name: /^Model/ })).toBeDisabled();
+    // Later stages are unchanged: Validate still follows Model.
+    expect(tabs.some((label) => label.startsWith("Validate"))).toBe(true);
   });
 
   it("mounts the mobile bottom-sheet handle in the partially expanded state", () => {
@@ -191,7 +200,7 @@ describe("App workspace", () => {
     await userEvent.click(screen.getByRole("button", { name: /Advanced/ }));
     const testSites = screen.getByRole("heading", { name: "Test sites" }).parentElement as HTMLElement;
     await userEvent.click(within(testSites).getByRole("button", { name: /Kalna/ }));
-    expect(mapInstance.flyTo).toHaveBeenCalled();
+    expect(googleMapSpy.panTo).toHaveBeenCalled();
     expect(screen.getByRole("region", { name: "Location" })).toHaveTextContent("Kalna");
     expect(document.querySelector(".onboarding")).toBeNull();
   });

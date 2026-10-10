@@ -11,7 +11,10 @@ import {
  * state dot and always-visible text driven entirely by the shared
  * backendStatus store (no second status system).
  *
+ * - checking: blue-gray dot + "Checking local server…" (bounded initial
+ *             health check; never lingers — resolves to online/starting/offline)
  * - starting: amber pulsing dot + "Starting analysis server…"
+ *             (only when the server itself reports backend_starting)
  * - online:   green dot + "API Online" (never faded, never dot-only)
  * - error:    red dot + "API Offline" + retry action
  * - unknown:  gray dot only (before any request)
@@ -31,16 +34,24 @@ export function BackendStatusIndicator() {
       role="status"
       aria-live="polite"
       aria-label={
-        backendStatus === "starting"
-          ? "Server is starting"
-          : backendStatus === "error"
-            ? "Server unavailable"
-            : backendStatus === "online"
-              ? "API online"
-              : "Server status unknown"
+        backendStatus === "checking"
+          ? "Checking local server"
+          : backendStatus === "starting"
+            ? "Server is starting"
+            : backendStatus === "error"
+              ? "Server unavailable"
+              : backendStatus === "online"
+                ? "API online"
+                : "Server status unknown"
       }
     >
       <span className={`backend-status__dot backend-status__dot--${backendStatus}`} aria-hidden="true" />
+      {backendStatus === "checking" && (
+        <>
+          <span className="backend-status__full">Checking local server…</span>
+          <span className="backend-status__short">Checking…</span>
+        </>
+      )}
       {backendStatus === "starting" && (
         <>
           <span className="backend-status__full">Starting analysis server…</span>
