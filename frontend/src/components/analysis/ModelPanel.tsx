@@ -52,11 +52,22 @@ import { SolarPanelSection } from "../3d/SolarPanelSection";
 import { BuildingHeightPanel } from "./BuildingHeightPanel";
 import { useSunSimulation } from "../../hooks/useSunSimulation";
 import { formatTimezoneLabel, formatSiteDateTime, localWallClockToUtc } from "../../lib/solar";
+import type { SunSample } from "../../lib/solar";
+import type { PlacedPanel } from "../../lib/3d/panelPlacement";
 import { placePanels } from "../../lib/3d/panelPlacement";
 import {
+  defaultPanelSet,
+  totalCapacityKw as totalSetsCapacityKw,
+  validatePanelPlacement,
+  type PanelSet,
+} from "../../lib/3d/panelSets";
+import { effectivePanelDims } from "../../lib/3d/panels";
+import {
+  clearSkyFallbackWeather,
+  computePanelEnergy,
+} from "../../lib/3d/panelEnergy";
+import {
   DEFAULT_PANEL_CONFIG,
-  panelTypeDefinition,
-  totalCapacityKw,
   validatePanelConfig,
   type PanelLayoutConfig,
 } from "../../lib/3d/panels";
@@ -138,9 +149,24 @@ export function ModelPanel({
   // stale; the revision counter forces an explicit recalculation on demand.
   // Panels are strictly opt-in: a fresh building never auto-populates the
   // roof — the user explicitly enables placement first.
-  const [panelConfig, setPanelConfig] = useState<PanelLayoutConfig>(DEFAULT_PANEL_CONFIG);
+  //
+  // M3: the configuration lives in PANEL SETS. The first set is seeded from
+  // the old single-config defaults so a fresh project behaves exactly as
+  // before; more sets add arrays with their own tilt/height/orientation.
+  const [panelSets, setPanelSets] = useState<PanelSet[]>([defaultPanelSet("panel-set-1")]);
+  const [activeSetId, setActiveSetId] = useState<string>("panel-set-1");
+  /**
+   * Manual-placement mode. While on, a roof click places a panel (validated by
+   * the shared validator) instead of being read as an obstacle pick. Turned
+   * off automatically when drawing an obstacle or opening the editor, so the
+   * two interactions can never fight over the same click.
+   */
+  const [manualPlaceActive, setManualPlaceActive] = useState(false);
   const [panelRevision, setPanelRevision] = useState(0);
   const [panelsEnabled, setPanelsEnabled] = useState(false);
+
+  /** The set the inspector is currently editing. */
+  const activeSet = panelSets.find((s) => s.id === activeSetId) ?? panelSets[0] ?? null;
   const timezoneLabel = useMemo(() => {
     try {
       return formatTimezoneLabel(
@@ -219,43 +245,210 @@ export function ModelPanel({
   );
 
   // Deterministic panel placement, derived from the roof, the obstacles and
-  // the configuration — recomputed when any of them change (the revision
-  // counter backs the explicit "Recalculate" action). Disabled by default:
-  // an empty configuration produces zero panel meshes, never a full roof.
-  const configError = validatePanelConfig(panelConfig);
-  const placement = useMemo(
-    () =>
-      configError
-        ? { panels: [], reason: configError as string | null }
-        : !panelsEnabled
-          ? { panels: [], reason: null }
-          : placePanels({ terrace: usableRing, obstacles, config: panelConfig }),
-    [usableRing, obstacles, panelConfig, configError, panelRevision, panelsEnabled],
-  );
+  // the each set's configuration — recomputed when any of them change (the
+  // revision counter backs the explicit "Recalculate" action). Disabled by
+  // default: an empty configuration produces zero panel meshes, never a full
+  // roof. EVERY set is placed with the SAME placePanels lattice, so auto and
+  // manual placement share one geometric rule set.
+  const placements = useMemo(() => {
+    if (!panelsEnabled) return panelSets.map(() => ({ panels: [], reason: null as string | null }));
+    return panelSets.map((set) => {
+      const error = validatePanelConfig(set.config);
+      if (error) return { panels: [], reason: error };
+      return placePanels({ terrace: usableRing, obstacles, config: set.config });
+    });
+  }, [usableRing, obstacles, panelSets, panelRevision, panelsEnabled]);
 
-  // Capacity: count × watts / 1000, from the selected configuration.
-  const panelCount = configError ? 0 : placement.panels.length;
-  const capacityKw = totalCapacityKw(
-    panelCount,
-    panelTypeDefinition(panelConfig.panelTypeId).watts,
-  );
+  // Capacity: count × watts / 1000, across every set.
+  const panelCount = panelsEnabled
+    ? panelSets.reduce((sum, set) => sum + set.panels.length, 0)
+    : 0;
+  const capacityKw = panelsEnabled
+    ? totalSetsCapacityKw(panelSets)
+    : 0;
+
+  // Every placed panel with the set it belongs to, flattened for the viewer.
+  const allPanels = useMemo(() => {
+    if (!panelsEnabled) return { config: DEFAULT_PANEL_CONFIG, panels: [] as PlacedPanel[] };
+    const first = panelSets[0]?.config ?? DEFAULT_PANEL_CONFIG;
+    return {
+      config: first,
+      panels: panelSets.flatMap((set) =>
+        set.panels.map((p) => ({ index: 0, x: p.x, y: p.y, rotationDeg: p.rotationDeg })),
+      ),
+    };
+  }, [panelsEnabled, panelSets]);
 
   // Stable identity for the viewport layer (a fresh object every render would
   // rebuild the InstancedMesh on each parent render). Null while disabled so
   // the viewer effect cleans up any previous group and renders no panels.
   const panelLayer = useMemo(
-    () => (panelsEnabled ? { config: panelConfig, panels: configError ? [] : placement.panels } : null),
-    [panelConfig, placement, configError, panelsEnabled],
+    () => (panelsEnabled ? { config: allPanels.config, panels: allPanels.panels } : null),
+    [panelsEnabled, allPanels],
   );
+
+  /**
+   * One sun sample per clock hour, in local wall-clock order.
+   *
+   * Derived from the same real solar-position model the 3D viewport uses
+   * (`sampleSolarDay`), so the sun direction in the simulation matches the
+   * sun the user sees — and changing the date in SunControls re-samples both.
+   */
+  const hourlySun = useMemo(() => {
+    if (!sun.samples) return [];
+    const byHour = new Map<number, SunSample>();
+    for (const sample of sun.samples) {
+      const hour = Math.floor(sample.minutes / 60);
+      // Keep the sample closest to each hour's midpoint (more representative).
+      const existing = byHour.get(hour);
+      if (!existing || Math.abs(sample.minutes - (hour * 60 + 30)) < Math.abs(existing.minutes - (hour * 60 + 30))) {
+        byHour.set(hour, sample);
+      }
+    }
+    return [...byHour.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([hour, sample]) => ({ hour, azimuthDeg: sample.azimuthDeg, elevationDeg: sample.elevationDeg }));
+  }, [sun.samples]);
+
+  const energy = useMemo(() => {
+    if (!panelsEnabled || !activeSet || allPanels.panels.length === 0 || hourlySun.length === 0) return null;
+    const simulated = allPanels.panels.map((p) => ({
+      x: p.x, y: p.y, rotationDeg: p.rotationDeg, config: activeSet.config,
+    }));
+    const weather = clearSkyFallbackWeather(
+      hourlySun.map((s) => ({ hour: s.hour, solarAzimuthDeg: s.azimuthDeg, solarElevationDeg: s.elevationDeg })),
+    );
+    return computePanelEnergy(simulated, weather, obstacles, parapetInsetM, usableRing);
+  }, [panelsEnabled, activeSet, allPanels.panels, hourlySun, obstacles, parapetInsetM, usableRing]);
 
   // Mounting is Flat Roof only for now: any non-flat patch (stale state,
   // future callers) is normalised back to flat; the engine keeps supporting
   // other types internally for later milestones.
-  const handlePanelConfigChange = (patch: Partial<PanelLayoutConfig>) => {
-    setPanelConfig((current) => {
+  const handlePanelConfigChange = (patch: Partial<PanelLayoutConfig>) => {    setPanelSets((sets) => sets.map((set) => {
+      if (set.id !== activeSetId) return set;
       const { mounting, ...rest } = patch;
-      return { ...current, ...rest, mounting: mounting === undefined ? current.mounting : "flat" };
+      return {
+        ...set,
+        // A configuration change applies to every member of the set — the data
+        // model deliberately has no per-panel overrides, so this is stated
+        // rather than silently diverging.
+        config: { ...set.config, ...rest, mounting: mounting === undefined ? set.config.mounting : "flat" },
+      };
+    }));
+  };
+
+  /** Add a new set seeded from the active one (a separate, editable identity). */
+  const handleAddSet = () => {
+    const nextId = `panel-set-${panelSets.length + 1}`;
+    const seed = activeSet
+      ? { ...activeSet.config, panelTypeId: activeSet.config.panelTypeId }
+      : DEFAULT_PANEL_CONFIG;
+    setPanelSets((sets) => [
+      ...sets,
+      {
+        id: nextId,
+        name: `Panel set ${sets.length + 1}`,
+        config: { ...seed },
+        mode: "auto" as const,
+        panels: [],
+        userModified: false,
+      },
+    ]);
+    setActiveSetId(nextId);
+  };
+
+  /** Duplicate the active set: same configuration, new identity, empty panels. */
+  const handleDuplicateSet = () => {
+    if (!activeSet) return;
+    const nextId = `panel-set-${panelSets.length + 1}`;
+    setPanelSets((sets) => [
+      ...sets,
+      {
+        ...activeSet,
+        id: nextId,
+        name: `${activeSet.name} copy`,
+        config: { ...activeSet.config },
+        // A duplicate starts unplaced: it must be explicitly placed, so the
+        // copy never silently overlaps the original.
+        panels: [],
+        userModified: false,
+      },
+    ]);
+    setActiveSetId(nextId);
+  };
+
+  const handleDeleteSet = () => {
+    setPanelSets((sets) => {
+      const next = sets.filter((s) => s.id !== activeSetId);
+      const remaining = next.length > 0 ? next : [defaultPanelSet("panel-set-1")];
+      setActiveSetId(remaining[remaining.length - 1].id);
+      return remaining;
     });
+  };
+
+  /** Auto-place one set, replacing its panels. */
+  const handleAutoPlaceSet = () => {
+    if (!activeSet) return;
+    setPanelSets((sets) => sets.map((s) => {
+      if (s.id !== activeSetId) return s;
+      const result = placePanels({ terrace: usableRing, obstacles, config: s.config });
+      return { ...s, mode: "auto", userModified: false, panels: result.panels };
+    }));
+  };
+
+  /** Auto-place every set at once. */
+  const handleAutoPlaceAll = () => {
+    setPanelSets((sets) => sets.map((s) => ({
+      ...s,
+      mode: "auto",
+      userModified: false,
+      panels: placePanels({ terrace: usableRing, obstacles, config: s.config }).panels,
+    })));
+  };
+
+  /**
+   * Manual placement: add a panel at a validated roof position.
+   * Uses the shared validator so manual and auto placement agree on the rules.
+   */
+  const handleManualPlace = (x: number, y: number, rotationDeg: number) => {
+    if (!activeSet) return false;
+    const dims = effectivePanelDims(activeSet.config);
+    const peers = activeSet.panels.map((p) => ({
+      x: p.x, y: p.y, rotationDeg: p.rotationDeg,
+      width: dims.widthM, length: dims.lengthM,
+    }));
+    const result = validatePanelPlacement(x, y, rotationDeg, activeSet.config, {
+      terrace: usableRing, obstacles, parapetInsetM, peers,
+    });
+    if (!result.valid) return false;
+    setPanelSets((sets) => sets.map((s) => s.id !== activeSetId ? s : {
+      ...s,
+      mode: "manual",
+      userModified: true,
+      panels: [...s.panels, { index: s.panels.length, x, y, rotationDeg }],
+    }));
+    return true;
+  };
+
+  /**
+   * Roof click handler for the active set, wired to the viewer when manual
+   * placement is on. Returns true when the click was consumed so the viewer
+   * does not also treat it as an obstacle pick or a camera drag.
+   */
+  const handleManualRoofClick = (x: number, y: number): boolean => {
+    if (!manualPlaceActive || !activeSet) return false;
+    // Place the panel at the set's configured azimuth, matching the auto layout.
+    const rotation = ((((-activeSet.config.azimuthDeg) % 360) + 360) % 360);
+    return handleManualPlace(x, y, rotation);
+  };
+
+  /** Remove the last panel of the active set (undo for accidental placement). */
+  const handleUndoLastPanel = () => {
+    setPanelSets((sets) => sets.map((s) => s.id !== activeSetId ? s : {
+      ...s,
+      panels: s.panels.slice(0, -1),
+      userModified: true,
+    }));
   };
 
   // Obstacles that no longer satisfy the rules (e.g. the terrace changed).
@@ -374,6 +567,12 @@ export function ModelPanel({
   };
 
   const handleRoofPlace = (x: number, y: number) => {
+    // Manual panel placement wins: while it is active a roof click places a
+    // panel (or is refused) and nothing else consumes the click.
+    if (manualPlaceActive && !drawing && obstacleMode === "idle") {
+      handleManualRoofClick(x, y);
+      return;
+    }
     // Drawing mode accumulates absolute footprint points (near-duplicate
     // clicks, e.g. the two clicks of a double-click, collapse into one —
     // same convention as the map selection drawing).
@@ -703,12 +902,33 @@ export function ModelPanel({
             </button>
           </div>
           <SolarPanelSection
-            config={panelConfig}
+            sets={panelSets}
+            activeSetId={activeSetId}
+            onSelectSet={setActiveSetId}
+            onAddSet={handleAddSet}
+            onDuplicateSet={handleDuplicateSet}
+            onDeleteSet={handleDeleteSet}
+            onRenameSet={(id: string, name: string) =>
+              setPanelSets((sets) => sets.map((s) => (s.id === id ? { ...s, name } : s)))
+            }
+            config={activeSet?.config ?? DEFAULT_PANEL_CONFIG}
             onConfigChange={handlePanelConfigChange}
             onRecalculate={() => setPanelRevision((revision) => revision + 1)}
+            onAutoPlace={handleAutoPlaceSet}
+            onAutoPlaceAll={handleAutoPlaceAll}
+            onUndoLast={handleUndoLastPanel}
+            manualPlaceActive={manualPlaceActive}
+            onToggleManualPlace={() => setManualPlaceActive((v) => !v)}
+            manualPlacedCount={activeSet?.panels.length ?? 0}
+            onClearManual={() =>
+              setPanelSets((sets) => sets.map((s) => s.id !== activeSetId ? s : {
+                ...s, panels: [], userModified: true,
+              }))
+            }
             panelCount={panelCount}
             capacityKw={capacityKw}
-            warning={placement.reason}
+            warning={activeSet ? (placements[panelSets.indexOf(activeSet)]?.reason ?? null) : null}
+            energy={energy}
           />
         </>
       ) : (

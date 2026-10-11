@@ -25,7 +25,7 @@ import {
   type Obstacle,
   type Point2,
 } from "./obstacles";
-import { panelTypeDefinition, type PanelLayoutConfig } from "./panels";
+import { effectivePanelDims, type PanelLayoutConfig } from "./panels";
 
 /** Fixed clearance kept between panels and obstacle footprints, metres. */
 export const PANEL_OBSTACLE_CLEARANCE_M = 0.1;
@@ -108,9 +108,12 @@ export function placePanels(request: PlacementRequest): PlacementResult {
   }
 
   const terrace = request.terrace;
-  const type = panelTypeDefinition(config.panelTypeId);
-  const width = type.widthM;
-  const length = type.lengthM;
+  // Orientation-aware: portrait vs landscape swaps width/length, and custom
+  // module sizes override the catalogue. Both placement and rendering call
+  // effectivePanelDims so they can never disagree about the footprint.
+  const dims = effectivePanelDims(config);
+  const width = dims.widthM;
+  const length = dims.lengthM;
   const rotation = panelRotationForAzimuth(config.azimuthDeg);
   const rad = (rotation * Math.PI) / 180;
   const cos = Math.cos(rad);

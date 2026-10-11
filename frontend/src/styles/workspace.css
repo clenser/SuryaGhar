@@ -3670,3 +3670,109 @@
     padding-top: 0;
   }
 }
+
+/* ---------- M3: panel sets, set actions and hourly energy chart ---------- */
+.panel-set-list {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.panel-set-list .segmented__btn {
+  flex-direction: row;
+  justify-content: space-between;
+  text-align: left;
+  padding: var(--space-2);
+}
+
+/* Wrapping action row for the set-level controls (Add / Duplicate / Delete
+   and the auto-place actions), reusing the shared button + gap tokens. */
+.panel-set-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.panel-set-actions .btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* Hourly energy readout. */
+.panel-energy {
+  margin-top: var(--space-3);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-muted);
+}
+
+.panel-energy__summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  justify-content: space-between;
+}
+
+.panel-energy__summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.panel-energy__label {
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* Shaded vs unshaded paired bars: each hour gets a column with two stacked
+   fills, unshaded behind and shaded in front, so the visual gap IS the loss. */
+.panel-energy__chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  margin-top: var(--space-2);
+  min-height: 90px;
+}
+
+.panel-energy__bar {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.panel-energy__track {
+  position: relative;
+  width: 100%;
+  height: 64px;
+  border-radius: 3px;
+  background: var(--color-surface);
+  overflow: hidden;
+}
+
+.panel-energy__fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-radius: 3px;
+}
+
+.panel-energy__fill--unshaded {
+  background: var(--color-primary-soft, rgba(19, 168, 181, 0.35));
+}
+
+.panel-energy__fill--shaded {
+  background: var(--color-primary);
+}
+
+.panel-energy__tick {
+  font-size: 10px;
+  color: var(--color-text-faint);
+}

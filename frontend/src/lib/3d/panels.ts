@@ -80,6 +80,40 @@ export interface PanelLayoutConfig {
    * value lifts the array and lengthens every leg.
    */
   mountHeightM: number;
+  /**
+   * Physical mounting orientation of the module: `portrait` keeps the module's
+   * short side horizontal (upright), `landscape` swaps it. This is geometry,
+   * not the array's facing — azimuth and tilt stay independent (AGENTS.md §33).
+   */
+  orientation: PanelOrientation;
+  /**
+   * Custom module dimensions (metres). Null means "use the catalog entry for
+   * `panelTypeId`". Lets the user place a module that is not in the catalog
+   * without inventing a catalogue entry for it.
+   */
+  customWidthM: number | null;
+  customLengthM: number | null;
+}
+
+/** How the module's short/long sides map to the roof's X/Y axes. */
+export type PanelOrientation = "portrait" | "landscape";
+
+/**
+ * Effective module footprint in metres, resolving custom dimensions over the
+ * catalogue entry and swapping the sides for landscape mounting. Placement and
+ * rendering MUST both go through this so the form, the layout and the mesh
+ * never disagree about the panel's real size.
+ */
+export function effectivePanelDims(config: PanelLayoutConfig): { widthM: number; lengthM: number } {
+  const base = panelTypeDefinition(config.panelTypeId);
+  const rawWidth = config.customWidthM ?? base.widthM;
+  const rawLength = config.customLengthM ?? base.lengthM;
+  const width = Number.isFinite(rawWidth) && rawWidth > 0 ? rawWidth : base.widthM;
+  const length = Number.isFinite(rawLength) && rawLength > 0 ? rawLength : base.lengthM;
+  // Portrait = short side along X; landscape = long side along X.
+  return config.orientation === "landscape"
+    ? { widthM: Math.max(width, length), lengthM: Math.min(width, length) }
+    : { widthM: Math.min(width, length), lengthM: Math.max(width, length) };
 }
 
 /** Accepted ranges (validated before placement). */
@@ -98,6 +132,10 @@ export const PANEL_SETBACK_MAX_M = 5;
  */
 export const PANEL_MOUNT_HEIGHT_MIN_M = 0.02;
 export const PANEL_MOUNT_HEIGHT_MAX_M = 2;
+/** Smallest module side the UI accepts, metres (a real module is > 0.3 m). */
+export const PANEL_MIN_SIDE_M = 0.3;
+/** Largest module side the UI accepts, metres (roof-scale sanity limit). */
+export const PANEL_MAX_SIDE_M = 4;
 
 /** Defaults: south-facing, modest tilt, small gaps (India rooftop typical). */
 export const DEFAULT_PANEL_CONFIG: PanelLayoutConfig = {
@@ -110,6 +148,9 @@ export const DEFAULT_PANEL_CONFIG: PanelLayoutConfig = {
   // Matches the support stand-off the mesh builder uses by default, so the
   // default configuration renders predictably above the roof surface.
   mountHeightM: 0.4,
+  orientation: "portrait",
+  customWidthM: null,
+  customLengthM: null,
 };
 
 /** Clamp-free validation: returns a user-facing error or null. */
@@ -119,6 +160,9 @@ export function validatePanelConfig(config: PanelLayoutConfig): string | null {
   }
   if (!MOUNTING_TYPES.some((m) => m.type === config.mounting)) {
     return "Unknown mounting type";
+  }
+  if (config.orientation !== "portrait" && config.orientation !== "landscape") {
+    return "Unknown panel orientation";
   }
   const checks: Array<[number, string, number, number]> = [
     [config.tiltDeg, "Tilt", PANEL_TILT_MIN_DEG, PANEL_TILT_MAX_DEG],
@@ -130,6 +174,17 @@ export function validatePanelConfig(config: PanelLayoutConfig): string | null {
   for (const [value, label, min, max] of checks) {
     if (!Number.isFinite(value)) return `${label} must be a valid number`;
     if (value < min || value > max) return `${label} must be between ${min} and ${max}`;
+  }
+  // Custom dimensions are optional, but when present must be sane.
+  for (const [value, label] of [
+    [config.customWidthM, "Panel width"],
+    [config.customLengthM, "Panel length"],
+  ] as Array<[number | null, string]>) {
+    if (value === null || value === undefined) continue;
+    if (!Number.isFinite(value)) return `${label} must be a valid number`;
+    if (value < PANEL_MIN_SIDE_M || value > PANEL_MAX_SIDE_M) {
+      return `${label} must be between ${PANEL_MIN_SIDE_M} and ${PANEL_MAX_SIDE_M} m`;
+    }
   }
   return null;
 }
