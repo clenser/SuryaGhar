@@ -9,7 +9,22 @@
  * AGENTS.md §46: 44px touch targets on mobile.
  */
 
-import { MousePointer2, PenTool, Move, Trash2, Layers, RotateCcw, Eye, Box, Sun, TreePine } from "lucide-react";
+import { useState } from "react";
+import {
+  MousePointer2,
+  PenTool,
+  Move,
+  Trash2,
+  Layers,
+  RotateCcw,
+  Eye,
+  Box,
+  Sun,
+  TreePine,
+  ChevronLeft,
+  ChevronRight,
+  ArrowLeft,
+} from "lucide-react";
 import type { ObstacleType } from "../../lib/3d/obstacles";
 
 export type ViewportTool =
@@ -47,6 +62,8 @@ interface ViewportToolbarProps {
   onToggleSunPlay?: () => void;
   /** Whether the inspector is collapsed (mobile) */
   inspectorCollapsed?: boolean;
+  /** Exit 3D design mode and return to map */
+  onExitDesign?: () => void;
 }
 
 const TOOL_CONFIG: Record<Exclude<ViewportTool, "draw-obstacle">, { icon: React.ReactNode; label: string; title: string }> = {
@@ -81,7 +98,10 @@ export function ViewportToolbar({
   sunPlaying = false,
   onToggleSunPlay,
   inspectorCollapsed = false,
+  onExitDesign,
 }: ViewportToolbarProps) {
+  const [collapsed, setCollapsed] = useState(false);
+
   // Primary tools: always visible
   const primaryTools: ViewportTool[] = ["select", "move", "delete", "layers"];
 
@@ -200,35 +220,75 @@ export function ViewportToolbar({
   };
 
   return (
-    <div className="viewport-toolbar" role="toolbar" aria-label="Viewport tools">
-      <div className="viewport-toolbar__group" aria-label="Primary tools">
-        {primaryTools.map((tool) => renderToolButton(tool, activeTool === tool))}
+    <div
+      className={`viewport-toolbar${collapsed ? " is-collapsed" : ""}`}
+      role="toolbar"
+      aria-label="Viewport tools"
+    >
+      <button
+        type="button"
+        className="viewport-toolbar__toggle"
+        onClick={() => setCollapsed((v) => !v)}
+        title={collapsed ? "Expand toolbar" : "Collapse toolbar"}
+        aria-label={collapsed ? "Expand toolbar" : "Collapse toolbar"}
+        aria-expanded={!collapsed}
+        aria-controls="viewport-toolbar-track"
+      >
+        {collapsed ? <ChevronRight size={16} strokeWidth={2} /> : <ChevronLeft size={16} strokeWidth={2} />}
+      </button>
+
+      <div
+        id="viewport-toolbar-track"
+        className="viewport-toolbar__track"
+        {...(collapsed ? { inert: "" } : {})}
+      >
+        {onExitDesign && (
+          <>
+            <button
+              type="button"
+              className="viewport-tool viewport-tool--exit"
+              onClick={onExitDesign}
+              title="Back to map"
+              aria-label="Back to map"
+            >
+              <span className="viewport-tool__icon">
+                <ArrowLeft size={16} strokeWidth={2} />
+              </span>
+              <span className="viewport-tool__label">Back to map</span>
+            </button>
+            <div className="viewport-toolbar__divider" aria-hidden="true" />
+          </>
+        )}
+
+        <div className="viewport-toolbar__group" aria-label="Primary tools">
+          {primaryTools.map((tool) => renderToolButton(tool, activeTool === tool))}
+        </div>
+
+        <div className="viewport-toolbar__divider" aria-hidden="true" />
+
+        <div className="viewport-toolbar__group" aria-label="Mode tools">
+          {modeTools.map((tool) => renderToolButton(tool, activeTool === tool))}
+        </div>
+
+        <div className="viewport-toolbar__divider" aria-hidden="true" />
+
+        <div className="viewport-toolbar__group" aria-label="View tools">
+          {viewTools.map((tool) => renderToolButton(tool, activeTool === tool))}
+        </div>
+
+        {inspectorCollapsed && (
+          <button
+            type="button"
+            className="viewport-tool viewport-tool--inspector-toggle"
+            onClick={() => onToolChange("layers")}
+            title="Open inspector"
+            aria-label="Open inspector panel"
+          >
+            <Layers size={16} strokeWidth={2} />
+            <span className="viewport-tool__label">Inspector</span>
+          </button>
+        )}
       </div>
-
-      <div className="viewport-toolbar__divider" aria-hidden="true" />
-
-      <div className="viewport-toolbar__group" aria-label="Mode tools">
-        {modeTools.map((tool) => renderToolButton(tool, activeTool === tool))}
-      </div>
-
-      <div className="viewport-toolbar__divider" aria-hidden="true" />
-
-      <div className="viewport-toolbar__group" aria-label="View tools">
-        {viewTools.map((tool) => renderToolButton(tool, activeTool === tool))}
-      </div>
-
-      {inspectorCollapsed && (
-        <button
-          type="button"
-          className="viewport-tool viewport-tool--inspector-toggle"
-          onClick={() => onToolChange("layers")}
-          title="Open inspector"
-          aria-label="Open inspector panel"
-        >
-          <Layers size={16} strokeWidth={2} />
-          <span className="viewport-tool__label">Inspector</span>
-        </button>
-      )}
     </div>
   );
 }

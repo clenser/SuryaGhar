@@ -831,3 +831,37 @@ describe("Site3DViewer footprint overlay lifecycle", () => {
     expect(overlayGroup()).toBeUndefined();
   });
 });
+
+describe("Site3DViewer weather presets and rain simulation", () => {
+  beforeEach(() => {
+    installAnimationFrame();
+    stubWebGL(true);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    HTMLCanvasElement.prototype.getContext = originalGetContext;
+    rafTimers.clear();
+    vi.useRealTimers();
+  });
+
+  it("spawns LineSegments rain streaks when weatherPreset is rainy and disposes them when returning to sunny", () => {
+    const { rerender } = render(
+      <Site3DViewer localCoords={MOCK_LOCAL_COORDS} weatherPreset="rainy" />,
+    );
+    stepFrames(1);
+
+    expect(capture.lastScene).not.toBeNull();
+    const rain = capture.lastScene!.getObjectByName("RainStreaks") as THREE.LineSegments | undefined;
+    expect(rain).toBeDefined();
+    expect(rain?.isLineSegments).toBe(true);
+    expect((rain?.material as THREE.LineBasicMaterial).transparent).toBe(true);
+
+    // Switching to sunny disposes and removes the rain streaks
+    rerender(<Site3DViewer localCoords={MOCK_LOCAL_COORDS} weatherPreset="sunny" />);
+    stepFrames(1);
+
+    const disposedRain = capture.lastScene!.getObjectByName("RainStreaks");
+    expect(disposedRain).toBeUndefined();
+  });
+});

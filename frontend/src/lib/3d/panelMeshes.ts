@@ -30,6 +30,8 @@ const GLASS_COLOR = 0x0b1522;
 const GRID_COLOR = 0x1d3050;
 /** Mounting rails / legs / wedges. */
 const SUPPORT_COLOR = 0x8f97a3;
+/** Galvanized structural steel footings / base plates & channel rails. */
+const FOOTING_COLOR = 0x606770;
 
 /**
  * Part colours, exported so tests can tell which merged vertices belong to the
@@ -248,7 +250,19 @@ export function createPanelUnitGeometry(
     };
     const legXs = spanX(legCols);
     const legYs = spanY(legRows);
+    const basePlateSize = 0.14; // 14cm x 14cm footing to eliminate floating look & anchor shadows
+    const basePlateThickness = 0.012; // 12mm structural footing plate
+
     for (const sx of legXs) {
+      // Connect front and back legs along Y with a bottom channel rail resting on footings
+      if (legYs.length >= 2) {
+        const yStart = cos * legYs[0] - sin * (t / 2);
+        const yEnd = cos * legYs[legYs.length - 1] - sin * (t / 2);
+        const railCenterY = (yStart + yEnd) / 2;
+        const railLen = Math.abs(yEnd - yStart);
+        parts.push(box(0.04, railLen, 0.025, sx, railCenterY, ROOF_STANDOFF_M + basePlateThickness + 0.0125, FOOTING_COLOR));
+      }
+
       for (const sy of legYs) {
         // The support grid is laid out in the panel's OWN frame, and the tilt
         // rotates that frame about X, so a support at local (sx, sy) stands
@@ -258,6 +272,10 @@ export function createPanelUnitGeometry(
         // hold nothing and read as detached struts: at 15 deg the panel still
         // covers them, at 45 deg they stand ~16 cm beyond its edge.
         const legY = cos * sy - sin * (t / 2);
+        // Base plate (footing) resting on the roof plane
+        parts.push(
+          box(basePlateSize, basePlateSize, basePlateThickness, sx, legY, ROOF_STANDOFF_M + basePlateThickness / 2, FOOTING_COLOR),
+        );
         // Height of the panel underside above that support point. The plate is
         // a plane, so every leg is a different length; the overlap keeps the
         // joint welded (no gap, and no coplanar z-fighting where they meet).

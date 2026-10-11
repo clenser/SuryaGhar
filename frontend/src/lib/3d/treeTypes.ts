@@ -145,16 +145,16 @@ export function treeFootprint(tree: Tree): Point2[] {
     const rotated = rotateOffsets(tree.polygon, tree.rotation);
     return rotated.map((p) => ({ x: tree.position.x + p.x, y: tree.position.y + p.y }));
   }
-  // Rectangular footprint: canopyWidth is the X extent at rotation 0.
+  // Rectangular footprint: canopyWidth is the extent at rotation 0.
   const radians = (tree.rotation * Math.PI) / 180;
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
   const halfW = tree.canopyWidth / 2;
   const corners: Array<[number, number]> = [
-    [-halfW, -tree.height * 0.6],
-    [halfW, -tree.height * 0.6],
-    [halfW, tree.height * 0.8],
-    [-halfW, tree.height * 0.8],
+    [-halfW, -halfW],
+    [halfW, -halfW],
+    [halfW, halfW],
+    [-halfW, halfW],
   ];
   return corners.map(([cx, cy]) => ({
     x: tree.position.x + cx * cos - cy * sin,
@@ -288,10 +288,10 @@ export function validateTree(
     return { valid: false, error: `Canopy width must be between ${MIN_TREE_CANOPY_WIDTH_M} m and ${MAX_TREE_CANOPY_WIDTH_M} m` };
   }
 
-  // 3. Footprint fully inside the terrace
+  // 3. Tree must be placed on the ground outside the building footprint
   const footprint = treeFootprint(tree);
-  if (!footprintInsidePolygon(footprint, terrace)) {
-    return { valid: false, error: "Tree footprint extends beyond the rooftop boundary" };
+  if (pointInPolygon(tree.position, terrace) || polygonsOverlap(footprint, terrace)) {
+    return { valid: false, error: "Tree must be placed on the ground outside the building footprint" };
   }
 
   // 4. No overlap with other trees

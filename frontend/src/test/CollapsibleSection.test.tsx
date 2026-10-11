@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CollapsibleSection } from "../components/3d/CollapsibleSection";
 import { ModelPanel } from "../components/analysis/ModelPanel";
@@ -112,12 +112,14 @@ describe("ModelPanel default-collapsed inspector sections", () => {
     HTMLCanvasElement.prototype.getContext = originalGetContext;
   });
 
-  it("renders all 7 inspector sections collapsed by default in design mode", () => {
+  it("renders all 6 inspector sections collapsed by default in design mode", () => {
     const { container } = render(
       <ModelPanel
         vertices={TERRACE}
         metrics={METRICS}
         buildingHeight={15}
+        onSetHeight={vi.fn()}
+        onContinue={vi.fn()}
         designMode={true}
         backendReady={true}
       />,
@@ -129,8 +131,7 @@ describe("ModelPanel default-collapsed inspector sections", () => {
       "sun",
       "weather",
       "obstacles",
-      "panel-sets",
-      "panel-config",
+      "solar-design",
     ];
 
     sectionIds.forEach((id) => {
@@ -151,6 +152,8 @@ describe("ModelPanel default-collapsed inspector sections", () => {
         vertices={TERRACE}
         metrics={METRICS}
         buildingHeight={15}
+        onSetHeight={vi.fn()}
+        onContinue={vi.fn()}
         designMode={true}
         backendReady={true}
       />,
@@ -179,6 +182,8 @@ describe("ModelPanel default-collapsed inspector sections", () => {
         vertices={TERRACE}
         metrics={METRICS}
         buildingHeight={15}
+        onSetHeight={vi.fn()}
+        onContinue={vi.fn()}
         designMode={true}
         backendReady={true}
       />,

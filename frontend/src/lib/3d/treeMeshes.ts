@@ -18,42 +18,123 @@ import {
   MIN_TREE_CANOPY_WIDTH_M,
 } from "./treeTypes";
 
-/** Palette follows the Surya-Ghar navy/teal tokens (no new hues). */
-export const TREE_COLORS: Record<TreeType, number> = {
-  broadleaf: 0x6b5b25, // warm brown-trunk / muted-green-foliage
-  conifer: 0x2d5a27, // dark trunk / deep-green foliage
-  "small-ornamental": 0x5a3b1e, // slender trunk / autumn-foliage
+/** Palette follows natural foliage and bark tones. */
+export const TREE_COLORS: Record<TreeType, { trunk: number; foliage: number }> = {
+  broadleaf: { trunk: 0x5a3d28, foliage: 0x2e6b38 }, // Warm bark / lush broadleaf green
+  conifer: { trunk: 0x4a3320, foliage: 0x1b4324 }, // Dark pine trunk / deep evergreen
+  "small-ornamental": { trunk: 0x6b4c35, foliage: 0x639b38 }, // Slender trunk / fresh olive-spring green
 };
 
 /** Emissive highlight used for the selected tree (matches teal selection). */
 export const TREE_SELECTED_EMISSIVE = 0x13a8b5;
 
-/** Build one tree mesh. */
-export function createTreeMesh(tree: Tree, buildingHeight: number): THREE.Mesh {
+/** Build one tree mesh group resting on the ground plane (Z = 0). */
+export function createTreeMesh(tree: Tree, _buildingHeight = 0): THREE.Group {
   const height = Math.max(tree.height, MIN_TREE_HEIGHT_M);
   const canopyWidth = Math.max(tree.canopyWidth, MIN_TREE_CANOPY_WIDTH_M);
+  const colors = TREE_COLORS[tree.type] ?? TREE_COLORS.broadleaf;
 
-  // Simple conical tree: foliage cone sitting on the roof plane
-  const treeCone = new THREE.Mesh(
-    new THREE.ConeGeometry(canopyWidth, height, 16),
-    new THREE.MeshStandardMaterial({
-      color: TREE_COLORS[tree.type] ?? TREE_COLORS["small-ornamental"],
-      roughness: 0.7,
-      metalness: 0.1,
-    }),
+  const group = new THREE.Group();
+  group.name = `Tree:${tree.id}`;
+  group.position.set(tree.position.x, tree.position.y, 0); // Ground plane Z = 0
+  group.rotation.z = (tree.rotation * Math.PI) / 180;
+  group.userData.treeId = tree.id;
+  group.userData.treeType = tree.type;
+
+  // 1. Trunk (resting on ground Z = 0)
+  const trunkRadius = Math.max(
+    0.08,
+    tree.type === "broadleaf" ? 0.26 : tree.type === "conifer" ? 0.2 : 0.12,
   );
+  const trunkHeight =
+    tree.type === "broadleaf"
+      ? height * 0.35
+      : tree.type === "conifer"
+        ? height * 0.2
+        : height * 0.4;
 
-  // ConeGeometry has apex at top, base at bottom at z=0.
-  // Position base at buildingHeight.
-  treeCone.position.set(tree.position.x, tree.position.y, buildingHeight + height / 2);
-  treeCone.rotation.z = (tree.rotation * Math.PI) / 180;
-  treeCone.name = `Tree:${tree.id}`;
-  treeCone.castShadow = true;
-  treeCone.receiveShadow = true;
-  treeCone.userData.treeId = tree.id;
-  treeCone.userData.treeType = tree.type;
+  const trunkGeom = new THREE.CylinderGeometry(trunkRadius * 0.85, trunkRadius, trunkHeight, 8);
+  trunkGeom.rotateX(Math.PI / 2); // Orient along Z-up
+  trunkGeom.translate(0, 0, trunkHeight / 2); // Base at Z = 0, top at Z = trunkHeight
 
-  return treeCone;
+  const trunkMat = new THREE.MeshStandardMaterial({
+    color: colors.trunk,
+    roughness: 0.9,
+    metalness: 0.05,
+  });
+
+  const trunkMesh = new THREE.Mesh(trunkGeom, trunkMat);
+  trunkMesh.name = `TreeTrunk:${tree.id}`;
+  trunkMesh.castShadow = true;
+  trunkMesh.receiveShadow = true;
+  trunkMesh.userData.treeId = tree.id;
+  group.add(trunkMesh);
+
+  // 2. Distinct foliage variant
+  if (tree.type === "broadleaf") {
+    // Broadleaf: rounded dome canopy
+    const canopyRadius = canopyWidth / 2;
+    const canopyZ = trunkHeight + canopyRadius * 0.75;
+    const foliageGeom = new THREE.DodecahedronGeometry(canopyRadius, 1);
+    const foliageMat = new THREE.MeshStandardMaterial({
+      color: colors.foliage,
+      roughness: 0.8,
+      metalness: 0.05,
+    });
+    const foliageMesh = new THREE.Mesh(foliageGeom, foliageMat);
+    foliageMesh.name = `TreeFoliage:${tree.id}`;
+    foliageMesh.position.set(0, 0, canopyZ);
+    foliageMesh.scale.set(1, 1, 0.9);
+    foliageMesh.castShadow = true;
+    foliageMesh.receiveShadow = true;
+    foliageMesh.userData.treeId = tree.id;
+    group.add(foliageMesh);
+  } else if (tree.type === "conifer") {
+    // Conifer: 3 tiered evergreen cones
+    const foliageMat = new THREE.MeshStandardMaterial({
+      color: colors.foliage,
+      roughness: 0.75,
+      metalness: 0.05,
+    });
+
+    const tiers = [
+      { r: canopyWidth * 0.5, h: height * 0.45, baseZ: trunkHeight * 0.75 },
+      { r: canopyWidth * 0.38, h: height * 0.4, baseZ: trunkHeight + height * 0.22 },
+      { r: canopyWidth * 0.25, h: height * 0.35, baseZ: trunkHeight + height * 0.45 },
+    ];
+
+    tiers.forEach((tier, i) => {
+      const coneGeom = new THREE.ConeGeometry(tier.r, tier.h, 10);
+      coneGeom.rotateX(Math.PI / 2); // Orient along Z-up
+      coneGeom.translate(0, 0, tier.h / 2);
+      const coneMesh = new THREE.Mesh(coneGeom, foliageMat);
+      coneMesh.name = `TreeCone:${tree.id}:${i}`;
+      coneMesh.position.set(0, 0, tier.baseZ);
+      coneMesh.castShadow = true;
+      coneMesh.receiveShadow = true;
+      coneMesh.userData.treeId = tree.id;
+      group.add(coneMesh);
+    });
+  } else {
+    // Small Ornamental: spreading umbrella / ellipsoidal canopy
+    const canopyRadius = canopyWidth / 2;
+    const canopyGeom = new THREE.SphereGeometry(canopyRadius, 10, 8);
+    const foliageMat = new THREE.MeshStandardMaterial({
+      color: colors.foliage,
+      roughness: 0.8,
+      metalness: 0.05,
+    });
+    const foliageMesh = new THREE.Mesh(canopyGeom, foliageMat);
+    foliageMesh.name = `TreeFoliage:${tree.id}`;
+    foliageMesh.position.set(0, 0, trunkHeight + canopyRadius * 0.4);
+    foliageMesh.scale.set(1, 1, 0.55); // Spreading horizontal profile
+    foliageMesh.castShadow = true;
+    foliageMesh.receiveShadow = true;
+    foliageMesh.userData.treeId = tree.id;
+    group.add(foliageMesh);
+  }
+
+  return group;
 }
 
 /**
@@ -62,28 +143,20 @@ export function createTreeMesh(tree: Tree, buildingHeight: number): THREE.Mesh {
  */
 export function createTreeGroup(
   trees: Tree[],
-  buildingHeight: number,
+  buildingHeight = 0,
   options: { selectedId?: string | null } = {},
 ): THREE.Group {
   const group = new THREE.Group();
   group.name = "Trees";
 
   for (const tree of trees) {
-    const mesh = createTreeMesh(tree, buildingHeight);
-    group.add(mesh);
+    const treeObj = createTreeMesh(tree, buildingHeight);
+    group.add(treeObj);
   }
 
   // Apply selection highlighting
   if (options.selectedId) {
-    for (const child of group.children) {
-      const mesh = child as THREE.Mesh;
-      if (!mesh.isMesh) continue;
-      const material = mesh.material as THREE.MeshStandardMaterial;
-      if (!material) continue;
-      const selected = mesh.userData.treeId === options.selectedId;
-      material.emissive.setHex(selected ? TREE_SELECTED_EMISSIVE : 0x000000);
-      material.emissiveIntensity = selected ? 0.55 : 1;
-    }
+    applyTreeSelection(group, options.selectedId);
   }
 
   return group;
@@ -111,13 +184,14 @@ export function disposeTreeGroup(root: THREE.Object3D): void {
 
 /** Highlight the selected tree (emissive) and reset all others. */
 export function applyTreeSelection(group: THREE.Object3D, selectedId: string | null): void {
-  for (const child of group.children) {
-    const mesh = child as THREE.Mesh;
-    if (!mesh.isMesh) continue;
+  group.traverse((object) => {
+    const mesh = object as THREE.Mesh;
+    if (!mesh.isMesh) return;
     const material = mesh.material as THREE.MeshStandardMaterial;
-    if (!material) continue;
-    const selected = selectedId !== null && mesh.userData.treeId === selectedId;
+    if (!material || !material.emissive) return;
+    const treeId = (mesh.userData.treeId ?? mesh.parent?.userData.treeId) as string | undefined;
+    const selected = selectedId !== null && treeId === selectedId;
     material.emissive.setHex(selected ? TREE_SELECTED_EMISSIVE : 0x000000);
     material.emissiveIntensity = selected ? 0.55 : 1;
-  }
+  });
 }

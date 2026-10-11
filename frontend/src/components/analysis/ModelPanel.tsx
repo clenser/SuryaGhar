@@ -15,7 +15,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { RotateCcw, ArrowRight, Plus, Pencil, Trash2, AlertTriangle, Sun, Box, TreePine, Eye, Settings2, Moon } from "lucide-react";
+import { RotateCcw, ArrowRight, Plus, Pencil, Trash2, AlertTriangle, Sun, TreePine, Eye, Moon, Grid3x3 } from "lucide-react";
 import { BACKEND_WAITING_LABEL } from "../../hooks/useBackendStatus";
 import type { LngLat, PolygonMetrics } from "../../lib/geo";
 import { formatArea } from "../../lib/geo";
@@ -50,9 +50,20 @@ import {
 } from "../../lib/3d/obstacles";
 import {
   type Tree,
+  type TreeDraft,
+  type TreeType,
+  createTreeId,
+  draftToTree,
+  emptyTreeDraft,
+  formatTreeDimensions,
+  treeToDraft,
+  treeTypeDefinition,
+  treeTypeLabel,
+  validateTree,
 } from "../../lib/3d/treeTypes";
 import { Site3DViewer, type Site3DViewerHandle } from "../3d/Site3DViewer";
 import { ObstacleEditor } from "../3d/ObstacleEditor";
+import { TreeEditor } from "../3d/TreeEditor";
 import { SunControls } from "../3d/SunControls";
 import { SolarPanelSection } from "../3d/SolarPanelSection";
 import { ViewportToolbar, type ViewportTool } from "../3d/ViewportToolbar";
@@ -185,14 +196,17 @@ export function ModelPanel({
   /** Weather preset controlling visual lighting only (does not affect energy). */
   const [weatherPreset, setWeatherPreset] = useState<"sunny" | "cloudy" | "rainy">("sunny");
   /**
-   * Trees from application state (metres). Re-rendered whenever this array
+   * Ground-based trees from application state (metres). Re-rendered whenever this array
    * changes — Three.js never becomes the source of truth.
    */
-  const [trees] = useState<Tree[]>([]);
+  const [trees, setTrees] = useState<Tree[]>([]);
   /**
    * Tree currently highlighted in the viewport for selection.
    */
-  const [selectedTreeId] = useState<string | null>(null);
+  const [selectedTreeId, setSelectedTreeId] = useState<string | null>(null);
+  const [treeMode, setTreeMode] = useState<"idle" | "adding" | "editing">("idle");
+  const [treeDraft, setTreeDraft] = useState<TreeDraft>(() => emptyTreeDraft("broadleaf"));
+  const [treeSubmitted, setTreeSubmitted] = useState(false);
   /**
    * Manual-placement mode. While on, a roof click places a panel (validated by
    * the shared validator) instead of being read as an obstacle pick. Turned
@@ -825,6 +839,11 @@ export function ModelPanel({
     return validateObstacle(candidate, { terrace: terraceRing, others, parapetInsetM, parapetContactM });
   }, [obstacleDraft, selectedObstacleId, obstacles, obstacleMode, terraceRing, parapetInsetM]);
 
+  const treeValidationResult = useMemo(() => {
+    const candidate = draftToTree(treeDraft, selectedTreeId ?? "draft");
+    return validateTree(candidate, terraceRing, trees);
+  }, [treeDraft, terraceRing, trees, selectedTreeId]);
+
   // Live ghost for the drawn footprint: placed before the no-height early
   // return so hooks run in identical order on every render.
   const drawnTemp = useMemo(() => {
@@ -923,6 +942,63 @@ export function ModelPanel({
   const handleDeleteObstacle = (id: string) => {
     onRemoveObstacle?.(id);
     if (selectedObstacleId === id || obstacleMode !== "idle") closeObstacleEditor();
+  };
+
+  const startAddTree = () => {
+    // Default position placed outside the building footprint
+    const maxVertexX = terraceRing.reduce((m: number, v: Point2) => Math.max(m, v.x), 5);
+    const draft = emptyTreeDraft("broadleaf");
+    draft.x = String(Math.round(maxVertexX + 5));
+    draft.y = "0";
+    setTreeDraft(draft);
+    setTreeMode("adding");
+    setTreeSubmitted(false);
+    setSelectedTreeId(null);
+  };
+
+  const startEditTree = (tree: Tree) => {
+    setTreeDraft(treeToDraft(tree));
+    setSelectedTreeId(tree.id);
+    setTreeMode("editing");
+    setTreeSubmitted(false);
+  };
+
+  const closeTreeEditor = () => {
+    setTreeMode("idle");
+    setTreeSubmitted(false);
+  };
+
+  const handleTreeTypeChange = (type: TreeType) => {
+    const preset = treeTypeDefinition(type);
+    setTreeDraft((d) => ({
+      ...d,
+      type,
+      height: String(preset.defaultHeight),
+      canopyWidth: String(preset.defaultCanopyWidth),
+    }));
+  };
+
+  const handleTreeSubmit = () => {
+    setTreeSubmitted(true);
+    const treeId = treeMode === "editing" && selectedTreeId ? selectedTreeId : createTreeId();
+    const candidate = draftToTree(treeDraft, treeId);
+    const result = validateTree(candidate, terraceRing, trees);
+    if (!result.valid) return;
+
+    if (treeMode === "adding") {
+      setTrees((list) => [...list, candidate]);
+    } else {
+      setTrees((list) => list.map((t) => (t.id === treeId ? candidate : t)));
+    }
+    setSelectedTreeId(candidate.id);
+    setTreeMode("idle");
+    setTreeSubmitted(false);
+  };
+
+  const handleDeleteTree = (id: string) => {
+    setTrees((list) => list.filter((t) => t.id !== id));
+    if (selectedTreeId === id) setSelectedTreeId(null);
+    if (treeMode === "editing") setTreeMode("idle");
   };
 
 
@@ -1081,6 +1157,7 @@ export function ModelPanel({
           weatherPreset={weatherPreset}
           trees={trees}
           selectedTreeId={selectedTreeId}
+          onTreeSelect={setSelectedTreeId}
           className="model-viewport"
         />
         {/* Viewport Toolbar - floating contextual tools anchored to viewport */}
@@ -1097,6 +1174,7 @@ export function ModelPanel({
             sunPlaying={sun.playing}
             onToggleSunPlay={sun.togglePlay}
             inspectorCollapsed={inspectorCollapsed}
+            onExitDesign={onExitDesign}
           />
         )}
       </div>
@@ -1113,20 +1191,16 @@ export function ModelPanel({
               : "Drag to rotate. Scroll or pinch to zoom. Click an obstacle to select it."}
           </span>
         </p>
-        <div className="viewer-actions">
-          <button
-            type="button"
-            className="btn"
-            onClick={() => viewerRef.current?.resetCamera()}
-            title="Return to the default 3D view"
-          >
-            Reset view
-          </button>
-          {designMode ? (
-            <button type="button" className="btn" onClick={onExitDesign} title="Return to the full-map workspace">
-              Back to map
+        {!designMode && (
+          <div className="viewer-actions">
+            <button
+              type="button"
+              className="btn"
+              onClick={() => viewerRef.current?.resetCamera()}
+              title="Return to the default 3D view"
+            >
+              Reset view
             </button>
-          ) : (
             <button
               type="button"
               className="btn btn--primary"
@@ -1135,17 +1209,17 @@ export function ModelPanel({
             >
               Open 3D design view
             </button>
-          )}
-          <button
-            type="button"
-            className="btn"
-            onClick={() => setXray((v) => !v)}
-            aria-pressed={xray}
-            title="Fade the building shell to inspect the roof boundary against interior structures"
-          >
-            {xray ? "Solid view" : "X-ray"}
-          </button>
-        </div>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setXray((v) => !v)}
+              aria-pressed={xray}
+              title="Fade the building shell to inspect the roof boundary against interior structures"
+            >
+              {xray ? "Solid view" : "X-ray"}
+            </button>
+          </div>
+        )}
       </div>
 
         </div>
@@ -1493,16 +1567,81 @@ export function ModelPanel({
                 })}
               </ul>
             )}
+
+            {/* Ground Trees */}
+            <div className="viewport-toolbar__divider" style={{ width: "100%", height: "1px", margin: "var(--space-3) 0" }} />
+
+            <div className="obstacle-toolbar">
+              <div className="obstacle-toolbar__labels">
+                <h3 className="obstacle-section__title">Ground trees</h3>
+                <p className="obstacle-count">
+                  {trees.length === 0 ? "No trees around the building yet" : `${trees.length} tree${trees.length === 1 ? "" : "s"} on the ground`}
+                </p>
+              </div>
+              {treeMode === "idle" && (
+                <button type="button" className="btn btn--secondary" onClick={startAddTree}>
+                  <Plus size={15} strokeWidth={2} aria-hidden="true" /> Add tree
+                </button>
+              )}
+            </div>
+
+            {treeMode !== "idle" && (
+              <TreeEditor
+                mode={treeMode}
+                draft={treeDraft}
+                error={treeSubmitted && !treeValidationResult.valid ? treeValidationResult.error : null}
+                onDraftChange={setTreeDraft}
+                onTypeChange={handleTreeTypeChange}
+                onSubmit={handleTreeSubmit}
+                onCancel={closeTreeEditor}
+              />
+            )}
+
+            {trees.length > 0 && (
+              <ul className="obstacle-list">
+                {trees.map((tree) => {
+                  const label = treeTypeLabel(tree.type);
+                  return (
+                    <li
+                      key={tree.id}
+                      className={`obstacle-item${selectedTreeId === tree.id ? " is-selected" : ""}`}
+                    >
+                      <div className="obstacle-item__body">
+                        <span className="obstacle-item__name">{label}</span>
+                        <span className="obstacle-item__meta">
+                          {formatTreeDimensions(tree)} · {tree.rotation}° · E {tree.position.x.toFixed(1)} · N {tree.position.y.toFixed(1)}
+                        </span>
+                      </div>
+                      <div className="obstacle-item__actions">
+                        <button
+                          type="button"
+                          className="btn btn--subtle"
+                          onClick={() => startEditTree(tree)}
+                        >
+                          <Pencil size={14} strokeWidth={1.75} aria-hidden="true" /> Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn--subtle-danger"
+                          onClick={() => handleDeleteTree(tree.id)}
+                          aria-label={`Delete ${label}`}
+                        >
+                          <Trash2 size={14} strokeWidth={1.75} aria-hidden="true" /> Delete
+                        </button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </CollapsibleSection>
 
-          
-
-          {/* Panel Sets */}
+          {/* Solar Panel Design */}
           <CollapsibleSection
-            id="panel-sets"
-            title="Panel Sets"
+            id="solar-design"
+            title="Solar Panel Design"
             defaultOpen={false}
-            icon={<Settings2 size={14} strokeWidth={1.75} aria-hidden="true" />}
+            icon={<Grid3x3 size={14} strokeWidth={1.75} aria-hidden="true" />}
           >
             {panelsEnabled ? (
               <>
@@ -1512,7 +1651,7 @@ export function ModelPanel({
                   </button>
                 </div>
                 <SolarPanelSection
-                  displayMode="sets"
+                  displayMode="all"
                   sets={panelSets}
                   activeSetId={activeSetId}
                   onSelectSet={setActiveSetId}
@@ -1549,6 +1688,7 @@ export function ModelPanel({
                   panelCount={panelCount}
                   capacityKw={capacityKw}
                   warning={placeWarning ?? (activeSet ? (placements[panelSets.indexOf(activeSet)]?.reason ?? null) : null)}
+                  energy={energy}
                 />
               </>
             ) : (
@@ -1568,33 +1708,6 @@ export function ModelPanel({
                   </button>
                 </div>
               </div>
-            )}
-          </CollapsibleSection>
-
-          {/* Panel Configuration */}
-          <CollapsibleSection
-            id="panel-config"
-            title="Panel Configuration"
-            defaultOpen={false}
-            icon={<Box size={14} strokeWidth={1.75} aria-hidden="true" />}
-          >
-            {panelsEnabled ? (
-              <SolarPanelSection
-                displayMode="config"
-                sets={panelSets}
-                activeSetId={activeSetId}
-                config={activeSet?.config ?? DEFAULT_PANEL_CONFIG}
-                onConfigChange={handlePanelConfigChange}
-                onRecalculate={handleRecalculate}
-                panelCount={panelCount}
-                capacityKw={capacityKw}
-                warning={null}
-                energy={energy}
-              />
-            ) : (
-              <p className="panel-group__hint">
-                Enable solar panels in Panel Sets to configure module rating, mounting, orientation, and spacing.
-              </p>
             )}
           </CollapsibleSection>
 

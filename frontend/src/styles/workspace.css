@@ -3859,14 +3859,70 @@
   display: flex;
   align-items: center;
   gap: var(--space-1);
-  padding: var(--space-1) var(--space-2);
+  padding: var(--space-1);
   background: var(--color-map-chrome);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-float);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  flex-wrap: wrap;
+  overflow: hidden;
+  transition: width 200ms ease, max-width 200ms ease, padding 200ms ease;
+}
+
+.viewport-toolbar__toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard);
+}
+
+.viewport-toolbar__toggle:hover {
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+  border-color: var(--color-border);
+}
+
+.viewport-toolbar__toggle:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.viewport-toolbar__track {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  overflow: hidden;
+  white-space: nowrap;
+  max-width: 900px;
+  opacity: 1;
+  transform: translateX(0);
+  transition: max-width 220ms ease, opacity 200ms ease, transform 200ms ease, visibility 200ms;
+}
+
+.viewport-toolbar.is-collapsed .viewport-toolbar__track {
+  max-width: 0;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateX(-8px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .viewport-toolbar,
+  .viewport-toolbar__track {
+    transition: none !important;
+  }
 }
 
 .viewport-toolbar__group {
@@ -3950,6 +4006,19 @@
 .viewport-tool--inspector-toggle:hover:not(:disabled) {
   background: var(--color-primary);
   color: #ffffff;
+}
+
+.viewport-tool--exit {
+  background: var(--color-surface-muted);
+  border-color: var(--color-border);
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.viewport-tool--exit:hover:not(:disabled) {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
 }
 
 /* ---------- Collapsible Section (M3.5) ----------

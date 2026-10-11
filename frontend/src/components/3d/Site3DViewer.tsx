@@ -193,6 +193,8 @@ export interface Site3DViewerProps {
   /**
    * Tree currently highlighted in the viewport */
   selectedTreeId?: string | null;
+  /** Click-to-select: fires with the tree id, or null when empty space is clicked */
+  onTreeSelect?: (id: string | null) => void;
   /**
    * Geographic anchor for the satellite ground texture: the WGS84 terrace
    * ring plus the UTM centroid the local frame was built against. Without
@@ -243,6 +245,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       style,
       trees = [],
       selectedTreeId = null,
+      onTreeSelect,
       weatherPreset = "sunny",
     },
     ref,
@@ -276,13 +279,15 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
     const buildingBoxRef = useRef<THREE.Box3>(new THREE.Box3());
     /** Teardown for the Ctrl+left-drag pan wrapper, or null before init. */
     const ctrlPanCleanupRef = useRef<(() => void) | null>(null);
-    /** Lightweight rain particles in Rainy preset. */
+    /** Falling rain streaks in Rainy preset. */
     const rainRef = useRef<{
-      points: THREE.Points;
+      lines: THREE.LineSegments;
       geom: THREE.BufferGeometry;
-      mat: THREE.PointsMaterial;
+      mat: THREE.LineBasicMaterial;
       positions: Float32Array;
       maxHeight: number;
+      dropCount: number;
+      streakLength: number;
     } | null>(null);
     const weatherPresetRef = useRef<WeatherPreset>(weatherPreset);
     weatherPresetRef.current = weatherPreset;
@@ -296,6 +301,8 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
     onReadyRef.current = onReady;
     const onObstacleSelectRef = useRef(onObstacleSelect);
     onObstacleSelectRef.current = onObstacleSelect;
+    const onTreeSelectRef = useRef(onTreeSelect);
+    onTreeSelectRef.current = onTreeSelect;
     const obstacleDragEnabledRef = useRef(obstacleDragEnabled);
     obstacleDragEnabledRef.current = obstacleDragEnabled;
     const onObstacleDragMoveRef = useRef(onObstacleDragMove);
@@ -417,7 +424,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         panelGroupRef.current = [];
         disposeTexturedGround();
         if (rainRef.current) {
-          sceneRef.current?.remove(rainRef.current.points);
+          sceneRef.current?.remove(rainRef.current.lines);
           rainRef.current.geom.dispose();
           rainRef.current.mat.dispose();
           rainRef.current = null;
@@ -681,14 +688,14 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       applyTreeSelection(treeGroupRef.current, selectedTreeId);
     }, [selectedTreeId, trees, isInitialized]);
 
-    // Lightweight rain particle visualization in Rainy preset.
+    // Falling rain streaks visualization in Rainy preset.
     useEffect(() => {
       if (!isInitialized || !sceneRef.current) return;
       const scene = sceneRef.current;
 
       if (weatherPreset !== "rainy") {
         if (rainRef.current) {
-          scene.remove(rainRef.current.points);
+          scene.remove(rainRef.current.lines);
           rainRef.current.geom.dispose();
           rainRef.current.mat.dispose();
           rainRef.current = null;
@@ -697,42 +704,50 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         return;
       }
 
-      // 400 rain particles around building bounds
-      const dropCount = 400;
+      // Rain streaks around building bounds
+      const dropCount = 500;
+      const streakLength = 0.6; // ~60cm streak length
       const maxCoord = localCoords.vertices.reduce((m, v) => Math.max(m, Math.abs(v.x), Math.abs(v.y)), 15);
       const span = Math.max(60, maxCoord * 3);
       const maxHeight = Math.max(35, localCoords.height + 25);
-      const positions = new Float32Array(dropCount * 3);
+      const positions = new Float32Array(dropCount * 2 * 3);
 
       for (let i = 0; i < dropCount; i++) {
-        positions[i * 3] = (Math.random() - 0.5) * span;
-        positions[i * 3 + 1] = (Math.random() - 0.5) * span;
-        positions[i * 3 + 2] = Math.random() * maxHeight;
+        const x = (Math.random() - 0.5) * span;
+        const y = (Math.random() - 0.5) * span;
+        const z = Math.random() * maxHeight;
+        // Top vertex of streak
+        positions[i * 6 + 0] = x;
+        positions[i * 6 + 1] = y;
+        positions[i * 6 + 2] = z;
+        // Bottom vertex of streak (pointing downward along -Z)
+        positions[i * 6 + 3] = x;
+        positions[i * 6 + 4] = y;
+        positions[i * 6 + 5] = z - streakLength;
       }
 
       const geom = new THREE.BufferGeometry();
       geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
 
-      const mat = new THREE.PointsMaterial({
+      const mat = new THREE.LineBasicMaterial({
         color: 0x9bc4e2,
-        size: 0.6,
         transparent: true,
-        opacity: 0.5,
+        opacity: 0.55,
         depthWrite: false,
       });
 
-      const points = new THREE.Points(geom, mat);
+      const lines = new THREE.LineSegments(geom, mat);
       // Disable raycasting completely so it never intercepts clicks or panel placement
-      points.raycast = () => {};
-      points.name = "RainParticles";
+      lines.raycast = () => {};
+      lines.name = "RainStreaks";
 
-      scene.add(points);
-      rainRef.current = { points, geom, mat, positions, maxHeight };
+      scene.add(lines);
+      rainRef.current = { lines, geom, mat, positions, maxHeight, dropCount, streakLength };
       requestShadowUpdate();
 
       return () => {
         if (rainRef.current) {
-          scene.remove(rainRef.current.points);
+          scene.remove(rainRef.current.lines);
           rainRef.current.geom.dispose();
           rainRef.current.mat.dispose();
           rainRef.current = null;
@@ -1219,8 +1234,6 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         const group = obstacleGroupRef.current;
         const targets: THREE.Object3D[] = [];
         if (group) {
-          // Same reason as the camera: the mesh transforms must be fresh even
-          // if no frame has been rendered yet.
           group.updateMatrixWorld(true);
           for (const child of group.children) {
             if ((child as THREE.Mesh).isMesh) targets.push(child);
@@ -1228,7 +1241,30 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         }
         const hits = targets.length ? raycaster.intersectObjects(targets, false) : [];
         const id = hits.length ? (hits[0].object.userData.obstacleId as string | undefined) : undefined;
-        onObstacleSelectRef.current?.(id ?? null);
+
+        const treeGroup = treeGroupRef.current;
+        const treeTargets: THREE.Object3D[] = [];
+        if (treeGroup) {
+          treeGroup.updateMatrixWorld(true);
+          treeGroup.traverse((child) => {
+            if ((child as THREE.Mesh).isMesh) treeTargets.push(child);
+          });
+        }
+        const treeHits = treeTargets.length ? raycaster.intersectObjects(treeTargets, false) : [];
+        const treeId = treeHits.length
+          ? ((treeHits[0].object.userData.treeId ?? treeHits[0].object.parent?.userData.treeId) as string | undefined)
+          : undefined;
+
+        if (id) {
+          onObstacleSelectRef.current?.(id);
+          onTreeSelectRef.current?.(null);
+        } else if (treeId) {
+          onTreeSelectRef.current?.(treeId);
+          onObstacleSelectRef.current?.(null);
+        } else {
+          onObstacleSelectRef.current?.(null);
+          onTreeSelectRef.current?.(null);
+        }
       };
 
       canvas.addEventListener("pointerdown", handleDown);
@@ -1324,15 +1360,17 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
 
         // Advance rain simulation if active
         if (rainRef.current) {
-          const { geom, positions, maxHeight } = rainRef.current;
+          const { geom, positions, maxHeight, dropCount, streakLength } = rainRef.current;
           const fallSpeed = 24; // metres per second
           const dt = lastFrame === null ? 0.016 : Math.min(Math.max((now - lastFrame) / 1000, 0), 0.1);
-          const dropCount = positions.length / 3;
           for (let i = 0; i < dropCount; i++) {
-            positions[i * 3 + 2] -= fallSpeed * dt;
-            if (positions[i * 3 + 2] < 0) {
-              positions[i * 3 + 2] = maxHeight;
+            const idx = i * 6;
+            let topZ = positions[idx + 2] - fallSpeed * dt;
+            if (topZ < 0) {
+              topZ = maxHeight + Math.random() * 4;
             }
+            positions[idx + 2] = topZ;
+            positions[idx + 5] = topZ - streakLength;
           }
           geom.attributes.position.needsUpdate = true;
         }
