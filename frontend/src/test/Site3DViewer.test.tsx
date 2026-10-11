@@ -568,4 +568,145 @@ describe("Site3DViewer obstacle interaction", () => {
 
     expect(onRoofFinish).toHaveBeenCalledTimes(1);
   });
+
+  it("routes roof clicks to placement (not selection) in manual panel mode", () => {
+    // Regression: the click handler only knew the obstacle-draft path, so a
+    // manual-placement click fell through to obstacle selection and no panel
+    // was ever committed. The parent owns validation; the viewer just routes.
+    const onRoofPlace = vi.fn<(x: number, y: number) => void>();
+    const onObstacleSelect = vi.fn<(id: string | null) => void>();
+    render(
+      <Site3DViewer
+        localCoords={MOCK_LOCAL_COORDS}
+        obstacles={[OBSTACLE]}
+        manualPlaceActive
+        onRoofPlace={onRoofPlace}
+        onObstacleSelect={onObstacleSelect}
+      />,
+    );
+
+    clickAt(clientPointFor(5, 5, MOCK_LOCAL_COORDS.height), window);
+
+    expect(onRoofPlace).toHaveBeenCalledTimes(1);
+    const [x, y] = onRoofPlace.mock.calls[0];
+    expect(x).toBeCloseTo(5, 6);
+    expect(y).toBeCloseTo(5, 6);
+    // The same click must not also select/deselect an obstacle.
+    expect(onObstacleSelect).not.toHaveBeenCalled();
+  });
+
+  it("still selects obstacles when manual placement is off", () => {
+    const onRoofPlace = vi.fn<(x: number, y: number) => void>();
+    const onObstacleSelect = vi.fn<(id: string | null) => void>();
+    render(
+      <Site3DViewer
+        localCoords={MOCK_LOCAL_COORDS}
+        obstacles={[OBSTACLE]}
+        onRoofPlace={onRoofPlace}
+        onObstacleSelect={onObstacleSelect}
+      />,
+    );
+
+    clickAt(clientPointFor(0, 0, MOCK_LOCAL_COORDS.height + OBSTACLE.height / 2), window);
+
+    expect(onObstacleSelect).toHaveBeenCalledWith("obstacle-7");
+    expect(onRoofPlace).not.toHaveBeenCalled();
+  });
+});
+
+describe("Site3DViewer X-ray mode", () => {
+  beforeEach(() => {
+    installAnimationFrame();
+    stubWebGL(true);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    HTMLCanvasElement.prototype.getContext = originalGetContext;
+    rafTimers.clear();
+    vi.useRealTimers();
+  });
+
+  function buildingMesh(): THREE.Mesh {
+    expect(capture.lastScene).not.toBeNull();
+    const found = capture.lastScene!.getObjectByName("Building") as THREE.Mesh | undefined;
+    expect(found?.isMesh).toBe(true);
+    return found!;
+  }
+
+  it("stops casting the building shadow in X-ray mode", () => {
+    // Regression: the transparent shell kept writing a full-strength shadow,
+    // which read through the faded walls as a dark building-shaped patch on
+    // the ground beneath the footprint.
+    render(<Site3DViewer localCoords={MOCK_LOCAL_COORDS} xray />);
+    stepFrames(1);
+
+    expect(buildingMesh().castShadow).toBe(false);
+    // The shell itself stays visible and keeps receiving light/shadow.
+    expect(buildingMesh().visible).toBe(true);
+    expect(buildingMesh().receiveShadow).toBe(true);
+  });
+
+  it("restores building shadows when returning to Solid mode", () => {
+    // Fresh meshes per rebuild: nothing about the X-ray pass may leak into
+    // the restored Solid appearance (opaque materials + normal shadowing).
+    const { rerender } = render(<Site3DViewer localCoords={MOCK_LOCAL_COORDS} xray />);
+    stepFrames(1);
+    expect(buildingMesh().castShadow).toBe(false);
+
+    rerender(<Site3DViewer localCoords={MOCK_LOCAL_COORDS} xray={false} />);
+    stepFrames(1);
+
+    const solid = buildingMesh();
+    expect(solid.castShadow).toBe(true);
+    const materials = Array.isArray(solid.material) ? solid.material : [solid.material];
+    for (const material of materials) {
+      const std = material as THREE.MeshStandardMaterial;
+      expect(std.transparent).toBe(false);
+      expect(std.opacity).toBe(1);
+    }
+  });
+});
+
+describe("Site3DViewer footprint overlay lifecycle", () => {
+  beforeEach(() => {
+    installAnimationFrame();
+    stubWebGL(true);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    HTMLCanvasElement.prototype.getContext = originalGetContext;
+    rafTimers.clear();
+    vi.useRealTimers();
+  });
+
+  function overlayGroup(): THREE.Group | undefined {
+    if (!capture.lastScene) return undefined;
+    return capture.lastScene.getObjectByName("FootprintMarkers") as THREE.Group | undefined;
+  }
+
+  it("removes markers, edges and the live cursor edge when drawing ends", () => {
+    // The live edge must exist only while a footprint is actively drawn:
+    // ending the session (confirm or cancel alike) disposes the whole group.
+    const points = [
+      { x: -2, y: -2 },
+      { x: 2, y: -2 },
+      { x: 2, y: 2 },
+    ];
+    const { rerender } = render(
+      <Site3DViewer
+        localCoords={MOCK_LOCAL_COORDS}
+        footprintDrawing
+        footprintPoints={points}
+      />,
+    );
+    stepFrames(1);
+    expect(overlayGroup()).toBeDefined();
+
+    rerender(<Site3DViewer localCoords={MOCK_LOCAL_COORDS} footprintDrawing={false} footprintPoints={null} />);
+    stepFrames(1);
+
+    expect(overlayGroup()).toBeUndefined();
+  });
 });

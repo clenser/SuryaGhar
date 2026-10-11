@@ -131,6 +131,28 @@ describe("shadow camera configuration", () => {
     expect(light.shadow.camera.projectionMatrix.elements[0]).toBeCloseTo(1 / extent, 9);
   });
 
+  it("keeps the contact bias sub-texel so shadows meet obstacle bases", () => {
+    // Verified against the three.js shader (`shadowCoord.z += shadowBias`,
+    // lit iff z + bias <= stored depth): a negative bias shrinks shadows, so
+    // its magnitude must stay well under one texel of world depth or the
+    // shadow edge retreats from the caster base as a bright seam. These are
+    // configuration bounds only - they cannot prove the visual result.
+    const light = new THREE.DirectionalLight(0xffffff, 1);
+    const extent = configureSunShadows(light, 60, 10);
+    const span = light.shadow.camera.far - light.shadow.camera.near;
+    const texelWorld = (2 * extent) / light.shadow.mapSize.width;
+
+    expect(light.shadow.normalBias).toBe(0);
+    expect(light.shadow.bias).toBeLessThan(0);
+    expect(Math.abs(light.shadow.bias)).toBeLessThanOrEqual((texelWorld / span) * 1.01);
+    // Scale-invariant: the same assertion holds for a tiny and a huge site.
+    const small = new THREE.DirectionalLight(0xffffff, 1);
+    const smallExtent = configureSunShadows(small, 5, 3);
+    const smallSpan = small.shadow.camera.far - small.shadow.camera.near;
+    const smallTexel = (2 * smallExtent) / small.shadow.mapSize.width;
+    expect(Math.abs(small.shadow.bias)).toBeCloseTo((smallTexel / smallSpan) * 0.5, 12);
+  });
+
   it("creates a shadow-casting key light sized to the building", () => {
     const { objects, sun, ambient, hemi } = createLights(17.2, 26.7);
     expect(objects).toHaveLength(4);

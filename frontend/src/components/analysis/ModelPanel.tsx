@@ -57,7 +57,9 @@ import type { SunSample } from "../../lib/solar";
 import type { PlacedPanel } from "../../lib/3d/panelPlacement";
 import { placePanels, rectangleCorners } from "../../lib/3d/panelPlacement";
 import {
-  autoPlaceAllSets, defaultPanelSet,
+  autoPlaceAllSets,
+  createPanelSetId,
+  defaultPanelSet,
   totalCapacityKw as totalSetsCapacityKw,
   validatePanelPlacement,
   type PanelSet,
@@ -154,7 +156,7 @@ export function ModelPanel({
   // M3: the configuration lives in PANEL SETS. The first set is seeded from
   // the old single-config defaults so a fresh project behaves exactly as
   // before; more sets add arrays with their own tilt/height/orientation.
-  const [panelSets, setPanelSets] = useState<PanelSet[]>([defaultPanelSet("panel-set-1")]);
+  const [panelSets, setPanelSets] = useState<PanelSet[]>(() => [defaultPanelSet(createPanelSetId())]);
   const [activeSetId, setActiveSetId] = useState<string>("panel-set-1");
   /**
    * Manual-placement mode. While on, a roof click places a panel (validated by
@@ -182,7 +184,14 @@ export function ModelPanel({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [footPoints, manualPlaceActive, obstacleMode]);
+  }, [footPoints, manualPlaceActive, obstacleMode]);
+  // Repair an orphaned active-set id (remounts, races): the id must always
+  // resolve, otherwise config edits would silently match nothing.
+  useEffect(() => {
+    if (panelSets.length > 0 && !panelSets.some((s) => s.id === activeSetId)) {
+      setActiveSetId(panelSets[0].id);
+    }
+  }, [panelSets, activeSetId]);
   const [panelsEnabled, setPanelsEnabled] = useState(false);
 
   /** The set the inspector is currently editing. */
@@ -300,7 +309,8 @@ export function ModelPanel({
     ? totalSetsCapacityKw(panelSets)
     : 0;
 
-  // Every placed panel with the set it belongs to, flattened for the viewer.
+  // Every placed panel with the set it belongs to, flattened for the energy
+  // simulation (which prices every panel with the active set configuration).
   const allPanels = useMemo(() => {
     if (!panelsEnabled) return { config: DEFAULT_PANEL_CONFIG, panels: [] as PlacedPanel[] };
     const first = panelSets[0]?.config ?? DEFAULT_PANEL_CONFIG;
@@ -312,13 +322,20 @@ export function ModelPanel({
     };
   }, [panelsEnabled, panelSets]);
 
-  // Stable identity for the viewport layer (a fresh object every render would
-  // rebuild the InstancedMesh on each parent render). Null while disabled so
-  // the viewer effect cleans up any previous group and renders no panels.
-  const panelLayer = useMemo(
-    () => (panelsEnabled ? { config: allPanels.config, panels: allPanels.panels } : null),
-    [panelsEnabled, allPanels],
-  );
+  // Per-set viewport layers: each set renders with its OWN configuration, so
+  // a slider change updates exactly that set's meshes - tilt, azimuth, height
+  // and dimensions flow into geometry - and never touches another set's.
+  // Stable shape (null while disabled) so the viewer effect cleans up any
+  // previous groups and renders no panels.
+  const panelLayers = useMemo(() => {
+    if (!panelsEnabled) return null;
+    return panelSets.map((set) => ({
+      config: set.config,
+      panels: set.panels.map(
+        (p) => ({ index: 0, x: p.x, y: p.y, rotationDeg: p.rotationDeg }) as PlacedPanel,
+      ),
+    }));
+  }, [panelsEnabled, panelSets]);
 
   /**
    * One sun sample per clock hour, in local wall-clock order.
@@ -357,30 +374,46 @@ export function ModelPanel({
   // Mounting is Flat Roof only for now: any non-flat patch (stale state,
   // future callers) is normalised back to flat; the engine keeps supporting
   // other types internally for later milestones.
-  const handlePanelConfigChange = (patch: Partial<PanelLayoutConfig>) => {    setPanelSets((sets) => sets.map((set) => {
-      if (set.id !== activeSetId) return set;
-      const { mounting, ...rest } = patch;
-      return {
-        ...set,
-        // A configuration change applies to every member of the set â€” the data
-        // model deliberately has no per-panel overrides, so this is stated
-        // rather than silently diverging.
-        config: { ...set.config, ...rest, mounting: mounting === undefined ? set.config.mounting : "flat" },
-      };
-    }));
+  const handlePanelConfigChange = (patch: Partial<PanelLayoutConfig>) => {
+    if (!activeSet) return;
+    const { mounting, ...rest } = patch;
+    const nextConfig = {
+      ...activeSet.config,
+      ...rest,
+      mounting: mounting === undefined ? activeSet.config.mounting : "flat",
+    };
+    const valid = validatePanelConfig(nextConfig) === null;
+    setPanelSets((sets) =>
+      sets.map((set) => {
+        if (set.id !== activeSetId) return set;
+        const updated = {
+          ...set,
+          // A configuration change applies to every member of the set - the data
+          // model deliberately has no per-panel overrides, so this is stated
+          // rather than silently diverging.
+          config: nextConfig,
+        };
+        if (!valid || set.mode !== "auto" || set.userModified) return updated;
+        const result = placePanels({ terrace: usableRing, obstacles, config: nextConfig });
+        return { ...updated, panels: result.panels };
+      }),
+    );
   };
 
   /** Add a new set seeded from the active one (a separate, editable identity). */
   const handleAddSet = () => {
-    const nextId = `panel-set-${panelSets.length + 1}`;
+    // Monotonic ids: deriving from `length` would reuse the id of a deleted
+    // set and leave two sets sharing one identity (broken selection).
+    const nextId = createPanelSetId();
     const seed = activeSet
       ? { ...activeSet.config, panelTypeId: activeSet.config.panelTypeId }
       : DEFAULT_PANEL_CONFIG;
+    const createdName = `Panel set ${panelSets.length + 1}`;
     setPanelSets((sets) => [
       ...sets,
       {
         id: nextId,
-        name: `Panel set ${sets.length + 1}`,
+        name: createdName,
         config: { ...seed },
         mode: "auto" as const,
         panels: [],
@@ -393,7 +426,7 @@ export function ModelPanel({
   /** Duplicate the active set: same configuration, new identity, empty panels. */
   const handleDuplicateSet = () => {
     if (!activeSet) return;
-    const nextId = `panel-set-${panelSets.length + 1}`;
+    const nextId = createPanelSetId();
     setPanelSets((sets) => [
       ...sets,
       {
@@ -411,12 +444,13 @@ export function ModelPanel({
   };
 
   const handleDeleteSet = () => {
-    setPanelSets((sets) => {
-      const next = sets.filter((s) => s.id !== activeSetId);
-      const remaining = next.length > 0 ? next : [defaultPanelSet("panel-set-1")];
-      setActiveSetId(remaining[remaining.length - 1].id);
-      return remaining;
-    });
+    // Computed from current render state, not inside the updater: updaters
+    // must stay pure (StrictMode double-invokes them) and the closure id
+    // would be stale if a delete raced another set operation.
+    const next = panelSets.filter((s) => s.id !== activeSetId);
+    const remaining = next.length > 0 ? next : [defaultPanelSet(createPanelSetId())];
+    setPanelSets(remaining);
+    setActiveSetId(remaining[remaining.length - 1].id);
   };
 
   /** Auto-place one set, replacing its panels. */
@@ -473,11 +507,17 @@ export function ModelPanel({
    */
   const handleManualPlace = (x: number, y: number, rotationDeg: number) => {
     if (!activeSet) return false;
-    const dims = effectivePanelDims(activeSet.config);
-    const peers = activeSet.panels.map((p) => ({
-      x: p.x, y: p.y, rotationDeg: p.rotationDeg,
-      width: dims.widthM, length: dims.lengthM,
-    }));
+    // Peers span EVERY set with each set's own dimensions, so a manual panel
+    // can never land on another set's panels even though the sets were placed
+    // independently. Same rule as the preview tint and the auto-place
+    // reservation space.
+    const peers = panelSets.flatMap((s) => {
+      const d = effectivePanelDims(s.config);
+      return s.panels.map((p) => ({
+        x: p.x, y: p.y, rotationDeg: p.rotationDeg,
+        width: d.widthM, length: d.lengthM,
+      }));
+    });
     const result = validatePanelPlacement(x, y, rotationDeg, activeSet.config, {
       terrace: usableRing, obstacles, parapetInsetM, peers,
     });
@@ -768,12 +808,13 @@ export function ModelPanel({
               ? { config: activeSet.config, insetM: parapetInsetM }
               : null
           }
+          manualPlaceActive={manualPlaceActive}
           onRoofPlace={handleRoofPlace}
           onRoofFinish={drawing ? finishFootprint : undefined}
           footprintPoints={drawing ? footPoints : null}
           footprintDrawing={drawing}
           sun={sun.clock}
-          panelLayer={panelLayer}
+          panelLayers={panelLayers}
           siteAnchor={siteAnchor}
           parapet={parapetModel}
           xray={xray}
@@ -781,44 +822,52 @@ export function ModelPanel({
         />
       </div>
 
-      {/* Viewport hint + camera/design-mode actions */}
-      <p className="stage-card__hint" style={{ marginBottom: "var(--space-3)" }}>
-        <RotateCcw size={14} strokeWidth={1.75} aria-hidden="true" />
-        {obstacleMode !== "idle"
-          ? "Click the roof to position the footprint Â· Drag to rotate Â· Scroll or pinch to zoom"
-          : "Drag to rotate Â· Scroll or pinch to zoom Â· Click an obstacle to select it"}
-        <button
-          type="button"
-          className="btn"
-          onClick={() => viewerRef.current?.resetCamera()}
-          title="Return to the default 3D view"
-        >
-          Reset view
-        </button>
-        {designMode ? (
-          <button type="button" className="btn" onClick={onExitDesign} title="Return to the full-map workspace">
-            Back to map
-          </button>
-        ) : (
+      {/* Viewport hint + camera/design-mode actions: the help text keeps its
+          own flexible lane while the buttons stack vertically in a fixed
+          action group, so the two never compete for horizontal space. */}
+      <div className="viewer-footer" style={{ marginBottom: "var(--space-3)" }}>
+        <p className="viewer-help">
+          <RotateCcw size={14} strokeWidth={1.75} aria-hidden="true" />
+          <span>
+            {obstacleMode !== "idle"
+              ? "Click the roof to position the footprint. Drag to rotate. Scroll or pinch to zoom."
+              : "Drag to rotate. Scroll or pinch to zoom. Click an obstacle to select it."}
+          </span>
+        </p>
+        <div className="viewer-actions">
           <button
             type="button"
-            className="btn btn--primary"
-            onClick={onEnterDesign}
-            title="Expand the 3D workspace: the panel becomes the primary surface"
+            className="btn"
+            onClick={() => viewerRef.current?.resetCamera()}
+            title="Return to the default 3D view"
           >
-            Open 3D design view
+            Reset view
           </button>
-        )}
-        <button
-          type="button"
-          className="btn"
-          onClick={() => setXray((v) => !v)}
-          aria-pressed={xray}
-          title="Fade the building shell to inspect the roof boundary against interior structures"
-        >
-          {xray ? "Solid view" : "X-ray"}
-        </button>
-      </p>
+          {designMode ? (
+            <button type="button" className="btn" onClick={onExitDesign} title="Return to the full-map workspace">
+              Back to map
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn--primary"
+              onClick={onEnterDesign}
+              title="Expand the 3D workspace: the panel becomes the primary surface"
+            >
+              Open 3D design view
+            </button>
+          )}
+          <button
+            type="button"
+            className="btn"
+            onClick={() => setXray((v) => !v)}
+            aria-pressed={xray}
+            title="Fade the building shell to inspect the roof boundary against interior structures"
+          >
+            {xray ? "Solid view" : "X-ray"}
+          </button>
+        </div>
+      </div>
 
         </div>
         <div className="design-side">

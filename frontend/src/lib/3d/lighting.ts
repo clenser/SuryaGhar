@@ -142,22 +142,23 @@ export function configureSunShadows(
   // Mobile stays out of the design workspace (gated by layout CSS).
   shadow.mapSize.set(2048, 2048);
 
-  // Shadow contact fix. Both offsets act together on the DEPTH lookup, and
-  // together they produce the visible white seam between an obstacle's base
-  // and its shadow:
-  //  * `normalBias` shifts the sample along the surface NORMAL by 0.02 m.
-  //    On a flat roof (normal +Z) that pulls every shadow sample 2 cm
-  //    *up away from the roof*, so the shadow edge retreats from the object
-  //    base by roughly one texel and leaves a lit rim at the contact line.
-  //  * `bias` subtracts a constant from the fragment depth, which further
-  //    offsets the result in map units rather than world units.
-  // Setting normalBias to 0 removes the uniform push so the shadow meets the
-  // base, and a small world-unit `bias` keeps acne away instead. The value is
-  // derived from the texel size (2/2^2048 of the ortho box) so it stays
-  // correct when the extent or map size changes.
+  // Shadow contact. Verified against the three.js shader
+  // (`shadowCoord.z += shadowBias`, lit iff `z + bias <= stored depth`):
+  // a NEGATIVE bias therefore shrinks every shadow, pulling the shadow edge
+  // back from the caster base by roughly bias * depthSpan in world units.
+  // The previous constant (-0.0005 over a ~160 m depth span) offset the edge
+  // by ~8 cm - a full texel or two of bright seam that reads as a floating
+  // obstacle. `normalBias` stays 0: any positive value lifts the receiver
+  // sample off the roof and retreats the edge the same way.
+  //
+  // The replacement is scale-invariant: half a world-space texel expressed in
+  // normalized depth units, so the contact offset stays ~1-2 cm no matter how
+  // the ortho box or map size changes. Small enough to keep the shadow glued
+  // to the base, still non-zero so flat Receiver planes do not speckle.
   shadow.normalBias = 0;
-  const texel = (2 * extent) / shadow.mapSize.width;
-  shadow.bias = -Math.min(Math.max(texel * 1.5, 0.000002), 0.0005);
+  const texelWorld = (2 * extent) / shadow.mapSize.width;
+  const depthSpan = shadow.camera.far - shadow.camera.near;
+  shadow.bias = depthSpan > 0 ? (-0.5 * texelWorld) / depthSpan : -0.00005;
   return extent;
 }
 

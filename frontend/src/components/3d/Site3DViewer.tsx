@@ -139,11 +139,21 @@ export interface Site3DViewerProps {
    */
   sun?: SunClock | null;
   /**
-   * Solar panel layout (Phase 5): configuration plus the placed panel
-   * records from application state. Rendered as one InstancedMesh; rebuilt
-   * (old geometry disposed) whenever this object changes.
+   * Solar panel layouts, one entry per panel set: configuration plus the
+   * placed panel records from application state. Each entry renders as one
+   * InstancedMesh with its OWN configuration, so per-set tilt/height changes
+   * update exactly that set's meshes. Rebuilt (old geometry disposed)
+   * whenever this array changes.
    */
-  panelLayer?: { config: PanelLayoutConfig; panels: PlacedPanel[] } | null;
+  panelLayers?: Array<{ config: PanelLayoutConfig; panels: PlacedPanel[] }> | null;
+  /**
+   * Manual panel placement session: while true, a press-and-release click on
+   * the roof plane reports through onRoofPlace instead of selecting an
+   * obstacle, so consecutive clicks place consecutive panels. Kept separate
+   * from manualPanelPreview (the hover mesh) because the click path must also
+   * work when the pointer never moved first.
+   */
+  manualPlaceActive?: boolean;
   /** Optional callback fired once the scene is ready */
   onReady?: () => void;
   /**
@@ -195,7 +205,8 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       footprintPoints = null,
       footprintDrawing = false,
       sun = null,
-      panelLayer = null,
+      panelLayers = null,
+      manualPlaceActive = false,
       siteAnchor = null,
       parapet = null,
       xray = false,
@@ -219,7 +230,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
     const ambientLightRef = useRef<THREE.AmbientLight | null>(null);
     const hemiLightRef = useRef<THREE.HemisphereLight | null>(null);
     const obstacleGroupRef = useRef<THREE.Group | null>(null);
-    const panelGroupRef = useRef<THREE.Group | null>(null);
+    const panelGroupRef = useRef<THREE.Group[]>([]);
     const previewMeshRef = useRef<THREE.Mesh | null>(null);
     /** Translucent panel shown while manual placement is active. */
     const panelPreviewMeshRef = useRef<THREE.Mesh | null>(null);
@@ -251,6 +262,8 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
     onObstacleDragEndRef.current = onObstacleDragEnd;
     const manualPanelPreviewRef = useRef(manualPanelPreview);
     manualPanelPreviewRef.current = manualPanelPreview;
+    const manualPlaceActiveRef = useRef(manualPlaceActive);
+    manualPlaceActiveRef.current = manualPlaceActive;
     const onRoofPlaceRef = useRef(onRoofPlace);
     onRoofPlaceRef.current = onRoofPlace;
     const onRoofFinishRef = useRef(onRoofFinish);
@@ -350,11 +363,11 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           sceneRef.current?.remove(previewMeshRef.current);
           previewMeshRef.current = null;
         }
-        if (panelGroupRef.current) {
-          disposePanelGroup(panelGroupRef.current);
-          sceneRef.current?.remove(panelGroupRef.current);
-          panelGroupRef.current = null;
+        for (const group of panelGroupRef.current) {
+          disposePanelGroup(group);
+          sceneRef.current?.remove(group);
         }
+        panelGroupRef.current = [];
         disposeTexturedGround();
         for (const light of lightsRef.current) {
           sceneRef.current?.remove(light);
@@ -422,6 +435,15 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
             else if (material) shell.push(material);
           });
           setShellTransparent(shell, true);
+          // X-ray must not darken the ground beneath the footprint: a
+          // transparent shell still writes a full-strength shadow into the
+          // depth map, which then reads THROUGH the faded walls as a dark
+          // building-shaped patch on the satellite ground. Disabling the
+          // building's own casting removes exactly that patch; obstacles,
+          // panels and the parapet keep casting, so real external shadows
+          // stay visible. Fresh objects per rebuild: Solid mode restores
+          // casting automatically with no restore step.
+          meshes.building.castShadow = false;
           // Transparent shell renders after opaque interior content so
           // obstacles and inner faces read through it instead of z-fighting.
           // Fresh objects per rebuild: Solid mode needs no restore step.
@@ -571,38 +593,48 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       applyObstacleSelection(obstacleGroupRef.current, selectedObstacleId);
     }, [selectedObstacleId, obstacles, isInitialized]);
 
-    // Solar panel layer: one InstancedMesh rebuilt from application state.
-    // The effect cleanup removes and disposes the previous group, so a
-    // configuration change can never leave duplicate scene objects behind.
+    // Solar panel layers: one InstancedMesh per panel set, each rendered with
+    // its own configuration, rebuilt from application state. The effect
+    // cleanup removes and disposes every previous group, so a configuration
+    // change can never leave duplicate scene objects behind.
     useEffect(() => {
-      if (!isInitialized || !sceneRef.current || !panelLayer) return;
+      if (!isInitialized || !sceneRef.current || !panelLayers) return;
       const scene = sceneRef.current;
 
-      let group: THREE.Group;
+      const groups: THREE.Group[] = [];
       try {
-        group = createPanelGroup(
-          panelLayer.panels,
-          panelLayer.config.panelTypeId,
-          panelLayer.config.mounting,
-          panelLayer.config.tiltDeg,
-          localCoords.height,
-          panelLayer.config.mountHeightM,
-        );
+        for (const layer of panelLayers) {
+          const group = createPanelGroup(
+            layer.panels,
+            layer.config.panelTypeId,
+            layer.config.mounting,
+            layer.config.tiltDeg,
+            localCoords.height,
+            layer.config.mountHeightM,
+          );
+          groups.push(group);
+          scene.add(group);
+        }
       } catch (err) {
+        for (const group of groups) {
+          scene.remove(group);
+          disposePanelGroup(group);
+        }
         console.error("[Site3DViewer] Panel update failed:", err);
         return;
       }
 
-      panelGroupRef.current = group;
-      scene.add(group);
+      panelGroupRef.current = groups;
       requestShadowUpdate();
 
       return () => {
-        scene.remove(group);
-        disposePanelGroup(group);
-        if (panelGroupRef.current === group) panelGroupRef.current = null;
+        for (const group of groups) {
+          scene.remove(group);
+          disposePanelGroup(group);
+        }
+        if (panelGroupRef.current === groups) panelGroupRef.current = [];
       };
-    }, [panelLayer, localCoords, isInitialized]);
+    }, [panelLayers, localCoords, isInitialized]);
 
     // Manual panel placement preview: a translucent panel follows the pointer
     // on the roof plane, tinted green/red by the SAME validator a commit uses.
@@ -699,10 +731,13 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         }
         mesh.position.set(hit.x, hit.y, roofZ);
         mesh.visible = true;
-        // Validate the WHOLE rotated footprint, not just the cursor point.
-        const peers = (panelLayer?.panels ?? []).map((p) => {
-          const d = effectivePanelDims(panelLayer?.config ?? config);
-          return { x: p.x, y: p.y, rotationDeg: p.rotationDeg, width: d.widthM, length: d.lengthM };
+        // Validate the WHOLE rotated footprint, not just the cursor point,
+        // against every set's panels so cross-set collisions show red too.
+        const peers = (panelLayers ?? []).flatMap((layer) => {
+          const d = effectivePanelDims(layer.config);
+          return layer.panels.map((p) => (
+            { x: p.x, y: p.y, rotationDeg: p.rotationDeg, width: d.widthM, length: d.lengthM }
+          ));
         });
         const result = validatePanelPlacement(hit.x, hit.y, rotation, config, {
           terrace: terraceRing,
@@ -725,7 +760,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         canvas.style.cursor = "";
         disposePreview();
       };
-    }, [manualPanelPreview, panelLayer, obstacles, localCoords, footprintDrawing, previewObstacle, isInitialized]);
+    }, [manualPanelPreview, panelLayers, obstacles, localCoords, footprintDrawing, previewObstacle, isInitialized]);
 
     // Translucent draft preview while the obstacle editor holds a draft.
     useEffect(() => {
@@ -778,6 +813,10 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         localCoordsRef.current.height,
         size,
       );
+      // A fresh session starts with no live edge, even if a previous session
+      // ended with the cursor over the canvas: the handle is new, but the
+      // invariant is stated explicitly rather than relying on the constructor.
+      handle.setLivePoint(null);
       scene.add(handle.group);
       canvas.style.cursor = "crosshair";
 
@@ -804,6 +843,9 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         canvas.removeEventListener("pointermove", onMove);
         canvas.removeEventListener("pointerleave", onLeave);
         canvas.style.cursor = "";
+        // Kill the live edge before removing the group, so no visible cursor
+        // edge can survive the end of a drawing session for any reason.
+        handle.setLivePoint(null);
         scene.remove(handle.group);
         disposeFootprintMarkerGroup(handle);
       };
@@ -820,7 +862,6 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       const canvas = canvasRef.current;
       if (!canvas) return;
 
-      const draggingRef: { id: string } | null = null;
       // (drag state lives in this closure; the parent owns the draft)
       let dragging: { id: string } | null = null;
 
@@ -909,7 +950,6 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         if (dragging && controlsRef.current) controlsRef.current.enabled = true;
         dragging = null;
       };
-      void draggingRef;
     }, [isInitialized]);
 
     // Pointer interaction: a click (press + release without movement) either
@@ -961,6 +1001,20 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           const hit = new THREE.Vector3();
           const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -roofZ);
           if (raycaster.ray.intersectPlane(plane, hit)) {
+            onRoofPlaceRef.current?.(hit.x, hit.y);
+          }
+          return;
+        }
+
+        if (manualPlaceActiveRef.current) {
+          // Manual panel session: the same roof-plane click commits a panel
+          // through onRoofPlace (the parent validates and reports). Returning
+          // here keeps the click from also selecting/deselecting obstacles,
+          // so consecutive clicks place consecutive panels.
+          const roofZ = localCoordsRef.current.height;
+          const hit = new THREE.Vector3();
+          const roofPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -roofZ);
+          if (raycaster.ray.intersectPlane(roofPlane, hit)) {
             onRoofPlaceRef.current?.(hit.x, hit.y);
           }
           return;

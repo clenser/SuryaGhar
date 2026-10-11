@@ -1721,6 +1721,73 @@
   }
 }
 
+/*
+ * 3D viewer footer: the help text owns a flexible lane while Reset view,
+ * Back to map / Open 3D design view and X-ray stack vertically in a fixed
+ * action group. Stacking (instead of one shared flex row) is what keeps the
+ * help text at a readable line length: the buttons no longer squeeze it into
+ * a narrow column, and their labels never break mid-word.
+ */
+.viewer-footer {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  margin: var(--space-2) 0 var(--space-3);
+}
+
+.viewer-help {
+  display: flex;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+  max-width: 62ch;
+}
+
+.viewer-help > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.viewer-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  min-width: 12rem;
+}
+
+.viewer-actions .btn {
+  width: 100%;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+/* Narrow widths: the footer wraps as a whole and the action group lays its
+ * buttons out horizontally instead, so nothing overflows the viewport. */
+@media (max-width: 720px) {
+  .viewer-footer {
+    flex-wrap: wrap;
+  }
+  .viewer-help {
+    flex-basis: 100%;
+    max-width: none;
+  }
+  .viewer-actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+    width: 100%;
+    min-width: 0;
+  }
+  .viewer-actions .btn {
+    flex: 1 1 auto;
+    width: auto;
+  }
+}
+
 .stage-card__warning {
   margin: var(--space-2) 0 0;
   font-size: var(--text-sm);

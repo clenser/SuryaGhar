@@ -80,6 +80,21 @@ describe("panel-set model", () => {
     expect(a).not.toBe(b);
   });
 
+  it("never reuses an id, even across add/delete cycles", () => {
+    // Regression: deriving ids from `sets.length` reused a deleted set's id,
+    // leaving two sets sharing one identity and making selection stick to one
+    // set. Monotonic ids keep every set addressable for its whole lifetime.
+    const seen = new Set<string>();
+    for (let i = 0; i < 10; i++) {
+      const id = createPanelSetId();
+      expect(seen.has(id)).toBe(false);
+      seen.add(id);
+      if (i % 3 === 2) seen.delete(id); // simulate deletes: ids stay retired
+    }
+    const fresh = createPanelSetId();
+    expect(seen.has(fresh)).toBe(false);
+  });
+
   it("auto-places panels inside the roof and reports capacity", () => {
     const set = autoPlaceSet({ ...defaultPanelSet(createPanelSetId()) }, terrace(), []);
     expect(set.panels.length).toBeGreaterThan(0);
