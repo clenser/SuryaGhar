@@ -160,4 +160,23 @@ describe("ModelPanel design correction", () => {
     expect(screen.getByRole("form", { name: "Obstacle editor" })).toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Draw rooftop footprint" })).toBeNull();
   });
+
+  it("recalculates the auto layout live when spacing changes", () => {
+    // Full state flow: field -> active-set config -> lattice -> stored
+    // panels -> rendered count. No manual remove/re-add involved.
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Enable solar panels" }));
+    fireEvent.click(screen.getByRole("button", { name: /Auto-place set/ }));
+    const countOf = (): number => {
+    const placed = Array.from(document.querySelectorAll(".obstacle-count")).find((el) =>
+      /^\d+ panels/.test(el.textContent ?? ""),
+    );
+    return parseInt(placed?.textContent ?? "", 10);
+    };
+    const before = countOf();
+    expect(before).toBeGreaterThan(5);
+    fireEvent.change(screen.getByLabelText("Panel spacing"), { target: { value: "2.5" } });
+    const after = countOf();
+    expect(after).toBeLessThan(before);
+  });
 });

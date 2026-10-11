@@ -117,9 +117,11 @@ function wedge(widthM: number, lengthM: number, backHeightM: number): THREE.Buff
 
 /**
  * Merged unit geometry: photovoltaic panel plus its mounting arrangement.
- * `mountHeightM` is the support height above the roof plane — it lifts the
+ * `mountHeightM` is the support height above the roof plane - it lifts the
  * whole assembly and stretches every leg/support accordingly, so the rendered
  * geometry matches the configured value rather than a fixed stand-off.
+ * `legCount` selects the visual support pattern for flat mounting (4 corner
+ * legs, or 6 with an added mid-span pair); other mounting types ignore it.
  * Returned geometry must be disposed by the caller when the layout changes.
  */
 export function createPanelUnitGeometry(
@@ -127,6 +129,7 @@ export function createPanelUnitGeometry(
   mounting: MountingType,
   tiltDeg: number,
   mountHeightM: number = DEFAULT_MOUNT_HEIGHT_M,
+  legCount: 4 | 6 = 4,
 ): THREE.BufferGeometry {
   const type = panelTypeDefinition(panelTypeId);
   const w = type.widthM;
@@ -174,14 +177,18 @@ export function createPanelUnitGeometry(
   const lowEdgeCenter = t / 2 + (l / 2) * sin; // centre height with low edge at roof
 
   if (mounting === "flat") {
-    // Raised on four thin legs: an open, clearly elevated arrangement. The
+    // Raised on thin legs: an open, clearly elevated arrangement. The
     // leg length and the panel centre both derive from mountHeight, so
     // changing the control raises the array and stretches the supports.
     const centerH = ROOF_STANDOFF_M + mountHeight + (l / 2) * sin;
-    for (const sx of [-(w / 2 - 0.14), w / 2 - 0.14]) {
-      for (const sy of [-(l / 2 - 0.18), l / 2 - 0.18]) {
+    const legXs = [-(w / 2 - 0.14), w / 2 - 0.14];
+    const legYs = legCount === 6
+      ? [-(l / 2 - 0.18), 0, l / 2 - 0.18]
+      : [-(l / 2 - 0.18), l / 2 - 0.18];
+    for (const sx of legXs) {
+      for (const sy of legYs) {
         // Each leg runs from the roof up to the panel underside at its own
-        // corner, so a tilted array keeps standing on four support points.
+        // position, so a tilted array keeps standing on every support point.
         const under = centerH - sy * sin - t / 2 - ROOF_STANDOFF_M;
         const h = Math.max(0.04, under);
         parts.push(box(0.05, 0.05, h, sx, sy, ROOF_STANDOFF_M + h / 2, SUPPORT_COLOR));
@@ -232,12 +239,13 @@ export function createPanelGroup(
   tiltDeg: number,
   roofZ: number,
   mountHeightM: number = DEFAULT_MOUNT_HEIGHT_M,
+  legCount: 4 | 6 = 4,
 ): THREE.Group {
   const group = new THREE.Group();
   group.name = "SolarPanels";
   if (panels.length === 0) return group;
 
-  const geometry = createPanelUnitGeometry(panelTypeId, mounting, tiltDeg, mountHeightM);
+  const geometry = createPanelUnitGeometry(panelTypeId, mounting, tiltDeg, mountHeightM, legCount);
   const material = new THREE.MeshStandardMaterial({
     vertexColors: true,
     roughness: 0.45,

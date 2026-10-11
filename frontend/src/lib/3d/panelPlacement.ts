@@ -26,7 +26,7 @@ import {
   type Obstacle,
   type Point2,
 } from "./obstacles";
-import { effectivePanelDims, type PanelLayoutConfig } from "./panels";
+import { effectiveColSpacingM, effectivePanelDims, effectiveRowSpacingM, type PanelLayoutConfig } from "./panels";
 
 /** Fixed clearance kept between panels and obstacle footprints, metres. */
 export const PANEL_OBSTACLE_CLEARANCE_M = 0.1;
@@ -258,8 +258,10 @@ export function placePanels(request: PlacementRequest): PlacementResult {
     if (pv > vMax) vMax = pv;
   }
 
-  const stepU = width + config.spacingM;
-  const stepV = length + config.spacingM;
+  const rowSpacing = effectiveRowSpacingM(config);
+  const colSpacing = effectiveColSpacingM(config);
+  const stepU = width + colSpacing;
+  const stepV = length + rowSpacing;
   const insetU = width / 2 + config.setbackM;
   const insetV = length / 2 + config.setbackM;
   if (uMax - uMin < 2 * insetU || vMax - vMin < 2 * insetV) {
@@ -269,7 +271,17 @@ export function placePanels(request: PlacementRequest): PlacementResult {
     };
   }
 
-  const inflate = config.spacingM > 0 ? config.spacingM : 0;
+  const inflateU = colSpacing > 0 ? colSpacing : 0;
+  const inflateV = rowSpacing > 0 ? rowSpacing : 0;
+  // Optional per-set cap: stop accepting once reached. Deterministic because
+  // the lattice order is fixed, so the same inputs always keep the same first
+  // N panels. Null means fill the usable roof.
+  const cap =
+    config.maxPanels !== null &&
+    config.maxPanels !== undefined &&
+    Number.isFinite(config.maxPanels)
+      ? Math.floor(config.maxPanels)
+      : null;
 
   /**
    * Lattice phases to try, as fractions of one step. The lattice is anchored on
@@ -290,6 +302,8 @@ export function placePanels(request: PlacementRequest): PlacementResult {
       if (placed.length > best.length) best = placed;
     }
   }
+
+  if (cap !== null && best.length > cap) best = best.slice(0, cap);
 
   if (best.length === 0) {
     return {
@@ -334,12 +348,13 @@ export function placePanels(request: PlacementRequest): PlacementResult {
         const rect = rectangleCorners(cx, cy, width, length, rotation);
         if (obstacleRings.some((ring) => footprintsOverlap(rect, ring))) continue;
 
-        // 3. Panel-to-panel spacing: exact clear gap between panel edges.
+        // 3. Panel-to-panel spacing: exact clear gap between panel edges,
+        // resolved per axis (columns along width, rows along length).
         if (
           placed.some((p) =>
             footprintsOverlap(
               rect,
-              rectangleCorners(p.x, p.y, width + inflate, length + inflate, rotation),
+              rectangleCorners(p.x, p.y, width + inflateU, length + inflateV, rotation),
             ),
           )
         ) {

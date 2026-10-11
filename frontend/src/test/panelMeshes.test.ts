@@ -64,6 +64,24 @@ describe("createPanelUnitGeometry", () => {
     small.dispose();
     large.dispose();
   });
+
+  it("renders four corner legs by default and six with a mid-span pair", () => {
+    const four = createPanelUnitGeometry("panel-550w", "flat", 15, 0.4, 4);
+    const six = createPanelUnitGeometry("panel-550w", "flat", 15, 0.4, 6);
+    // Two extra legs add exactly two boxes of vertices; footprint unchanged.
+    const fourCount = four.getAttribute("position").count;
+    const sixCount = six.getAttribute("position").count;
+    expect(sixCount).toBeGreaterThan(fourCount);
+    four.computeBoundingBox();
+    six.computeBoundingBox();
+    expect(six.boundingBox!.min.x).toBeCloseTo(four.boundingBox!.min.x, 6);
+    expect(six.boundingBox!.max.x).toBeCloseTo(four.boundingBox!.max.x, 6);
+    expect(six.boundingBox!.min.y).toBeCloseTo(four.boundingBox!.min.y, 6);
+    expect(six.boundingBox!.max.y).toBeCloseTo(four.boundingBox!.max.y, 6);
+    expect(six.boundingBox!.max.z).toBeCloseTo(four.boundingBox!.max.z, 6);
+    four.dispose();
+    six.dispose();
+  });
 });
 
 describe("createPanelGroup", () => {

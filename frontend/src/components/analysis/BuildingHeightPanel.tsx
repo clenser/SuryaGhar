@@ -14,7 +14,7 @@ import { Ruler, Box, AlertTriangle, Check } from "lucide-react";
 import { BACKEND_WAITING_LABEL } from "../../hooks/useBackendStatus";
 import type { LngLat, PolygonMetrics } from "../../lib/geo";
 import { formatArea } from "../../lib/geo";
-import { MAX_BUILDING_HEIGHT_M, MIN_BUILDING_HEIGHT_M, validateBuildingHeight } from "../../lib/3d/building";
+import { DEFAULT_BUILDING_HEIGHT_M, MAX_BUILDING_HEIGHT_M, MIN_BUILDING_HEIGHT_M, validateBuildingHeight } from "../../lib/3d/building";
 
 interface BuildingHeightPanelProps {
   vertices: LngLat[];
@@ -26,7 +26,7 @@ interface BuildingHeightPanelProps {
   initialHeight?: number;
 }
 
-const DEFAULT_HEIGHT = 3.0; // Typical single storey
+const DEFAULT_HEIGHT = DEFAULT_BUILDING_HEIGHT_M; // Prefill for a new building
 
 /** Parse the raw field value; an empty or non-numeric entry is NaN. */
 function parseHeight(raw: string): number {

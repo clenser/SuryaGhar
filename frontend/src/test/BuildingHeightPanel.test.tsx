@@ -6,6 +6,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { BuildingHeightPanel } from "../components/analysis/BuildingHeightPanel";
+import { DEFAULT_BUILDING_HEIGHT_M } from "../lib/3d/building";
 import type { LngLat, PolygonMetrics } from "../lib/geo";
 
 const TEST_VERTICES: LngLat[] = [
@@ -49,7 +50,17 @@ describe("BuildingHeightPanel", () => {
     render(<BuildingHeightPanel {...PROPS} />);
 
     const input = screen.getByLabelText("Building height (metres)");
-    expect(input).toHaveValue(3);
+    expect(input).toHaveValue(10);
+  });
+
+  it("defaults new buildings to DEFAULT_BUILDING_HEIGHT_M", () => {
+    // A fresh building with no supplied height starts at the shared 10 m
+    // default (single source in lib/3d/building), not a stale literal.
+    render(<BuildingHeightPanel {...PROPS} />);
+
+    const input = screen.getByLabelText("Building height (metres)");
+    expect(input).toHaveValue(DEFAULT_BUILDING_HEIGHT_M);
+    expect(DEFAULT_BUILDING_HEIGHT_M).toBe(10);
   });
 
   it("prefills an existing height when provided", () => {
@@ -104,7 +115,7 @@ describe("BuildingHeightPanel", () => {
     await userEvent.click(button);
 
     await waitFor(() => {
-      expect(PROPS.onConfirm).toHaveBeenCalledWith(3); // default height
+      expect(PROPS.onConfirm).toHaveBeenCalledWith(10); // default height
     });
   });
 

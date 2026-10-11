@@ -666,6 +666,31 @@ describe("Site3DViewer X-ray mode", () => {
       expect(std.opacity).toBe(1);
     }
   });
+
+  it("stops the parapet casting roof shadows in X-ray mode and restores it", () => {
+    // The faded parapet ring would otherwise stripe the roof with shadows
+    // that read through the transparent shell. Obstacle/panel casting is
+    // untouched, so real external shadows remain.
+    const parapet = { heightM: 1, thicknessM: 0.3 };
+    const { rerender } = render(
+      <Site3DViewer localCoords={MOCK_LOCAL_COORDS} parapet={parapet} xray />,
+    );
+    stepFrames(1);
+
+    expect(capture.lastScene).not.toBeNull();
+    const ring = capture.lastScene!.getObjectByName("Parapet") as THREE.Mesh | undefined;
+    expect(ring?.isMesh).toBe(true);
+    expect(ring!.castShadow).toBe(false);
+
+    rerender(
+      <Site3DViewer localCoords={MOCK_LOCAL_COORDS} parapet={parapet} xray={false} />,
+    );
+    stepFrames(1);
+
+    const solid = capture.lastScene!.getObjectByName("Parapet") as THREE.Mesh | undefined;
+    expect(solid?.isMesh).toBe(true);
+    expect(solid!.castShadow).toBe(true);
+  });
 });
 
 describe("Site3DViewer footprint overlay lifecycle", () => {

@@ -172,3 +172,28 @@ describe("StatusBar mobile chip", () => {
     expect(document.querySelector(".status-bar")).toHaveAttribute("data-open", "false");
   });
 });
+
+describe("Status pill contrast", () => {
+  it("keeps map and backend pills on a fixed dark badge in both themes", () => {
+    // Regression: both pills used `background: var(--color-text)`, which flips
+    // to near-white in dark mode and renders white text on white. The badge
+    // background must stay dark while the text stays white, in both themes.
+    // (Stylesheet assertions mirror the FOUC test above: jsdom has no CSS
+    // cascade, so the token contract itself is what is pinned here.)
+    const css = readFileSync(join(process.cwd(), "src/styles/workspace.css"), "utf8");
+    const blockOf = (selector: string): string => {
+      const start = css.indexOf(selector + " {");
+      expect(start).toBeGreaterThan(-1);
+      return css.slice(start, css.indexOf("}", start));
+    };
+    for (const selector of [".backend-status", ".map-status"]) {
+      const block = blockOf(selector);
+      expect(block).toContain("background: var(--color-map-ink)");
+      expect(block).toContain("color: #ffffff");
+      expect(block).not.toContain("background: var(--color-text)");
+    }
+    // The fixed badge token exists in both themes.
+    const tokens = readFileSync(join(process.cwd(), "src/styles/tokens.css"), "utf8");
+    expect(tokens).toContain("--color-map-ink:");
+  });
+});

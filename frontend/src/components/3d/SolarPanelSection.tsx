@@ -15,6 +15,9 @@ import {
   MOUNTING_TYPES,
   PANEL_MIN_SIDE_M,
   PANEL_MAX_SIDE_M,
+  PANEL_MAX_COUNT,
+  PANEL_SPACING_MIN_M,
+  PANEL_SPACING_MAX_M,
   PANEL_TYPES,
   formatCapacity,
   panelTypeDefinition,
@@ -471,6 +474,84 @@ export function SolarPanelSection({
         Leave the custom dimensions on the catalogue values to keep using the selected module. Clearing them
         restores the catalogue size.
       </p>
+
+      {/* Mounting frame: physical frame parameters for this set. Row and
+          column spacing refine Panel spacing per axis (unset follows it);
+          Structure legs selects the rendered support pattern, visual only;
+          Panels in set caps auto-fill (blank fills the usable roof). */}
+      <div className="panel-group">
+        <span className="panel-group__label" id="panel-frame-label">Frame</span>
+        <div className="field-grid">
+          <SliderNumberField
+            id="panel-row-spacing"
+            label="Row spacing"
+            value={config.rowSpacingM ?? config.spacingM}
+            min={PANEL_SPACING_MIN_M}
+            max={PANEL_SPACING_MAX_M}
+            step={0.05}
+            unit="m"
+            onChange={(value) => onConfigChange({ rowSpacingM: value })}
+          />
+          <SliderNumberField
+            id="panel-col-spacing"
+            label="Column spacing"
+            value={config.colSpacingM ?? config.spacingM}
+            min={PANEL_SPACING_MIN_M}
+            max={PANEL_SPACING_MAX_M}
+            step={0.05}
+            unit="m"
+            onChange={(value) => onConfigChange({ colSpacingM: value })}
+          />
+        </div>
+        <div className="field-grid">
+          <div className="field">
+            <label htmlFor="panel-max-count">Panels in set (max)</label>
+            <div className="height-input-row">
+              <input
+                id="panel-max-count"
+                type="number"
+                inputMode="numeric"
+                min={1}
+                max={PANEL_MAX_COUNT}
+                step={1}
+                placeholder="Unlimited"
+                value={config.maxPanels ?? ""}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  onConfigChange({ maxPanels: raw === "" ? null : Number(raw) });
+                }}
+              />
+              <span className="height-unit" aria-hidden="true">
+                panels
+              </span>
+            </div>
+          </div>
+        </div>
+        <span className="panel-group__label" id="panel-legs-label" style={{ marginTop: "var(--space-2)" }}>
+          Structure legs
+        </span>
+        <div className="segmented" role="group" aria-labelledby="panel-legs-label">
+          {([4, 6] as const).map((legs) => (
+            <button
+              key={legs}
+              type="button"
+              className={`segmented__btn${config.legCount === legs ? " is-active" : ""}`}
+              aria-pressed={config.legCount === legs}
+              onClick={() => onConfigChange({ legCount: legs })}
+            >
+              {legs} legs
+              <span className="segmented__meta">
+                {legs === 4 ? "corners" : "corners + mid-span"}
+              </span>
+            </button>
+          ))}
+        </div>
+        <p className="panel-group__hint">
+          Row and column spacing follow Panel spacing until set. Legs change only
+          the rendered supports, never structural engineering. Blank panel count
+          fills the usable roof.
+        </p>
+      </div>
 
       {/* Result */}
       <p className="sun-readout" role="output">

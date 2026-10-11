@@ -412,7 +412,7 @@ export function createParapetCapMaterial(): THREE.MeshStandardMaterial {
  * stay opaque so the scene keeps its reference points. Reversible: disabling
  * restores the exact opaque defaults. Idempotent.
  */
-export const XRAY_OPACITY = 0.2;
+export const XRAY_OPACITY = 0.22;
 
 interface ShellOriginal {
   opacity: number;

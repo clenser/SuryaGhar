@@ -72,6 +72,13 @@ export interface PanelLayoutConfig {
   azimuthDeg: number;
   /** Clear gap between adjacent panels, metres. */
   spacingM: number;
+  /**
+   * Row gap (along the panel length axis) and column gap (along the width
+   * axis), metres. Null means "follow spacingM", so existing configurations
+   * behave exactly as before until the user separates them.
+   */
+  rowSpacingM: number | null;
+  colSpacingM: number | null;
   /** Required clearance from the roof edge, metres. */
   setbackM: number;
   /**
@@ -93,6 +100,18 @@ export interface PanelLayoutConfig {
    */
   customWidthM: number | null;
   customLengthM: number | null;
+  /**
+   * Support legs rendered per panel (flat mounting). Visual mounting-hardware
+   * parameter only: 4 puts a leg under each panel corner, 6 adds a mid-span
+   * pair on the long edges. Makes no structural-safety claim.
+   */
+  legCount: 4 | 6;
+  /**
+   * Cap on panels placed in this set. Null means "fill the usable roof".
+   * Automatic placement stops once this many panels are accepted; manual
+   * placement refuses additions beyond it.
+   */
+  maxPanels: number | null;
 }
 
 /** How the module's short/long sides map to the roof's X/Y axes. */
@@ -136,6 +155,10 @@ export const PANEL_MOUNT_HEIGHT_MAX_M = 2;
 export const PANEL_MIN_SIDE_M = 0.3;
 /** Largest module side the UI accepts, metres (roof-scale sanity limit). */
 export const PANEL_MAX_SIDE_M = 4;
+/** Support-leg options offered for flat mounting (visual only). */
+export const PANEL_LEG_COUNTS = [4, 6] as const;
+/** Largest placeable-panel cap accepted (prevents runaway layouts). */
+export const PANEL_MAX_COUNT = 500;
 
 /** Defaults: south-facing, modest tilt, small gaps (India rooftop typical). */
 export const DEFAULT_PANEL_CONFIG: PanelLayoutConfig = {
@@ -144,6 +167,8 @@ export const DEFAULT_PANEL_CONFIG: PanelLayoutConfig = {
   tiltDeg: 15,
   azimuthDeg: 180,
   spacingM: 0.2,
+  rowSpacingM: null,
+  colSpacingM: null,
   setbackM: 0.5,
   // Matches the support stand-off the mesh builder uses by default, so the
   // default configuration renders predictably above the roof surface.
@@ -151,7 +176,21 @@ export const DEFAULT_PANEL_CONFIG: PanelLayoutConfig = {
   orientation: "portrait",
   customWidthM: null,
   customLengthM: null,
+  legCount: 4,
+  maxPanels: null,
 };
+
+/** Row gap actually used: explicit value, else the shared spacing. */
+export function effectiveRowSpacingM(config: PanelLayoutConfig): number {
+  const v = config.rowSpacingM;
+  return v === null || v === undefined || !Number.isFinite(v) ? config.spacingM : v;
+}
+
+/** Column gap actually used: explicit value, else the shared spacing. */
+export function effectiveColSpacingM(config: PanelLayoutConfig): number {
+  const v = config.colSpacingM;
+  return v === null || v === undefined || !Number.isFinite(v) ? config.spacingM : v;
+}
 
 /** Clamp-free validation: returns a user-facing error or null. */
 export function validatePanelConfig(config: PanelLayoutConfig): string | null {
@@ -184,6 +223,29 @@ export function validatePanelConfig(config: PanelLayoutConfig): string | null {
     if (!Number.isFinite(value)) return `${label} must be a valid number`;
     if (value < PANEL_MIN_SIDE_M || value > PANEL_MAX_SIDE_M) {
       return `${label} must be between ${PANEL_MIN_SIDE_M} and ${PANEL_MAX_SIDE_M} m`;
+    }
+  }
+  // Row/column gaps follow the shared spacing when unset; explicit values use
+  // the same range.
+  for (const [value, label] of [
+    [config.rowSpacingM, "Row spacing"],
+    [config.colSpacingM, "Column spacing"],
+  ] as Array<[number | null, string]>) {
+    if (value === null || value === undefined) continue;
+    if (!Number.isFinite(value)) return `${label} must be a valid number`;
+    if (value < PANEL_SPACING_MIN_M || value > PANEL_SPACING_MAX_M) {
+      return `${label} must be between ${PANEL_SPACING_MIN_M} and ${PANEL_SPACING_MAX_M} m`;
+    }
+  }
+  if (config.legCount !== 4 && config.legCount !== 6) {
+    return "Structure legs must be 4 or 6";
+  }
+  if (config.maxPanels !== null && config.maxPanels !== undefined) {
+    if (!Number.isFinite(config.maxPanels) || Math.floor(config.maxPanels) !== config.maxPanels) {
+      return "Panel count must be a whole number of panels";
+    }
+    if (config.maxPanels < 1 || config.maxPanels > PANEL_MAX_COUNT) {
+      return `Panel count must be between 1 and ${PANEL_MAX_COUNT}`;
     }
   }
   return null;

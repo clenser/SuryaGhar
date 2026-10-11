@@ -72,7 +72,9 @@
   width: max-content;
   max-width: 100%;
   white-space: nowrap;
-  background: var(--color-text);
+  /* Fixed dark badge in both themes: var(--color-text) flips to near-white
+     in dark mode, which would render white text on a white pill. */
+  background: var(--color-map-ink);
   color: #ffffff;
   border-radius: 999px;
   padding: 6px 14px;
@@ -173,7 +175,9 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  background: var(--color-text);
+  /* Same fixed dark badge as .backend-status (see above): never follow the
+     theme text color, or dark mode turns this pill white-on-white. */
+  background: var(--color-map-ink);
   color: #ffffff;
   border-radius: 999px;
   padding: 6px 14px;
@@ -1786,6 +1790,21 @@
     flex: 1 1 auto;
     width: auto;
   }
+}
+
+/* Enlarged 3D design view: Reset view and Back to map sit side by side in a
+ * horizontal action row. X-ray stays in the same row without squeezing the
+ * help text, which keeps its own flexible lane. Scoped to the expanded mode
+ * only - the normal workflow keeps the stacked arrangement above. */
+.viewer-footer--expanded .viewer-actions {
+  flex-direction: row;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.viewer-footer--expanded .viewer-actions .btn {
+  width: auto;
+  flex: 0 0 auto;
 }
 
 .stage-card__warning {

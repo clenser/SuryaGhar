@@ -55,11 +55,12 @@ import { useSunSimulation } from "../../hooks/useSunSimulation";
 import { formatTimezoneLabel, formatSiteDateTime, localWallClockToUtc } from "../../lib/solar";
 import type { SunSample } from "../../lib/solar";
 import type { PlacedPanel } from "../../lib/3d/panelPlacement";
-import { placePanels, rectangleCorners } from "../../lib/3d/panelPlacement";
+import { panelRotationForAzimuth, placePanels, rectangleCorners } from "../../lib/3d/panelPlacement";
 import {
   autoPlaceAllSets,
   createPanelSetId,
   defaultPanelSet,
+  findInvalidPanels,
   totalCapacityKw as totalSetsCapacityKw,
   validatePanelPlacement,
   type PanelSet,
@@ -393,7 +394,17 @@ export function ModelPanel({
           // rather than silently diverging.
           config: nextConfig,
         };
-        if (!valid || set.mode !== "auto" || set.userModified) return updated;
+        if (!valid) return updated;
+        if (set.mode !== "auto" || set.userModified) {
+          // Hand-placed panels keep their positions, but azimuth is a
+          // set-level facing: rotate the stored panels in place so the
+          // slider visibly turns them without moving or deleting any.
+          if (rest.azimuthDeg !== undefined && updated.panels.length > 0) {
+            const rotation = panelRotationForAzimuth(nextConfig.azimuthDeg);
+            return { ...updated, panels: updated.panels.map((x, i) => ({ ...x, index: i, rotationDeg: rotation })) };
+          }
+          return updated;
+        }
         const result = placePanels({ terrace: usableRing, obstacles, config: nextConfig });
         return { ...updated, panels: result.panels };
       }),
@@ -485,6 +496,34 @@ export function ModelPanel({
     setPlaceWarning(kept.length < result.panels.length ? `${activeSet.name} placed ${kept.length} of ${result.panels.length} panels: the rest overlap other sets.` : null);
   };
 
+  /**
+   * Recalculate the active set from its current configuration.
+   *
+   * Automatic sets are regenerated immediately (same path as Auto-place
+   * set). Manual sets are never moved or deleted here: their stored panels
+   * are re-validated against the roof, obstacles and parapet, and any panel
+   * that no longer fits is REPORTED in the warning so the user can move or
+   * remove it deliberately.
+   */
+  const handleRecalculate = () => {
+    setPanelRevision((revision) => revision + 1);
+    if (!activeSet) return;
+    if (activeSet.mode === "auto" && !activeSet.userModified) {
+      handleAutoPlaceSet();
+      return;
+    }
+    const invalid = findInvalidPanels(activeSet, {
+      terrace: usableRing,
+      obstacles,
+      parapetInsetM,
+    });
+    setPlaceWarning(
+      invalid.length === 0
+        ? null
+        : `${invalid.length} panel${invalid.length === 1 ? "" : "s"} in ${activeSet.name} no longer ${invalid.length === 1 ? "fits" : "fit"} the roof, an obstacle, or the parapet edge.`,
+    );
+  };
+
   /** Warning from the most recent auto-place-all (a set that could not fit). */
   const [placeWarning, setPlaceWarning] = useState<string | null>(null);
 
@@ -505,8 +544,8 @@ export function ModelPanel({
    * Manual placement: add a panel at a validated roof position.
    * Uses the shared validator so manual and auto placement agree on the rules.
    */
-  const handleManualPlace = (x: number, y: number, rotationDeg: number) => {
-    if (!activeSet) return false;
+  const handleManualPlace = (x: number, y: number, rotationDeg: number): string | null => {
+    if (!activeSet) return "not ready";
     // Peers span EVERY set with each set's own dimensions, so a manual panel
     // can never land on another set's panels even though the sets were placed
     // independently. Same rule as the preview tint and the auto-place
@@ -521,14 +560,16 @@ export function ModelPanel({
     const result = validatePanelPlacement(x, y, rotationDeg, activeSet.config, {
       terrace: usableRing, obstacles, parapetInsetM, peers,
     });
-    if (!result.valid) return false;
+    if (!result.valid) return "blocked";
+    const cap = activeSet.config.maxPanels;
+    if (cap !== null && cap !== undefined && activeSet.panels.length >= cap) return "capped";
     setPanelSets((sets) => sets.map((s) => s.id !== activeSetId ? s : {
       ...s,
       mode: "manual",
       userModified: true,
       panels: [...s.panels, { index: s.panels.length, x, y, rotationDeg }],
     }));
-    return true;
+    return null;
   };
 
   /**
@@ -540,10 +581,16 @@ export function ModelPanel({
     if (!manualPlaceActive || !activeSet) return false;
     // Place the panel at the set's configured azimuth, matching the auto layout.
     const rotation = ((((-activeSet.config.azimuthDeg) % 360) + 360) % 360);
-    const placed = handleManualPlace(x, y, rotation);
+    const refusal = handleManualPlace(x, y, rotation);
     // An invalid preview refuses the commit; say why instead of staying silent.
-    setManualStatus(placed ? null : "Cannot place here - the panel would cross the roof edge, an obstacle, or another panel.");
-    return placed;
+    setManualStatus(
+      refusal === null
+        ? null
+        : refusal === "capped"
+          ? "This set already holds its maximum panel count."
+          : "Cannot place here - the panel would cross the roof edge, an obstacle, or another panel.",
+    );
+    return refusal === null;
   };
 
   /** Remove the last panel of the active set (undo for accidental placement). */
@@ -825,7 +872,7 @@ export function ModelPanel({
       {/* Viewport hint + camera/design-mode actions: the help text keeps its
           own flexible lane while the buttons stack vertically in a fixed
           action group, so the two never compete for horizontal space. */}
-      <div className="viewer-footer" style={{ marginBottom: "var(--space-3)" }}>
+      <div className={`viewer-footer${designMode ? " viewer-footer--expanded" : ""}`} style={{ marginBottom: "var(--space-3)" }}>
         <p className="viewer-help">
           <RotateCcw size={14} strokeWidth={1.75} aria-hidden="true" />
           <span>
@@ -1098,7 +1145,7 @@ export function ModelPanel({
             }
             config={activeSet?.config ?? DEFAULT_PANEL_CONFIG}
             onConfigChange={handlePanelConfigChange}
-            onRecalculate={() => setPanelRevision((revision) => revision + 1)}
+            onRecalculate={handleRecalculate}
             onAutoPlace={handleAutoPlaceSet}
             onAutoPlaceAll={handleAutoPlaceAll}
             onUndoLast={handleUndoLastPanel}

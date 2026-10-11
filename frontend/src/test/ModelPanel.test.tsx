@@ -114,6 +114,29 @@ describe("ModelPanel", () => {
     expect(document.querySelector("canvas")).toBeInTheDocument();
   });
 
+  it("stacks footer actions by default and rows them in the enlarged view", () => {
+    const { rerender, props } = renderPanel({ buildingHeight: 17.2 });
+
+    const footer = document.querySelector(".viewer-footer");
+    expect(footer).toBeInTheDocument();
+    expect(footer).not.toHaveClass("viewer-footer--expanded");
+    // Help text and the three actions share the footer without competing.
+    expect(footer!.querySelector(".viewer-help")).toBeInTheDocument();
+    expect(footer!.querySelectorAll(".viewer-actions .btn")).toHaveLength(3);
+
+    rerender(
+      <ModelPanel
+        {...props}
+        buildingHeight={17.2}
+        designMode
+        onExitDesign={() => {}}
+      />,
+    );
+    expect(document.querySelector(".viewer-footer")).toHaveClass(
+      "viewer-footer--expanded",
+    );
+  });
+
   it("shows the entered height in the viewport summary", () => {
     renderPanel({ buildingHeight: 17.2 });
 
@@ -154,7 +177,7 @@ describe("ModelPanel", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /Create 3D Building/i }));
 
-    expect(props.onSetHeight).toHaveBeenCalledWith(3);
+    expect(props.onSetHeight).toHaveBeenCalledWith(10);
   });
 
   it("locks Continue until the analysis server is ready", async () => {

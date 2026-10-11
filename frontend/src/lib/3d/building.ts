@@ -14,6 +14,13 @@ import { getLocalBounds, terraceToLocal3D, type LocalCoords3D } from "./coordina
 export const MIN_BUILDING_HEIGHT_M = 0.5;
 /** Highest building height the application accepts (metres). */
 export const MAX_BUILDING_HEIGHT_M = 200;
+/**
+ * Default height for a newly initialized building with no supplied height
+ * (metres). A mid-rise starting point that reads well in the 3D view. This is
+ * a prefill, not a measurement: an explicitly loaded height always wins, and
+ * the user still confirms or edits the value before any geometry is built.
+ */
+export const DEFAULT_BUILDING_HEIGHT_M = 10;
 
 /**
  * Validate a user-entered building height.

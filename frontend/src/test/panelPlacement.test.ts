@@ -241,4 +241,44 @@ describe("placePanels", () => {
       expect(footprintInsidePolygon(inflated, terrace)).toBe(true);
     }
   });
+
+  it("applies row and column spacing on their own axes", () => {
+    // Wide column gap thins each row; tight row gap packs rows closer.
+    const wide = placePanels({
+      ...request(),
+      config: { ...DEFAULT_PANEL_CONFIG, rowSpacingM: 0.05, colSpacingM: 2.0 },
+    });
+    const even = placePanels(request());
+    expect(wide.panels.length).toBeLessThan(even.panels.length);
+    // Columns still respect the explicit 2 m gap.
+    const type = panelTypeDefinition(DEFAULT_PANEL_CONFIG.panelTypeId);
+    for (let i = 0; i < wide.panels.length; i++) {
+      for (let j = i + 1; j < wide.panels.length; j++) {
+        const a = wide.panels[i];
+        const b = wide.panels[j];
+        const footprintA = rectangleCorners(
+          a.x,
+          a.y,
+          type.widthM + 2 * 2.0,
+          type.lengthM,
+          a.rotationDeg,
+        );
+        const footprintB = rectangleCorners(b.x, b.y, type.widthM, type.lengthM, b.rotationDeg);
+        expect(footprintsOverlap(footprintA, footprintB)).toBe(false);
+      }
+    }
+  });
+
+  it("caps automatic placement at maxPanels deterministically", () => {
+    const full = placePanels(request());
+    expect(full.panels.length).toBeGreaterThan(3);
+    const capped = placePanels({
+      ...request(),
+      config: { ...DEFAULT_PANEL_CONFIG, maxPanels: 3 },
+    });
+    expect(capped.panels).toHaveLength(3);
+    // The first N of the uncapped lattice, in order - never a reshuffle.
+    expect(capped.panels).toEqual(full.panels.slice(0, 3));
+    expect(capped.reason).toBeNull();
+  });
 });

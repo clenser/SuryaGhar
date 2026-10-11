@@ -435,15 +435,20 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
             else if (material) shell.push(material);
           });
           setShellTransparent(shell, true);
-          // X-ray must not darken the ground beneath the footprint: a
-          // transparent shell still writes a full-strength shadow into the
-          // depth map, which then reads THROUGH the faded walls as a dark
-          // building-shaped patch on the satellite ground. Disabling the
-          // building's own casting removes exactly that patch; obstacles,
-          // panels and the parapet keep casting, so real external shadows
-          // stay visible. Fresh objects per rebuild: Solid mode restores
-          // casting automatically with no restore step.
+          // X-ray must not darken the ground beneath the footprint or clutter
+          // the roof: a transparent shell still writes a full-strength shadow
+          // into the depth map, which then reads THROUGH the faded walls as a
+          // dark building-shaped patch on the satellite ground, and the faded
+          // parapet ring stripes the roof the same way. Disabling casting on
+          // the building AND the parapet removes exactly those artifacts;
+          // obstacles and panels keep casting, so real external shadows stay
+          // visible. Fresh objects per rebuild: Solid mode restores casting
+          // automatically with no restore step.
           meshes.building.castShadow = false;
+          meshes.parapet?.traverse((child) => {
+            const mesh = child as Partial<THREE.Mesh>;
+            if (mesh.isMesh) mesh.castShadow = false;
+          });
           // Transparent shell renders after opaque interior content so
           // obstacles and inner faces read through it instead of z-fighting.
           // Fresh objects per rebuild: Solid mode needs no restore step.
@@ -611,6 +616,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
             layer.config.tiltDeg,
             localCoords.height,
             layer.config.mountHeightM,
+            layer.config.legCount,
           );
           groups.push(group);
           scene.add(group);
@@ -680,6 +686,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           config.mounting,
           config.tiltDeg,
           config.mountHeightM,
+          config.legCount,
         );
         const material = new THREE.MeshStandardMaterial({
           vertexColors: true,
