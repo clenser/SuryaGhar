@@ -8,7 +8,7 @@
  * AGENTS.md §48: professional, minimal, clear hierarchy.
  */
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { ChevronDown } from "lucide-react";
 
 interface CollapsibleSectionProps {
@@ -33,7 +33,7 @@ interface CollapsibleSectionProps {
 export function CollapsibleSection({
   title,
   icon,
-  defaultOpen = true,
+  defaultOpen = false,
   id,
   children,
   badge,
@@ -41,26 +41,6 @@ export function CollapsibleSection({
   className = "",
 }: CollapsibleSectionProps) {
   const [open, setOpen] = useState(defaultOpen);
-
-  // Persist open state to localStorage for session continuity
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(`inspector-section-${id}`);
-      if (stored !== null) {
-        setOpen(JSON.parse(stored));
-      }
-    } catch {
-      // Ignore localStorage errors
-    }
-  }, [id]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(`inspector-section-${id}`, JSON.stringify(open));
-    } catch {
-      // Ignore localStorage errors
-    }
-  }, [id, open]);
 
   return (
     <section className={`collapsible-section${open ? " is-open" : " is-closed"} ${className}`} data-section-id={id}>
@@ -73,14 +53,19 @@ export function CollapsibleSection({
       >
         <div className="collapsible-section__title-group">
           {icon && <span className="collapsible-section__icon" aria-hidden="true">{icon}</span>}
-          <h3 className="collapsible-section__title">{title}</h3>
+          <span className="collapsible-section__title">{title}</span>
           {badge !== undefined && (
             <span className="collapsible-section__badge" aria-label={`${badge} items`}>
               {badge}
             </span>
           )}
         </div>
-        <div className="collapsible-section__header-actions">
+        <div
+          className="collapsible-section__header-actions"
+          onClick={(e) => {
+            if (actions) e.stopPropagation();
+          }}
+        >
           {actions}
           <ChevronDown
             size={14}
@@ -95,7 +80,6 @@ export function CollapsibleSection({
         className="collapsible-section__panel"
         role="region"
         aria-labelledby={`section-header-${id}`}
-        hidden={!open}
       >
         <div className="collapsible-section__content">{children}</div>
       </div>

@@ -1083,6 +1083,22 @@ export function ModelPanel({
           selectedTreeId={selectedTreeId}
           className="model-viewport"
         />
+        {/* Viewport Toolbar - floating contextual tools anchored to viewport */}
+        {designMode && (
+          <ViewportToolbar
+            activeTool={activeTool}
+            onToolChange={setActiveTool}
+            xrayActive={xray}
+            onToggleXray={() => setXray((v) => !v)}
+            onResetView={() => viewerRef.current?.resetCamera()}
+            obstacleType={obstacleDraft.type}
+            drawing={drawing}
+            manualPlaceActive={manualPlaceActive}
+            sunPlaying={sun.playing}
+            onToggleSunPlay={sun.togglePlay}
+            inspectorCollapsed={inspectorCollapsed}
+          />
+        )}
       </div>
 
       {/* Viewport hint + camera/design-mode actions: the help text keeps its
@@ -1141,403 +1157,12 @@ export function ModelPanel({
         Rotate and zoom to inspect the building from all angles.
       </p>
 
-      {/* Building metrics â€” all values come from the projected geometry */}
-      <dl className="metric-list" style={{ marginBottom: "var(--space-3)" }}>
-        <div>
-          <dt>Terrace area</dt>
-          <dd>{areaText}</dd>
-        </div>
-        <div>
-          <dt>Perimeter</dt>
-          <dd>{perimeterText}</dd>
-        </div>
-        <div>
-          <dt>Footprint extent (E Ã— N)</dt>
-          <dd>{extentText}</dd>
-        </div>
-        <div>
-          <dt>Building height</dt>
-          <dd>{model.heightM.toFixed(1)} m</dd>
-        </div>
-        <div>
-          <dt>
-            <label htmlFor="parapet-height">Parapet height</label>
-          </dt>
-          <dd>
-            <span className="height-inline">
-              <input
-                id="parapet-height"
-                type="number"
-                step="0.1"
-                min={MIN_PARAPET_HEIGHT_M}
-                max={MAX_PARAPET_HEIGHT_M}
-                value={parapetDraft ?? parapetHeightM.toFixed(1)}
-                onChange={(event) => {
-                  const raw = event.target.value;
-                  setParapetDraft(raw);
-                  const parsed = Number(raw);
-                  if (validateParapetHeight(parsed) === null) onSetParapetHeight?.(parsed);
-                }}
-                onBlur={() => setParapetDraft(null)}
-                aria-describedby={parapetError ? "parapet-error" : undefined}
-                aria-invalid={parapetError !== null}
-              />{" "}
-              m
-            </span>
-            {parapetError && (
-              <span id="parapet-error" className="stage-card__warning" role="alert">
-                {parapetError}
-              </span>
-            )}
-          </dd>
-        </div>
-        <div>
-          <dt>
-            <label htmlFor="panel-edge-setback">Panel edge setback</label>
-          </dt>
-          <dd>
-            <span className="height-inline">
-              <input
-                id="panel-edge-setback"
-                type="number"
-                step="0.1"
-                min={PANEL_SETBACK_MIN_M}
-                max={PANEL_SETBACK_MAX_M}
-                value={setbackDraft ?? (activeSet?.config.setbackM ?? DEFAULT_PANEL_CONFIG.setbackM).toFixed(1)}
-                onChange={(event) => {
-                  const raw = event.target.value;
-                  setSetbackDraft(raw);
-                  const parsed = Number(raw);
-                  if (
-                    activeSet &&
-                    Number.isFinite(parsed) &&
-                    parsed >= PANEL_SETBACK_MIN_M &&
-                    parsed <= PANEL_SETBACK_MAX_M
-                  ) {
-                    handlePanelConfigChange({ setbackM: parsed });
-                  }
-                }}
-                onBlur={() => setSetbackDraft(null)}
-                aria-describedby={setbackError ? "setback-error" : undefined}
-                aria-invalid={setbackError !== null}
-                disabled={!activeSet}
-              />{" "}
-              m
-            </span>
-            {setbackError && (
-              <span id="setback-error" className="stage-card__warning" role="alert">
-                {setbackError}
-              </span>
-            )}
-          </dd>
-        </div>
-        <div>
-          <dt>
-            <label htmlFor="parapet-clearance">Parapet clearance</label>
-          </dt>
-          <dd>
-            <span className="height-inline">
-              <input
-                id="parapet-clearance"
-                type="number"
-                step="0.1"
-                min={MIN_PARAPET_CLEARANCE_M}
-                max={MAX_PARAPET_CLEARANCE_M}
-                value={parapetClearanceDraft ?? parapetClearanceM.toFixed(1)}
-                onChange={(event) => {
-                  const raw = event.target.value;
-                  setParapetClearanceDraft(raw);
-                  const parsed = Number(raw);
-                  if (Number.isFinite(parsed) && parsed >= MIN_PARAPET_CLEARANCE_M && parsed <= MAX_PARAPET_CLEARANCE_M) {
-                    // A refusal message describes the previous
-                    // configuration; the next click revalidates live
-                    // against the new clearance, so the obsolete text
-                    // must not linger as if it still applied.
-                    setManualStatus(null);
-                    onSetParapetClearance?.(parsed);
-                  }
-                }}
-                onBlur={() => setParapetClearanceDraft(null)}
-                aria-describedby={parapetClearanceError ? "parapet-clearance-error" : undefined}
-                aria-invalid={parapetClearanceError !== null}
-                title="Clear gap kept between the parapet's inner face and a panel. Separate from the panel edge setback, which measures from the roof edge."
-              />{" "}
-              m
-            </span>
-            {parapetClearanceError && (
-              <span id="parapet-clearance-error" className="stage-card__warning" role="alert">
-                {parapetClearanceError}
-              </span>
-            )}
-          </dd>
-        </div>
-        <div>
-          <dt>Total height</dt>
-          <dd>{(model.heightM + parapetHeightM).toFixed(1)} m</dd>
-        </div>
-        <div>
-          <dt>Volume (approx.)</dt>
-          <dd>{volumeText}</dd>
-        </div>
-      </dl>
-
-      {/* Sun simulation: date, local time, sun position, full-day playback */}
-      <SunControls
-        date={sun.date}
-        timeMinutes={sun.timeMinutes}
-        playing={sun.playing}
-        state={sun.state}
-        timezoneLabel={timezoneLabel}
-        dateTimeLabel={dateTimeLabel}
-        onDateChange={sun.setDate}
-        onTimeChange={sun.setTime}
-        onTogglePlay={sun.togglePlay}
-      />
-
-      {/* Rooftop obstacles */}
-      <div className="obstacle-section">
-        <div className="obstacle-toolbar">
-          <div className="obstacle-toolbar__labels">
-            <h3 className="obstacle-section__title">Rooftop obstacles</h3>
-            <p className="obstacle-count">
-              {obstacles.length === 0
-                ? "None on the roof yet"
-                : `${obstacles.length} obstacle${obstacles.length === 1 ? "" : "s"} on the roof`}
-            </p>
-          </div>
-          {obstacleMode === "idle" && (
-            <button type="button" className="btn btn--secondary" onClick={startAddObstacle}>
-              <Plus size={15} strokeWidth={2} aria-hidden="true" />
-              Add obstacle
-            </button>
-          )}
-        </div>
-
-        {invalidObstacles.length > 0 && (
-          <p className="obstacle-warning" role="alert">
-            <AlertTriangle size={14} strokeWidth={1.75} aria-hidden="true" />
-            <span>
-              {invalidObstacles
-                .map((entry) => `${obstacleTypeLabel(entry.obstacle.type)}: ${entry.error}`)
-                .join(" Â· ")}
-            </span>
-          </p>
-        )}
-
-        {drawing ? (
-          <div className="obstacle-draw" role="group" aria-label="Draw rooftop footprint">
-            <p className="obstacle-form__hint">
-              Rooftop footprint selection is active â€” click on the roof to add points
-              ({footPoints.length} so far). Double-click or Confirm to finish; the height
-              step follows.
-            </p>
-            {footError && (
-              <p className="obstacle-form__error" role="alert">
-                {footError}
-              </p>
-            )}
-            <div className="obstacle-form__actions">
-              <button type="button" className="btn btn--primary" onClick={finishFootprint}>
-                Confirm footprint
-              </button>
-              {/* Undo removes only the last vertex and keeps drawing; Cancel is
-                  what exits the session, so the two are deliberately separate. */}
-              <button
-                type="button"
-                className="btn btn--secondary"
-                onClick={undoFootPoint}
-                disabled={(footPoints?.length ?? 0) === 0}
-                title="Remove the last drawn point"
-              >
-                Undo point
-              </button>
-              <button type="button" className="btn btn--subtle" onClick={cancelDrawing}>
-                Cancel
-              </button>
-            </div>
-          </div>
-        ) : (
-          obstacleMode !== "idle" && (
-            <ObstacleEditor
-              mode={obstacleMode}
-              draft={obstacleDraft}
-              error={obstacleSubmitted && !draftResult.valid ? draftResult.error : null}
-              onDraftChange={setObstacleDraft}
-              onTypeChange={handleObstacleTypeChange}
-              onSubmit={handleObstacleSubmit}
-              onCancel={closeObstacleEditor}
-              onDrawFootprint={
-                obstacleMode === "adding" && obstacleDraft.type === "custom" ? startDrawFootprint : undefined
-              }
-            />
-          )
-        )}
-
-        {obstacles.length > 0 && (
-          <ul className="obstacle-list">
-            {obstacles.map((obstacle) => {
-              const invalid = invalidObstacles.find((entry) => entry.obstacle.id === obstacle.id);
-              const label = obstacleTypeLabel(obstacle.type);
-              return (
-                <li
-                  key={obstacle.id}
-                  className={`obstacle-item${
-                    selectedObstacleId === obstacle.id ? " is-selected" : ""
-                  }${invalid ? " is-invalid" : ""}`}
-                >
-                  <div className="obstacle-item__body">
-                    <span className="obstacle-item__name">{label}</span>
-                    <span className="obstacle-item__meta">
-                      {formatObstacleDimensions(obstacle)} Â· {obstacle.rotation}Â° Â· E{" "}
-                      {obstacle.position.x.toFixed(1)} Â· N {obstacle.position.y.toFixed(1)}
-                      {invalid ? ` Â· ${invalid.error}` : ""}
-                    </span>
-                  </div>
-                  <div className="obstacle-item__actions">
-                    <button
-                      type="button"
-                      className="btn btn--subtle"
-                      onClick={() => startEditObstacle(obstacle)}
-                    >
-                      <Pencil size={14} strokeWidth={1.75} aria-hidden="true" />
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn--subtle-danger"
-                      onClick={() => handleDeleteObstacle(obstacle.id)}
-                      aria-label={`Delete ${label}`}
-                    >
-                      <Trash2 size={14} strokeWidth={1.75} aria-hidden="true" />
-                      Delete
-                    </button>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </div>
-
-      {/* Solar panel layout (Phase 5): strictly opt-in. The roof stays empty
-          until the user explicitly enables placement; disabling again removes
-          every panel mesh and resets the counts. */}
-      {panelsEnabled ? (
-        <>
-          <div className="stage-card__actions" style={{ marginBottom: "var(--space-2)" }}>
-            <button type="button" className="btn btn--secondary" onClick={() => setPanelsEnabled(false)}>
-              Remove solar panels
-            </button>
-          </div>
-          <SolarPanelSection
-            sets={panelSets}
-            activeSetId={activeSetId}
-            onSelectSet={setActiveSetId}
-            onAddSet={handleAddSet}
-            onDuplicateSet={handleDuplicateSet}
-            onDeleteSet={handleDeleteSet}
-            onRenameSet={(id: string, name: string) =>
-              setPanelSets((sets) => sets.map((s) => (s.id === id ? { ...s, name } : s)))
-            }
-            config={activeSet?.config ?? DEFAULT_PANEL_CONFIG}
-            onConfigChange={handlePanelConfigChange}
-            onRecalculate={handleRecalculate}
-            onAutoPlace={handleAutoPlaceSet}
-            onAutoPlaceAll={handleAutoPlaceAll}
-            onUndoLast={handleUndoLastPanel}
-            manualPlaceActive={manualPlaceActive}
-            onToggleManualPlace={() => setManualPlaceActive((v) => !v)}
-            manualPlaceMode={manualPlaceMode}
-            onManualPlaceModeChange={setManualPlaceMode}
-            manualPlacedCount={activeSet?.panels.length ?? 0}
-            manualStatus={manualStatus}
-            setWarning={activeSetProblems}
-            maxSetRows={setLimits.maxRows}
-            maxSetCols={setLimits.maxCols}
-            setRotationDeg={manualSetRotation}
-            onRotateSet={(delta) => setSetExtraRotation((deg) => deg + delta)}
-            onUndoLastSet={handleUndoLastSet}
-            canUndoLastSet={lastSetCommit !== null}
-            onClearManual={() =>
-              setPanelSets((sets) => sets.map((s) => s.id !== activeSetId ? s : {
-                ...s, panels: [], userModified: true,
-              }))
-            }
-            panelCount={panelCount}
-            capacityKw={capacityKw}
-            warning={placeWarning ?? (activeSet ? (placements[panelSets.indexOf(activeSet)]?.reason ?? null) : null)}
-            energy={energy}
-          />
-        </>
-      ) : (
-        <div className="obstacle-section">
-          <div className="obstacle-toolbar">
-            <div className="obstacle-toolbar__labels">
-              <h3 className="obstacle-section__title">Solar panels</h3>
-              <p className="obstacle-count">No panels placed yet</p>
-            </div>
-            <button
-              type="button"
-              className="btn btn--secondary"
-              onClick={() => setPanelsEnabled(true)}
-              title="Generate a panel layout from the current settings"
-            >
-              Enable solar panels
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Actions */}
-      <div className="stage-card__actions actions-duo">
-        <button type="button" className="btn btn--secondary" onClick={() => setEditingHeight(true)}>
-          <RotateCcw size={15} strokeWidth={2} aria-hidden="true" />
-          Change height
-        </button>
-        <button
-          type="button"
-          className="btn btn--primary"
-          onClick={onContinue}
-          disabled={!backendReady}
-          title={!backendReady ? BACKEND_WAITING_LABEL : "Continue to surface validation"}
-        >
-          <ArrowRight size={15} strokeWidth={2} aria-hidden="true" />
-          Continue to Validate
-        </button>
-      </div>
-
-      {!backendReady && (
-        <p className="readiness-lock" role="status" style={{ marginTop: "var(--space-2)" }}>
-          <span className="readiness-lock__dot" aria-hidden="true" />
-          {BACKEND_WAITING_LABEL} 3D view works offline; validation needs the analysis server.
-        </p>
-      )}
-      </div>
-      {/* Inspector: independently scrollable collapsible sections */}
-      <div className="design-side">
-        {/* Viewport Toolbar - floating contextual tools anchored to viewport */}
-        {designMode && (
-          <ViewportToolbar
-            activeTool={activeTool}
-            onToolChange={setActiveTool}
-            xrayActive={xray}
-            onToggleXray={() => setXray((v) => !v)}
-            onResetView={() => viewerRef.current?.resetCamera()}
-            obstacleType={obstacleDraft.type}
-            drawing={drawing}
-            manualPlaceActive={manualPlaceActive}
-            sunPlaying={sun.playing}
-            onToggleSunPlay={sun.togglePlay}
-            inspectorCollapsed={inspectorCollapsed}
-          />
-        )}
-
-        <div className="inspector-panel" style={{ flex: 1 }}>
+        <div className="inspector-panel" key={designMode ? "design" : "normal"} style={{ flex: 1 }}>
           {/* Building Metrics */}
           <CollapsibleSection
             id="metrics"
             title="Building Metrics"
-            defaultOpen={true}
+            defaultOpen={false}
             icon={<Sun size={14} strokeWidth={1.75} aria-hidden="true" />}
           >
             <dl className="metric-list" style={{ marginBottom: "var(--space-3)" }}>
@@ -1566,89 +1191,101 @@ export function ModelPanel({
                 <dd>{volumeText}</dd>
               </div>
             </dl>
+            <div style={{ marginTop: "var(--space-2)" }}>
+              <button
+                type="button"
+                className="btn btn--secondary"
+                onClick={() => setEditingHeight(true)}
+                title="Change the building height"
+              >
+                <RotateCcw size={14} strokeWidth={2} aria-hidden="true" /> Change height
+              </button>
+            </div>
           </CollapsibleSection>
 
-          {/* Parapet & Setbacks */}
+          {/* Parapet & Clearance */}
           <CollapsibleSection
             id="parapet"
             title="Parapet & Clearance"
-            defaultOpen={true}
+            defaultOpen={false}
             icon={<Eye size={14} strokeWidth={1.75} aria-hidden="true" />}
           >
             <div style={{ marginBottom: "var(--space-2)" }}>
-              <div>
-                <dt>Parapet height</dt>
-                <dd>
-                  <span className="height-inline">
-                    <input
-                      id="parapet-height"
-                      type="number"
-                      step="0.1"
-                      min={MIN_PARAPET_HEIGHT_M}
-                      max={MAX_PARAPET_HEIGHT_M}
-                      value={parapetDraft ?? parapetHeightM.toFixed(1)}
-                      onChange={(event) => {
-                        const raw = event.target.value;
-                        setParapetDraft(raw);
-                        const parsed = Number(raw);
-                        if (validateParapetHeight(parsed) === null) onSetParapetHeight?.(parsed);
-                      }}
-                      onBlur={() => setParapetDraft(null)}
-                      aria-describedby={parapetError ? "parapet-error" : undefined}
-                      aria-invalid={parapetError !== null}
-                    />{" "}
-                    m
-                  </span>
-                </dd>
+              <dt>
+                <label htmlFor="parapet-height">Parapet height</label>
+              </dt>
+              <dd>
+                <span className="height-inline">
+                  <input
+                    id="parapet-height"
+                    type="number"
+                    step="0.1"
+                    min={MIN_PARAPET_HEIGHT_M}
+                    max={MAX_PARAPET_HEIGHT_M}
+                    value={parapetDraft ?? parapetHeightM.toFixed(1)}
+                    onChange={(event) => {
+                      const raw = event.target.value;
+                      setParapetDraft(raw);
+                      const parsed = Number(raw);
+                      if (validateParapetHeight(parsed) === null) onSetParapetHeight?.(parsed);
+                    }}
+                    onBlur={() => setParapetDraft(null)}
+                    aria-describedby={parapetError ? "parapet-error" : undefined}
+                    aria-invalid={parapetError !== null}
+                  />{" "}
+                  m
+                </span>
                 {parapetError && (
                   <span id="parapet-error" className="stage-card__warning" role="alert">
                     {parapetError}
                   </span>
                 )}
-              </div>
+              </dd>
             </div>
             <div style={{ marginBottom: "var(--space-2)" }}>
-              <div>
-                <dt>Panel edge setback</dt>
-                <dd>
-                  <span className="height-inline">
-                    <input
-                      id="panel-edge-setback"
-                      type="number"
-                      step="0.1"
-                      min={PANEL_SETBACK_MIN_M}
-                      max={PANEL_SETBACK_MAX_M}
-                      value={setbackDraft ?? (activeSet?.config.setbackM ?? DEFAULT_PANEL_CONFIG.setbackM).toFixed(1)}
-                      onChange={(event) => {
-                        const raw = event.target.value;
-                        setSetbackDraft(raw);
-                        const parsed = Number(raw);
-                        if (
-                          activeSet &&
-                          Number.isFinite(parsed) &&
-                          parsed >= PANEL_SETBACK_MIN_M &&
-                          parsed <= PANEL_SETBACK_MAX_M
-                        ) {
-                          handlePanelConfigChange({ setbackM: parsed });
-                        }
-                      }}
-                      onBlur={() => setSetbackDraft(null)}
-                      aria-describedby={setbackError ? "setback-error" : undefined}
-                      aria-invalid={setbackError !== null}
-                      disabled={!activeSet}
-                    />{" "}
-                    m
-                  </span>
-                </dd>
+              <dt>
+                <label htmlFor="panel-edge-setback">Panel edge setback</label>
+              </dt>
+              <dd>
+                <span className="height-inline">
+                  <input
+                    id="panel-edge-setback"
+                    type="number"
+                    step="0.1"
+                    min={PANEL_SETBACK_MIN_M}
+                    max={PANEL_SETBACK_MAX_M}
+                    value={setbackDraft ?? (activeSet?.config.setbackM ?? DEFAULT_PANEL_CONFIG.setbackM).toFixed(1)}
+                    onChange={(event) => {
+                      const raw = event.target.value;
+                      setSetbackDraft(raw);
+                      const parsed = Number(raw);
+                      if (
+                        activeSet &&
+                        Number.isFinite(parsed) &&
+                        parsed >= PANEL_SETBACK_MIN_M &&
+                        parsed <= PANEL_SETBACK_MAX_M
+                      ) {
+                        handlePanelConfigChange({ setbackM: parsed });
+                      }
+                    }}
+                    onBlur={() => setSetbackDraft(null)}
+                    aria-describedby={setbackError ? "setback-error" : undefined}
+                    aria-invalid={setbackError !== null}
+                    disabled={!activeSet}
+                  />{" "}
+                  m
+                </span>
                 {setbackError && (
                   <span id="setback-error" className="stage-card__warning" role="alert">
                     {setbackError}
                   </span>
                 )}
-              </div>
+              </dd>
             </div>
             <div>
-              <dt>Parapet clearance</dt>
+              <dt>
+                <label htmlFor="parapet-clearance">Parapet clearance</label>
+              </dt>
               <dd>
                 <span className="height-inline">
                   <input
@@ -1674,20 +1311,75 @@ export function ModelPanel({
                   />{" "}
                   m
                 </span>
+                {parapetClearanceError && (
+                  <span id="parapet-clearance-error" className="stage-card__warning" role="alert">
+                    {parapetClearanceError}
+                  </span>
+                )}
               </dd>
-              {parapetClearanceError && (
-                <span id="parapet-clearance-error" className="stage-card__warning" role="alert">
-                  {parapetClearanceError}
-                </span>
-              )}
             </div>
           </CollapsibleSection>
 
-          {/* Rooftop Obstacles */}
+          {/* Sun & Shadows */}
+          <CollapsibleSection
+            id="sun"
+            title="Sun & Shadows"
+            defaultOpen={false}
+            icon={<Moon size={14} strokeWidth={1.75} aria-hidden="true" />}
+          >
+            <SunControls
+              date={sun.date}
+              timeMinutes={sun.timeMinutes}
+              playing={sun.playing}
+              state={sun.state}
+              timezoneLabel={timezoneLabel}
+              dateTimeLabel={dateTimeLabel}
+              onDateChange={sun.setDate}
+              onTimeChange={sun.setTime}
+              onTogglePlay={sun.togglePlay}
+            />
+            
+          </CollapsibleSection>
+
+          {/* Weather */}
+          <CollapsibleSection
+            id="weather"
+            title="Weather"
+            defaultOpen={false}
+            icon={<Sun size={14} strokeWidth={1.75} aria-hidden="true" />}
+          >
+            <div className="weather-preset-controls">
+              <div className="weather-preset-btn-group" role="group" aria-label="Weather presets">
+                <button
+                  type="button"
+                  className={"weather-preset-btn" + (weatherPreset === "sunny" ? " weather-preset-btn--active" : "")}
+                  onClick={() => setWeatherPreset("sunny")}
+                  title="Sunny: clear daylight with direct shadows"
+                >Sunny</button>
+                <button
+                  type="button"
+                  className={"weather-preset-btn" + (weatherPreset === "cloudy" ? " weather-preset-btn--active" : "")}
+                  onClick={() => setWeatherPreset("cloudy")}
+                  title="Cloudy: soft diffuse lighting"
+                >Cloudy</button>
+                <button
+                  type="button"
+                  className={"weather-preset-btn" + (weatherPreset === "rainy" ? " weather-preset-btn--active" : "")}
+                  onClick={() => setWeatherPreset("rainy")}
+                  title="Rainy: overcast lighting with light rain visualization"
+                >Rainy</button>
+              </div>
+            </div>
+            <p className="panel-group__hint" style={{ marginTop: "var(--space-2)" }}>
+              Visual simulation only: adjusts 3D lighting without affecting deterministic solar yield calculations.
+            </p>
+          </CollapsibleSection>
+
+{/* Rooftop Obstacles */}
           <CollapsibleSection
             id="obstacles"
-            title="Rooftop Obstacles"
-            defaultOpen={obstacles.length > 0 || obstacleMode !== "idle"}
+            title="Trees & Obstacles"
+            defaultOpen={false}
             icon={<TreePine size={14} strokeWidth={1.75} aria-hidden="true" />}
           >
             <div className="obstacle-toolbar">
@@ -1803,11 +1495,13 @@ export function ModelPanel({
             )}
           </CollapsibleSection>
 
-          {/* Solar Panel Layout */}
+          
+
+          {/* Panel Sets */}
           <CollapsibleSection
-            id="panels"
-            title="Solar Panel Layout"
-            defaultOpen={panelsEnabled}
+            id="panel-sets"
+            title="Panel Sets"
+            defaultOpen={false}
             icon={<Settings2 size={14} strokeWidth={1.75} aria-hidden="true" />}
           >
             {panelsEnabled ? (
@@ -1818,6 +1512,7 @@ export function ModelPanel({
                   </button>
                 </div>
                 <SolarPanelSection
+                  displayMode="sets"
                   sets={panelSets}
                   activeSetId={activeSetId}
                   onSelectSet={setActiveSetId}
@@ -1854,7 +1549,6 @@ export function ModelPanel({
                   panelCount={panelCount}
                   capacityKw={capacityKw}
                   warning={placeWarning ?? (activeSet ? (placements[panelSets.indexOf(activeSet)]?.reason ?? null) : null)}
-                  energy={energy}
                 />
               </>
             ) : (
@@ -1877,68 +1571,39 @@ export function ModelPanel({
             )}
           </CollapsibleSection>
 
-          {/* Sun Simulation */}
+          {/* Panel Configuration */}
           <CollapsibleSection
-            id="sun"
-            title="Sun & Shadows"
-            defaultOpen={true}
-            icon={<Moon size={14} strokeWidth={1.75} aria-hidden="true" />}
-          >
-            <SunControls
-              date={sun.date}
-              timeMinutes={sun.timeMinutes}
-              playing={sun.playing}
-              state={sun.state}
-              timezoneLabel={timezoneLabel}
-              dateTimeLabel={dateTimeLabel}
-              onDateChange={sun.setDate}
-              onTimeChange={sun.setTime}
-              onTogglePlay={sun.togglePlay}
-            />
-          </CollapsibleSection>
-
-          {/* Weather & Settings */}
-          <CollapsibleSection
-            id="weather"
-            title="Weather & Settings"
-            defaultOpen={true}
+            id="panel-config"
+            title="Panel Configuration"
+            defaultOpen={false}
             icon={<Box size={14} strokeWidth={1.75} aria-hidden="true" />}
           >
-            <p className="sun-meta">
-              <span>Site time zone · {timezoneLabel}</span>
-              <span className="sun-meta__note">
-                Visual shadow simulation — not an energy-loss calculation
-              </span>
-            </p>
-            {/* Weather preset controls */}
-            <div className="weather-preset-controls">
-              <div className="weather-preset-btn-group">
-                <button
-                  type="button"
-                  className={"weather-preset-btn" + (weatherPreset === "sunny" ? " weather-preset-btn--active" : "")}
-                  onClick={() => setWeatherPreset("sunny")}
-                  title="Sunny"
-                >Sunny</button>
-                <button
-                  type="button"
-                  className={"weather-preset-btn" + (weatherPreset === "cloudy" ? " weather-preset-btn--active" : "")}
-                  onClick={() => setWeatherPreset("cloudy")}
-                  title="Cloudy"
-                >Cloudy</button>
-                <button
-                  type="button"
-                  className={"weather-preset-btn" + (weatherPreset === "rainy" ? " weather-preset-btn--active" : "")}
-                  onClick={() => setWeatherPreset("rainy")}
-                  title="Rainy"
-                >Rainy</button>
-              </div>
-            </div>
+            {panelsEnabled ? (
+              <SolarPanelSection
+                displayMode="config"
+                sets={panelSets}
+                activeSetId={activeSetId}
+                config={activeSet?.config ?? DEFAULT_PANEL_CONFIG}
+                onConfigChange={handlePanelConfigChange}
+                onRecalculate={handleRecalculate}
+                panelCount={panelCount}
+                capacityKw={capacityKw}
+                warning={null}
+                energy={energy}
+              />
+            ) : (
+              <p className="panel-group__hint">
+                Enable solar panels in Panel Sets to configure module rating, mounting, orientation, and spacing.
+              </p>
+            )}
           </CollapsibleSection>
+
+          </div>
 
           {/* Bottom Action Bar */}
           <div className="inspector-actions">
             {/* Status */}
-            <div className={validObstacleCount > 0 || activeSetProblems ? "inspector-actions__status" : "inspector-actions__status inspector-actions__status--valid"} role="status">
+            <div className={validObstacleCount > 0 || activeSetProblems ? "inspector-actions__status" : "inspector-actions__status inspector-actions__status--valid"}>
               <span className="inspector-actions__status-icon">
                 {validObstacleCount > 0 ? (
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--color-warning)" strokeWidth="2">
@@ -1966,12 +1631,17 @@ export function ModelPanel({
               </button>
             </div>
           </div>
+
+          {!backendReady && (
+            <p className="readiness-lock" role="status" style={{ marginTop: "var(--space-2)" }}>
+              <span className="readiness-lock__dot" aria-hidden="true" />
+              {BACKEND_WAITING_LABEL} 3D view works offline; validation needs the analysis server.
+            </p>
+          )}
         </div>
       </div>
-    </div>
     </div>
   );
 }
 
 export default ModelPanel;
-

@@ -76,79 +76,99 @@ const WEATHER_ADJUSTMENTS: Record<WeatherPreset, {
   sunIntensityFactor: number;
   ambientIntensityFactor: number;
   hemiIntensityFactor: number;
-  sunColorShift: number; // -1..1, negative = cooler, positive = warmer
 }> = {
   sunny: {
     sunIntensityFactor: 1.0,
     ambientIntensityFactor: 1.0,
     hemiIntensityFactor: 1.0,
-    sunColorShift: 0,
   },
   cloudy: {
-    sunIntensityFactor: 0.7,
-    ambientIntensityFactor: 1.15,
-    hemiIntensityFactor: 1.05,
-    sunColorShift: -0.15,
+    sunIntensityFactor: 0.40,
+    ambientIntensityFactor: 1.35,
+    hemiIntensityFactor: 1.25,
   },
   rainy: {
-    sunIntensityFactor: 0.65,
-    ambientIntensityFactor: 1.2,
-    hemiIntensityFactor: 1.1,
-    sunColorShift: -0.25,
+    sunIntensityFactor: 0.15,
+    ambientIntensityFactor: 0.70,
+    hemiIntensityFactor: 0.65,
   },
 };
 
 /** Apply a weather preset adjustment to the scene lights.
- *  This is called after applySunToScene() and only modifies existing light
- *  properties (intensity, color) — it does NOT create new lights, move the
- *  sun, or alter shadow camera settings. The solar position (azimuth/elevation)
- *  and all analytical calculations remain unchanged.
+ *  This recalculates weather-adjusted lighting from the current solar baseline
+ *  without modifying solar position, shadow camera, or energy calculations.
+ *  Idempotent: switching between presets never accumulates drift.
  */
 export function applyWeatherPreset(
   sun: THREE.DirectionalLight,
   ambient: THREE.AmbientLight,
   hemi: THREE.HemisphereLight | null,
   preset: WeatherPreset,
+  state?: SunState | null,
 ): void {
-  const adj = WEATHER_ADJUSTMENTS[preset] || WEATHER_ADJUSTMENTS.sunny;
+  const isNight = state ? (state.night || state.elevationDeg <= 0) : Boolean(sun.userData.isNight);
 
-  // Adjust sun directional light intensity (multiplies the elevation-dependent
-  // intensity set by applySunToScene(), preserving sun position behavior).
-  sun.intensity *= adj.sunIntensityFactor;
-
-  // Adjust sun color via a subtle shift in the hex value.
-  // We shift the existing color toward cooler/warmter by modulating channels.
-  // The sun's color was set by applySunToScene() using sunColorHex(); we
-  // apply an additional shift here so the change is on top of the solar-driven
-  // color rather than replacing it.
-  const currentR = (sun.color.getHex() >> 16) & 255;
-  const currentG = (sun.color.getHex() >> 8) & 255;
-  const currentB = sun.color.getHex() & 255;
-  const shift = adj.sunColorShift; // -1 = very cool, 1 = very warm
-  // Clamp shift to reasonable range and apply as a channel delta
-  const delta = Math.max(-1, Math.min(1, shift)) * 30; // ~30 units per shift unit
-  const newR = Math.max(0, Math.min(255, currentR + delta));
-  const newG = Math.max(0, Math.min(255, currentG + delta * 0.8));
-  const newB = Math.max(0, Math.min(255, currentB + delta * 0.6));
-  sun.color.setRGB(newR / 255, newG / 255, newB / 255);
-
-  // Adjust ambient fill intensity
-  ambient.intensity = AMBIENT_DAY_INTENSITY * adj.ambientIntensityFactor;
-
-  // Adjust hemisphere fill intensity and optionally its color for "rainy"
-  if (hemi) {
-    hemi.intensity = HEMI_DAY_INTENSITY * adj.hemiIntensityFactor;
-    // For rainy: slight cooler shift on the hemisphere too
-    if (preset === "rainy") {
-      const currentHR = (hemi.color.getHex() >> 16) & 255;
-      const currentHG = (hemi.color.getHex() >> 8) & 255;
-      const currentHB = hemi.color.getHex() & 255;
-      const rainShift = -0.1; // mild cooler bias
-      const r2 = Math.max(0, Math.min(255, currentHR + Math.round(rainShift * 80)));
-      const g2 = Math.max(0, Math.min(255, currentHG + Math.round(rainShift * 60)));
-      const b2 = Math.max(0, Math.min(255, currentHB + Math.round(rainShift * 40)));
-      hemi.color.setRGB(r2 / 255, g2 / 255, b2 / 255);
+  if (isNight) {
+    sun.intensity = 0;
+    ambient.intensity = AMBIENT_NIGHT_INTENSITY;
+    if (hemi) {
+      hemi.intensity = HEMI_NIGHT_INTENSITY;
+      hemi.color.setHex(HEMI_SKY_COLOR);
+      hemi.groundColor.setHex(HEMI_GROUND_COLOR);
     }
+    return;
+  }
+
+  const elevationDeg = state
+    ? state.elevationDeg
+    : (typeof sun.userData.baseElevationDeg === "number" ? sun.userData.baseElevationDeg : 45);
+
+  const baseIntensity = typeof sun.userData.baselineIntensity === "number"
+    ? sun.userData.baselineIntensity
+    : sunIntensity(elevationDeg);
+  const baseColorHex = typeof sun.userData.baselineColorHex === "number"
+    ? sun.userData.baselineColorHex
+    : sunColorHex(elevationDeg);
+
+  const adj = WEATHER_ADJUSTMENTS[preset] ?? WEATHER_ADJUSTMENTS.sunny;
+
+  if (preset === "sunny") {
+    // Fully idempotent restoration of exact solar baseline
+    sun.intensity = baseIntensity;
+    sun.color.setHex(baseColorHex);
+    ambient.intensity = AMBIENT_DAY_INTENSITY;
+    if (hemi) {
+      hemi.intensity = HEMI_DAY_INTENSITY;
+      hemi.color.setHex(HEMI_SKY_COLOR);
+      hemi.groundColor.setHex(HEMI_GROUND_COLOR);
+    }
+    return;
+  }
+
+  if (preset === "cloudy") {
+    // Noticeably softer, more diffuse lighting and reduced direct-sun contrast
+    sun.intensity = baseIntensity * adj.sunIntensityFactor;
+    sun.color.setHex(0xe8eef5);
+    ambient.intensity = AMBIENT_DAY_INTENSITY * adj.ambientIntensityFactor;
+    if (hemi) {
+      hemi.intensity = HEMI_DAY_INTENSITY * adj.hemiIntensityFactor;
+      hemi.color.setHex(0xcedee8);
+      hemi.groundColor.setHex(0x9fa4a8);
+    }
+    return;
+  }
+
+  if (preset === "rainy") {
+    // Visibly darker, cooler scene with reduced direct lighting
+    sun.intensity = baseIntensity * adj.sunIntensityFactor;
+    sun.color.setHex(0xb8c8d8);
+    ambient.intensity = AMBIENT_DAY_INTENSITY * adj.ambientIntensityFactor;
+    if (hemi) {
+      hemi.intensity = HEMI_DAY_INTENSITY * adj.hemiIntensityFactor;
+      hemi.color.setHex(0x8fa4b8);
+      hemi.groundColor.setHex(0x6e757c);
+    }
+    return;
   }
 }
 
@@ -261,10 +281,19 @@ export function applySunToScene(
   state: SunState,
   hemi?: THREE.HemisphereLight | null,
 ): void {
-  if (state.night || state.elevationDeg <= 0) {
+  const isNight = state.night || state.elevationDeg <= 0;
+  sun.userData.isNight = isNight;
+  sun.userData.baseElevationDeg = state.elevationDeg;
+  sun.userData.baseAzimuthDeg = state.azimuthDeg;
+
+  if (isNight) {
     sun.intensity = 0;
     ambient.intensity = AMBIENT_NIGHT_INTENSITY;
-    if (hemi) hemi.intensity = HEMI_NIGHT_INTENSITY;
+    if (hemi) {
+      hemi.intensity = HEMI_NIGHT_INTENSITY;
+      hemi.color.setHex(HEMI_SKY_COLOR);
+      hemi.groundColor.setHex(HEMI_GROUND_COLOR);
+    }
     return;
   }
 
@@ -273,8 +302,17 @@ export function applySunToScene(
   sun.position.copy(sun.target.position).addScaledVector(direction, distance);
   sun.target.updateMatrixWorld();
 
-  sun.intensity = sunIntensity(state.elevationDeg);
-  sun.color.setHex(sunColorHex(state.elevationDeg));
+  const baseIntensity = sunIntensity(state.elevationDeg);
+  const baseColor = sunColorHex(state.elevationDeg);
+  sun.userData.baselineIntensity = baseIntensity;
+  sun.userData.baselineColorHex = baseColor;
+
+  sun.intensity = baseIntensity;
+  sun.color.setHex(baseColor);
   ambient.intensity = AMBIENT_DAY_INTENSITY;
-  if (hemi) hemi.intensity = HEMI_DAY_INTENSITY;
+  if (hemi) {
+    hemi.intensity = HEMI_DAY_INTENSITY;
+    hemi.color.setHex(HEMI_SKY_COLOR);
+    hemi.groundColor.setHex(HEMI_GROUND_COLOR);
+  }
 }

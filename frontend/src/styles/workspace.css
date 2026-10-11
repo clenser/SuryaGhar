@@ -1264,34 +1264,7 @@
     min-width: 0;
   }
 
-  /* Inspector split: sticky 3D viewport left (~3/4), independently
-     scrolling control column right (~1/4). Plain flex row — no row-span
-     distribution, so sections stack compactly with zero artificial gaps. */
-  .workspace.design-mode .design-layout {
-    display: flex;
-    gap: var(--space-4);
-    align-items: flex-start;
-  }
-
-  .workspace.design-mode .design-view {
-    flex: 3 1 0;
-    min-width: 0;
-    position: sticky;
-    top: 0;
-  }
-
-  .workspace.design-mode .design-view .stage-3d-viewport {
-    aspect-ratio: auto;
-    height: calc(100dvh - 170px);
-    min-height: 380px;
-    margin-bottom: var(--space-3);
-  }
-
-  .workspace.design-mode .design-side {
-    flex: 1 1 300px;
-    max-width: 380px;
-    min-width: 0;
-  }
+  /* 3D design workspace layout is defined in M3.5 section below */
 
   /* Map editing affordances move aside: site editing resumes after
      "Back to map". */
@@ -3878,9 +3851,11 @@
    toolbar visual language. */
 .viewport-toolbar {
   position: absolute;
-  top: var(--space-3);
-  left: var(--space-3);
-  z-index: 15;
+  top: 16px;
+  left: 16px;
+  z-index: 20;
+  max-width: calc(100% - 32px);
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   gap: var(--space-1);
@@ -4079,11 +4054,15 @@
 .collapsible-section.is-closed .collapsible-section__panel {
   max-height: 0;
   opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .collapsible-section.is-open .collapsible-section__panel {
-  max-height: 2000px;
+  max-height: 2500px;
   opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
 }
 
 .collapsible-section__content {
@@ -4102,15 +4081,15 @@
    Persistent action bar at the bottom of the inspector.
    Shows validation status, undo, and primary continue action. */
 .inspector-actions {
-  position: sticky;
-  bottom: 0;
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
   padding: var(--space-3) 0 0;
   margin-top: auto;
   border-top: 1px solid var(--color-border);
-  background: linear-gradient(to top, var(--color-surface) 60%, transparent);
+  background: var(--color-surface);
+  z-index: 10;
 }
 
 .inspector-actions__status {
@@ -4174,42 +4153,119 @@
    The inspector column scrolls independently while the viewport
    stays stable. Sections are collapsible for density control. */
 @media (min-width: 900px) {
-  .workspace.design-mode .design-side {
+  .workspace.design-mode .stage-panel {
+    top: var(--space-4);
+    right: var(--space-4);
+    bottom: var(--space-4);
+    left: var(--space-4);
+    width: auto;
+    max-width: none;
+    max-height: none;
+    height: auto;
+    z-index: 8;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
+  }
+
+  .workspace.design-mode .stage-card {
+    flex: 1 1 0;
+    height: 100%;
     min-height: 0;
-    max-height: calc(100dvh - var(--header-height) - var(--status-height) - 2 * var(--space-4));
+    min-width: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .workspace.design-mode .design-layout {
+    flex: 1 1 0;
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    gap: var(--space-4);
+    align-items: stretch;
+  }
+
+  .workspace.design-mode .design-view {
+    flex: 1 1 0;
+    min-width: 0;
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .workspace.design-mode .stage-3d-viewport,
+  .workspace.design-mode .design-view .stage-3d-viewport {
+    flex: 1 1 0;
+    height: auto;
+    min-height: 0;
+    aspect-ratio: auto;
+    margin-bottom: var(--space-2);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .workspace.design-mode .viewer-footer {
+    flex: none;
+    margin-bottom: 0 !important;
+  }
+
+  .workspace.design-mode .design-side {
+    flex: 0 0 440px;
+    width: 440px;
+    min-width: 400px;
+    max-width: 480px;
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    z-index: 5;
+    overflow: hidden;
+  }
+
+  .workspace.design-mode .design-side > .stage-card__eyebrow,
+  .workspace.design-mode .design-side > .stage-card__title,
+  .workspace.design-mode .design-side > .stage-card__body {
+    flex: none;
+  }
+
+  .workspace.design-mode .inspector-panel {
+    flex: 1 1 0;
+    min-height: 0;
     overflow-y: auto;
     overscroll-behavior: contain;
-    padding-right: var(--space-1);
+    padding-right: var(--space-2);
+    padding-bottom: var(--space-4);
     scrollbar-width: thin;
     scrollbar-color: var(--color-border-strong) transparent;
   }
 
-  .workspace.design-mode .design-side::-webkit-scrollbar {
+  .workspace.design-mode .inspector-panel::-webkit-scrollbar {
     width: 8px;
   }
 
-  .workspace.design-mode .design-side::-webkit-scrollbar-thumb {
+  .workspace.design-mode .inspector-panel::-webkit-scrollbar-thumb {
     background: var(--color-border-strong);
     border-radius: 4px;
   }
 
-  .workspace.design-mode .design-side::-webkit-scrollbar-track {
+  .workspace.design-mode .inspector-panel::-webkit-scrollbar-track {
     background: transparent;
   }
 
-  /* Ensure the viewport stays fixed while inspector scrolls */
-  .workspace.design-mode .design-view {
-    position: sticky;
-    top: var(--space-4);
-    height: calc(100dvh - var(--header-height) - var(--status-height) - 2 * var(--space-4));
-  }
-
-  .workspace.design-mode .stage-3d-viewport {
-    height: 100%;
-    min-height: 0;
-    margin-bottom: 0;
+  .workspace.design-mode .inspector-actions {
+    flex: none;
+    background: var(--color-surface);
+    position: relative;
+    z-index: 10;
+    margin-top: 0;
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--color-border);
   }
 }
 

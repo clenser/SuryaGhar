@@ -276,6 +276,16 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
     const buildingBoxRef = useRef<THREE.Box3>(new THREE.Box3());
     /** Teardown for the Ctrl+left-drag pan wrapper, or null before init. */
     const ctrlPanCleanupRef = useRef<(() => void) | null>(null);
+    /** Lightweight rain particles in Rainy preset. */
+    const rainRef = useRef<{
+      points: THREE.Points;
+      geom: THREE.BufferGeometry;
+      mat: THREE.PointsMaterial;
+      positions: Float32Array;
+      maxHeight: number;
+    } | null>(null);
+    const weatherPresetRef = useRef<WeatherPreset>(weatherPreset);
+    weatherPresetRef.current = weatherPreset;
 
     // Latest values for effects that must run exactly once per mount.
     const localCoordsRef = useRef(localCoords);
@@ -406,6 +416,12 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         }
         panelGroupRef.current = [];
         disposeTexturedGround();
+        if (rainRef.current) {
+          sceneRef.current?.remove(rainRef.current.points);
+          rainRef.current.geom.dispose();
+          rainRef.current.mat.dispose();
+          rainRef.current = null;
+        }
         for (const light of lightsRef.current) {
           sceneRef.current?.remove(light);
         }
@@ -664,6 +680,65 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       if (!treeGroupRef.current) return;
       applyTreeSelection(treeGroupRef.current, selectedTreeId);
     }, [selectedTreeId, trees, isInitialized]);
+
+    // Lightweight rain particle visualization in Rainy preset.
+    useEffect(() => {
+      if (!isInitialized || !sceneRef.current) return;
+      const scene = sceneRef.current;
+
+      if (weatherPreset !== "rainy") {
+        if (rainRef.current) {
+          scene.remove(rainRef.current.points);
+          rainRef.current.geom.dispose();
+          rainRef.current.mat.dispose();
+          rainRef.current = null;
+          requestShadowUpdate();
+        }
+        return;
+      }
+
+      // 400 rain particles around building bounds
+      const dropCount = 400;
+      const maxCoord = localCoords.vertices.reduce((m, v) => Math.max(m, Math.abs(v.x), Math.abs(v.y)), 15);
+      const span = Math.max(60, maxCoord * 3);
+      const maxHeight = Math.max(35, localCoords.height + 25);
+      const positions = new Float32Array(dropCount * 3);
+
+      for (let i = 0; i < dropCount; i++) {
+        positions[i * 3] = (Math.random() - 0.5) * span;
+        positions[i * 3 + 1] = (Math.random() - 0.5) * span;
+        positions[i * 3 + 2] = Math.random() * maxHeight;
+      }
+
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+
+      const mat = new THREE.PointsMaterial({
+        color: 0x9bc4e2,
+        size: 0.6,
+        transparent: true,
+        opacity: 0.5,
+        depthWrite: false,
+      });
+
+      const points = new THREE.Points(geom, mat);
+      // Disable raycasting completely so it never intercepts clicks or panel placement
+      points.raycast = () => {};
+      points.name = "RainParticles";
+
+      scene.add(points);
+      rainRef.current = { points, geom, mat, positions, maxHeight };
+      requestShadowUpdate();
+
+      return () => {
+        if (rainRef.current) {
+          scene.remove(rainRef.current.points);
+          rainRef.current.geom.dispose();
+          rainRef.current.mat.dispose();
+          rainRef.current = null;
+        }
+      };
+    }, [weatherPreset, isInitialized, localCoords.height, localCoords.vertices]);
 
     // Solar panel layers: one InstancedMesh per panel set, each rendered with
     // its own configuration, rebuilt from application state. The effect
@@ -1182,15 +1257,20 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       // Loop-local bookkeeping: the clock is shared, this bookkeeping is not.
       let lastFrame: number | null = null;
       let lastTick = 0;
-      let applied: { azimuthDeg: number; elevationDeg: number; night: boolean } | null = null;
+      let applied: {
+        azimuthDeg: number;
+        elevationDeg: number;
+        night: boolean;
+        weatherPreset: WeatherPreset;
+      } | null = null;
       /**
        * Sun step, once per frame:
        * 1. advance the shared clock while playing (bounded, ends at 24:00);
        * 2. report to React at most every SUN_UI_TICK_MS — never per frame;
        * 3. apply the interpolated position to the light and refresh the
-       *    shadow map only when the direction or day/night state changed.
+       *    shadow map only when the direction, day/night state or weather changed.
        */
-      const syncSun = (now: number, weatherPreset: WeatherPreset = "sunny") => {
+      const syncSun = (now: number, currentPreset: WeatherPreset = "sunny") => {
         const renderer = rendererRef.current;
         const sun = sunRef.current;
         const sunLight = sunLightRef.current;
@@ -1214,6 +1294,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         const changed =
           !applied ||
           applied.night !== state.night ||
+          applied.weatherPreset !== currentPreset ||
           (!state.night &&
             (Math.abs(shortestAngleDelta(applied.azimuthDeg, state.azimuthDeg)) > 0.05 ||
               Math.abs(applied.elevationDeg - state.elevationDeg) > 0.05));
@@ -1223,9 +1304,10 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           azimuthDeg: state.azimuthDeg,
           elevationDeg: state.elevationDeg,
           night: state.night,
+          weatherPreset: currentPreset,
         };
         applySunToScene(sunLight, ambient, state, hemi);
-        applyWeatherPreset(sunLight, ambient, hemi, weatherPreset);
+        applyWeatherPreset(sunLight, ambient, hemi, currentPreset, state);
         renderer.shadowMap.needsUpdate = true;
       };
 
@@ -1237,7 +1319,24 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         // through the next frame instead of being overwritten.
         const controls = controlsRef.current;
         if (controls) keepCameraOutsideBox(cameraRef.current!, controls, buildingBoxRef.current);
-        syncSun(now, weatherPreset ?? "sunny");
+        const activePreset = weatherPresetRef.current ?? "sunny";
+        syncSun(now, activePreset);
+
+        // Advance rain simulation if active
+        if (rainRef.current) {
+          const { geom, positions, maxHeight } = rainRef.current;
+          const fallSpeed = 24; // metres per second
+          const dt = lastFrame === null ? 0.016 : Math.min(Math.max((now - lastFrame) / 1000, 0), 0.1);
+          const dropCount = positions.length / 3;
+          for (let i = 0; i < dropCount; i++) {
+            positions[i * 3 + 2] -= fallSpeed * dt;
+            if (positions[i * 3 + 2] < 0) {
+              positions[i * 3 + 2] = maxHeight;
+            }
+          }
+          geom.attributes.position.needsUpdate = true;
+        }
+
         rendererRef.current?.render(sceneRef.current!, cameraRef.current!);
       };
 

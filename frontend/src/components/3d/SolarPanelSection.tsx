@@ -92,6 +92,8 @@ interface SolarPanelSectionProps {
   warning: string | null;
   /** Hourly simulation result for the active set, or null when not computable. */
   energy?: EnergySimulation | null;
+  /** Display mode: "all" (default), "sets", or "config". */
+  displayMode?: "all" | "sets" | "config";
 }
 
 /**
@@ -242,6 +244,7 @@ export function SolarPanelSection({
   capacityKw,
   warning,
   energy,
+  displayMode = "all",
 }: SolarPanelSectionProps) {
   const selected = panelTypeDefinition(config.panelTypeId);
   const tiltLabel = config.mounting === "tilted" ? "Roof slope" : "Tilt";
@@ -256,11 +259,12 @@ export function SolarPanelSection({
   const setColsValue = Number.isInteger(config.setCols) && config.setCols > 0 ? config.setCols : 0;
   const setTotal = setRowsValue * setColsValue;
 
+  const showSets = displayMode === "all" || displayMode === "sets";
+  const showConfig = displayMode === "all" || displayMode === "config";
+
   return (
     <div className="obstacle-section">
-      {/* Panel sets. Each set is an independently configurable array; the roof
-          can hold several with different tilt, height and orientation. */}
-      {setsList.length > 0 && (
+      {showSets && setsList.length > 0 && (
         <div className="panel-group">
           <span className="panel-group__label">Panel sets</span>
         <div className="panel-set-list">
@@ -319,27 +323,50 @@ export function SolarPanelSection({
       </div>
       )}
 
-      <div className="obstacle-toolbar">
-        <div className="obstacle-toolbar__labels">
-          <h3 className="obstacle-section__title">
-            <Grid3x3 size={15} strokeWidth={1.75} aria-hidden="true" /> Solar panels
-          </h3>
-          <p className="obstacle-count">
-            {panelCount === 0
-              ? "No panels placed yet"
-              : `${panelCount} panel${panelCount === 1 ? "" : "s"} · ${capacityKw.toFixed(2)} kWp · ${formatCapacity(capacityKw)}`}
-          </p>
+      {showConfig && displayMode === "config" && (
+        <div className="obstacle-toolbar" style={{ marginBottom: "var(--space-2)" }}>
+          <div className="obstacle-toolbar__labels">
+            <h3 className="obstacle-section__title">
+              <Grid3x3 size={15} strokeWidth={1.75} aria-hidden="true" /> {activeSet?.name ?? "Module"} settings
+            </h3>
+          </div>
+          <button
+            type="button"
+            className="btn btn--secondary"
+            onClick={onRecalculate}
+            title="Recalculate panel placement from the current settings"
+          >
+            <RefreshCw size={15} strokeWidth={2} aria-hidden="true" />
+            Recalculate
+          </button>
         </div>
-        <button
-          type="button"
-          className="btn btn--secondary"
-          onClick={onRecalculate}
-          title="Recalculate panel placement from the current settings"
-        >
-          <RefreshCw size={15} strokeWidth={2} aria-hidden="true" />
-          Recalculate
-        </button>
-      </div>
+      )}
+
+      {showSets && (
+        <>
+          <div className="obstacle-toolbar">
+            <div className="obstacle-toolbar__labels">
+              <h3 className="obstacle-section__title">
+                <Grid3x3 size={15} strokeWidth={1.75} aria-hidden="true" /> Solar panels
+              </h3>
+              <p className="obstacle-count">
+                {panelCount === 0
+                  ? "No panels placed yet"
+                  : `${panelCount} panel${panelCount === 1 ? "" : "s"} · ${capacityKw.toFixed(2)} kWp · ${formatCapacity(capacityKw)}`}
+              </p>
+            </div>
+            {displayMode === "all" && (
+              <button
+                type="button"
+                className="btn btn--secondary"
+                onClick={onRecalculate}
+                title="Recalculate panel placement from the current settings"
+              >
+                <RefreshCw size={15} strokeWidth={2} aria-hidden="true" />
+                Recalculate
+              </button>
+            )}
+          </div>
 
       {/* A manually edited set keeps its stored positions when the configuration
           changes — the new tilt/height/dimensions apply to rendering, but the
@@ -542,6 +569,11 @@ export function SolarPanelSection({
           <span>{manualStatus ?? setWarning}</span>
         </p>
       )}
+        </>
+      )}
+
+      {showConfig && (
+        <>
       {/* Panel rating — representative module sizes, configurable */}
       <div className="panel-group">
         <span className="panel-group__label" id="panel-rating-label">
@@ -809,6 +841,8 @@ export function SolarPanelSection({
             )}
           </p>
         </div>
+      )}
+        </>
       )}
 
       {warning && (
