@@ -9,7 +9,7 @@
  * AGENTS.md §46: 44px touch targets on mobile.
  */
 
-import { Select, PenTool, Move, Trash2, Layers, RotateCcw, Eye, Box, Sun, TreePine } from "lucide-react";
+import { MousePointer2, PenTool, Move, Trash2, Layers, RotateCcw, Eye, Box, Sun, TreePine } from "lucide-react";
 import type { ObstacleType } from "../../lib/3d/obstacles";
 
 export type ViewportTool =
@@ -41,8 +41,6 @@ interface ViewportToolbarProps {
   drawing?: boolean;
   /** Whether manual panel placement is active */
   manualPlaceActive?: boolean;
-  /** Manual placement mode: single panel or whole set */
-  manualPlaceMode?: "single" | "set";
   /** Sun simulation playing state */
   sunPlaying?: boolean;
   /** Toggle sun playback */
@@ -52,7 +50,7 @@ interface ViewportToolbarProps {
 }
 
 const TOOL_CONFIG: Record<Exclude<ViewportTool, "draw-obstacle">, { icon: React.ReactNode; label: string; title: string }> = {
-  select: { icon: <Select size={16} strokeWidth={2} />, label: "Select", title: "Select objects (V)" },
+  select: { icon: <MousePointer2 size={16} strokeWidth={2} />, label: "Select", title: "Select objects (V)" },
   move: { icon: <Move size={16} strokeWidth={2} />, label: "Move", title: "Move selected object (M)" },
   delete: { icon: <Trash2 size={16} strokeWidth={2} />, label: "Delete", title: "Delete selected object (Del)" },
   layers: { icon: <Layers size={16} strokeWidth={2} />, label: "Layers", title: "Toggle layer visibility (L)" },
@@ -64,13 +62,10 @@ const TOOL_CONFIG: Record<Exclude<ViewportTool, "draw-obstacle">, { icon: React.
 };
 
 const DRAW_OBSTACLE_CONFIG: Record<ObstacleType, { icon: React.ReactNode; label: string; title: string }> = {
-  water_tank: { icon: <Box size={16} strokeWidth={2} />, label: "Water tank", title: "Draw water tank footprint" },
-  stair_room: { icon: <Box size={16} strokeWidth={2} />, label: "Stair room", title: "Draw stair room footprint" },
-  lift_room: { icon: <Box size={16} strokeWidth={2} />, label: "Lift room", title: "Draw lift room footprint" },
+  "water-tank": { icon: <Box size={16} strokeWidth={2} />, label: "Water tank", title: "Draw water tank footprint" },
+  "staircase-room": { icon: <Box size={16} strokeWidth={2} />, label: "Stair room", title: "Draw stair room footprint" },
+  "lift-room": { icon: <Box size={16} strokeWidth={2} />, label: "Lift room", title: "Draw lift room footprint" },
   hvac: { icon: <Box size={16} strokeWidth={2} />, label: "HVAC", title: "Draw HVAC unit footprint" },
-  ac_unit: { icon: <Box size={16} strokeWidth={2} />, label: "AC unit", title: "Draw AC unit footprint" },
-  parapet: { icon: <Box size={16} strokeWidth={2} />, label: "Parapet", title: "Draw parapet footprint" },
-  utility_room: { icon: <Box size={16} strokeWidth={2} />, label: "Utility room", title: "Draw utility room footprint" },
   custom: { icon: <PenTool size={16} strokeWidth={2} />, label: "Custom", title: "Draw custom footprint" },
 };
 
@@ -83,7 +78,6 @@ export function ViewportToolbar({
   obstacleType = "custom",
   drawing = false,
   manualPlaceActive = false,
-  manualPlaceMode = "single",
   sunPlaying = false,
   onToggleSunPlay,
   inspectorCollapsed = false,

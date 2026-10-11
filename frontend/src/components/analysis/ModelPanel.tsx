@@ -15,7 +15,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { RotateCcw, ArrowRight, Plus, Pencil, Trash2, AlertTriangle, Sun, Layers, Box, TreePine } from "lucide-react";
+import { RotateCcw, ArrowRight, Plus, Pencil, Trash2, AlertTriangle, Sun, Box, TreePine, Eye, Settings2, Moon } from "lucide-react";
 import { BACKEND_WAITING_LABEL } from "../../hooks/useBackendStatus";
 import type { LngLat, PolygonMetrics } from "../../lib/geo";
 import { formatArea } from "../../lib/geo";
@@ -49,17 +49,7 @@ import {
   type Point2,
 } from "../../lib/3d/obstacles";
 import {
-  createTreeId,
-  draftToTree,
-  emptyTreeDraft,
-  findInvalidTrees,
-  footprintsOverlap as treeFootprintsOverlap,
-  formatTreeDimensions,
-  treeTypeLabel,
-  treeTypeDefinition,
   type Tree,
-  type TreeDraft,
-  type TreeType,
 } from "../../lib/3d/treeTypes";
 import { Site3DViewer, type Site3DViewerHandle } from "../3d/Site3DViewer";
 import { ObstacleEditor } from "../3d/ObstacleEditor";
@@ -198,11 +188,11 @@ export function ModelPanel({
    * Trees from application state (metres). Re-rendered whenever this array
    * changes — Three.js never becomes the source of truth.
    */
-  const [trees, setTrees] = useState<Tree[]>([]);
+  const [trees] = useState<Tree[]>([]);
   /**
    * Tree currently highlighted in the viewport for selection.
    */
-  const [selectedTreeId, setSelectedTreeId] = useState<string | null>(null);
+  const [selectedTreeId] = useState<string | null>(null);
   /**
    * Manual-placement mode. While on, a roof click places a panel (validated by
    * the shared validator) instead of being read as an obstacle pick. Turned
@@ -254,6 +244,8 @@ export function ModelPanel({
     }
   }, [panelSets, activeSetId]);
   const [panelsEnabled, setPanelsEnabled] = useState(false);
+  // Inspector collapsed state (mobile)
+  const [inspectorCollapsed] = useState(false);
 
   /** The set the inspector is currently editing. */
   const activeSet = panelSets.find((s) => s.id === activeSetId) ?? panelSets[0] ?? null;
@@ -1534,7 +1526,6 @@ export function ModelPanel({
             obstacleType={obstacleDraft.type}
             drawing={drawing}
             manualPlaceActive={manualPlaceActive}
-            manualPlaceMode={manualPlaceMode}
             sunPlaying={sun.playing}
             onToggleSunPlay={sun.togglePlay}
             inspectorCollapsed={inspectorCollapsed}

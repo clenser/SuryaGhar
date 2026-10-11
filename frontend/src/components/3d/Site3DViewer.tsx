@@ -35,7 +35,7 @@ import {
 import { createBuildingMeshes, disposeBuildingMeshes, createDesignBuildingMaterial, createDesignRoofMaterial, setShellTransparent, type BuildingMeshes } from "../../lib/3d/geometry";
 import { applySunToScene, applyWeatherPreset, shadowCameraExtent } from "../../lib/3d/lighting";
 import type { Obstacle } from "../../lib/3d/obstacles";
-import type { Tree, TreeType } from "../../lib/3d/treeTypes";
+import type { Tree } from "../../lib/3d/treeTypes";
 import { createPanelGroup, createPanelUnitGeometry, disposePanelGroup } from "../../lib/3d/panelMeshes";
 import { type PlacedPanel } from "../../lib/3d/panelPlacement";
 import { effectivePanelDims, type PanelLayoutConfig } from "../../lib/3d/panels";
@@ -48,6 +48,11 @@ import {
   disposeFootprintMarkerGroup,
   disposeObstacleResources,
 } from "../../lib/3d/obstacleMeshes";
+import {
+  createTreeGroup,
+  disposeTreeGroup,
+  applyTreeSelection,
+} from "../../lib/3d/treeMeshes";
 import { fetchSatelliteGround } from "../../lib/3d/satelliteGround";
 import type { LngLat } from "../../lib/geo";
 import {
@@ -213,7 +218,8 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
   function Site3DViewer(
     {
       localCoords,
-      obstacles = [],      selectedObstacleId = null,
+      obstacles = [],
+      selectedObstacleId = null,
       hiddenObstacleId = null,
       previewObstacle = null,
       previewValid = true,
@@ -235,6 +241,9 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       onReady,
       className = "",
       style,
+      trees = [],
+      selectedTreeId = null,
+      weatherPreset = "sunny",
     },
     ref,
   ) {
@@ -1186,7 +1195,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         const sun = sunRef.current;
         const sunLight = sunLightRef.current;
         const ambient = ambientLightRef.current;
-        const hemi = hemiLightRef.current ?? undefined;
+        const hemi = hemiLightRef.current;
         if (!renderer || !sun || !sunLight || !ambient) return;
 
         if (sun.playing) {

@@ -41,6 +41,18 @@ export interface Point2 {
   y: number;
 }
 
+/** Form values for the tree editor (kept as strings so partial/invalid input stays editable). */
+export interface TreeDraft {
+  type: TreeType;
+  height: string;
+  canopyWidth: string;
+  rotation: string;
+  x: string;
+  y: string;
+  /** Drawn polygon footprint: centroid-relative offsets, unrotated. Null means rectangular. */
+  polygon?: Point2[] | null;
+}
+
 /** Catalog entry for one tree category (dimensions in metres). */
 export interface TreeTypeDefinition {
   type: TreeType;
@@ -233,6 +245,26 @@ export function pointInPolygon(point: Point2, polygon: Point2[]): boolean {
     if (crosses) inside = !inside;
   }
   return inside;
+}
+
+/** General polygon-polygon overlap test (handles concave polygons). Touching at edges/corners is allowed. */
+export function polygonsOverlap(a: Point2[], b: Point2[]): boolean {
+  if (a.length < 3 || b.length < 3) return false;
+  // Check for any proper edge crossing
+  for (let i = 0; i < a.length; i++) {
+    for (let j = 0; j < b.length; j++) {
+      const a1 = a[i];
+      const a2 = a[(i + 1) % a.length];
+      const b1 = b[j];
+      const b2 = b[(j + 1) % b.length];
+      if (segmentsCross(a1, a2, b1, b2)) return true;
+    }
+  }
+  // Check containment (one polygon fully inside the other without edge crossing)
+  // Boundary points count as inside for this test
+  if (a.some((p) => pointInPolygon(p, b))) return true;
+  if (b.some((p) => pointInPolygon(p, a))) return true;
+  return false;
 }
 
 /**
