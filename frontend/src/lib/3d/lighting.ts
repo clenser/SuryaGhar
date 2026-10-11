@@ -66,6 +66,92 @@ export const HEMI_NIGHT_INTENSITY = 0.15;
 export const SUN_COLOR_LOW = 0xffab66;
 export const SUN_COLOR_HIGH = 0xfff6e8;
 
+/** Weather preset adjustments (applied on top of the solar calculation).
+ *  These modify light intensities/colors only — solar position, shadow
+ *  camera, and energy calculations are completely unchanged. */
+export type WeatherPreset = "sunny" | "cloudy" | "rainy";
+
+/** Base adjustment factors for each preset. */
+const WEATHER_ADJUSTMENTS: Record<WeatherPreset, {
+  sunIntensityFactor: number;
+  ambientIntensityFactor: number;
+  hemiIntensityFactor: number;
+  sunColorShift: number; // -1..1, negative = cooler, positive = warmer
+}> = {
+  sunny: {
+    sunIntensityFactor: 1.0,
+    ambientIntensityFactor: 1.0,
+    hemiIntensityFactor: 1.0,
+    sunColorShift: 0,
+  },
+  cloudy: {
+    sunIntensityFactor: 0.7,
+    ambientIntensityFactor: 1.15,
+    hemiIntensityFactor: 1.05,
+    sunColorShift: -0.15,
+  },
+  rainy: {
+    sunIntensityFactor: 0.65,
+    ambientIntensityFactor: 1.2,
+    hemiIntensityFactor: 1.1,
+    sunColorShift: -0.25,
+  },
+};
+
+/** Apply a weather preset adjustment to the scene lights.
+ *  This is called after applySunToScene() and only modifies existing light
+ *  properties (intensity, color) — it does NOT create new lights, move the
+ *  sun, or alter shadow camera settings. The solar position (azimuth/elevation)
+ *  and all analytical calculations remain unchanged.
+ */
+export function applyWeatherPreset(
+  sun: THREE.DirectionalLight,
+  ambient: THREE.AmbientLight,
+  hemi: THREE.HemisphereLight | null,
+  preset: WeatherPreset,
+): void {
+  const adj = WEATHER_ADJUSTMENTS[preset] || WEATHER_ADJUSTMENTS.sunny;
+
+  // Adjust sun directional light intensity (multiplies the elevation-dependent
+  // intensity set by applySunToScene(), preserving sun position behavior).
+  sun.intensity *= adj.sunIntensityFactor;
+
+  // Adjust sun color via a subtle shift in the hex value.
+  // We shift the existing color toward cooler/warmter by modulating channels.
+  // The sun's color was set by applySunToScene() using sunColorHex(); we
+  // apply an additional shift here so the change is on top of the solar-driven
+  // color rather than replacing it.
+  const currentR = (sun.color.getHex() >> 16) & 255;
+  const currentG = (sun.color.getHex() >> 8) & 255;
+  const currentB = sun.color.getHex() & 255;
+  const shift = adj.sunColorShift; // -1 = very cool, 1 = very warm
+  // Clamp shift to reasonable range and apply as a channel delta
+  const delta = Math.max(-1, Math.min(1, shift)) * 30; // ~30 units per shift unit
+  const newR = Math.max(0, Math.min(255, currentR + delta));
+  const newG = Math.max(0, Math.min(255, currentG + delta * 0.8));
+  const newB = Math.max(0, Math.min(255, currentB + delta * 0.6));
+  sun.color.setRGB(newR / 255, newG / 255, newB / 255);
+
+  // Adjust ambient fill intensity
+  ambient.intensity = AMBIENT_DAY_INTENSITY * adj.ambientIntensityFactor;
+
+  // Adjust hemisphere fill intensity and optionally its color for "rainy"
+  if (hemi) {
+    hemi.intensity = HEMI_DAY_INTENSITY * adj.hemiIntensityFactor;
+    // For rainy: slight cooler shift on the hemisphere too
+    if (preset === "rainy") {
+      const currentHR = (hemi.color.getHex() >> 16) & 255;
+      const currentHG = (hemi.color.getHex() >> 8) & 255;
+      const currentHB = hemi.color.getHex() & 255;
+      const rainShift = -0.1; // mild cooler bias
+      const r2 = Math.max(0, Math.min(255, currentHR + Math.round(rainShift * 80)));
+      const g2 = Math.max(0, Math.min(255, currentHG + Math.round(rainShift * 60)));
+      const b2 = Math.max(0, Math.min(255, currentHB + Math.round(rainShift * 40)));
+      hemi.color.setRGB(r2 / 255, g2 / 255, b2 / 255);
+    }
+  }
+}
+
 /**
  * Unit vector pointing TOWARDS the sun for an azimuth/elevation pair.
  *

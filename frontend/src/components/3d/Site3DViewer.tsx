@@ -33,8 +33,9 @@ import {
   updateCameraAspect,
 } from "../../lib/3d/scene";
 import { createBuildingMeshes, disposeBuildingMeshes, createDesignBuildingMaterial, createDesignRoofMaterial, setShellTransparent, type BuildingMeshes } from "../../lib/3d/geometry";
-import { applySunToScene, shadowCameraExtent } from "../../lib/3d/lighting";
+import { applySunToScene, applyWeatherPreset, shadowCameraExtent } from "../../lib/3d/lighting";
 import type { Obstacle } from "../../lib/3d/obstacles";
+import type { Tree, TreeType } from "../../lib/3d/treeTypes";
 import { createPanelGroup, createPanelUnitGeometry, disposePanelGroup } from "../../lib/3d/panelMeshes";
 import { type PlacedPanel } from "../../lib/3d/panelPlacement";
 import { effectivePanelDims, type PanelLayoutConfig } from "../../lib/3d/panels";
@@ -56,6 +57,7 @@ import {
   sunStateAt,
   type SunClock,
 } from "../../lib/solar";
+import type { WeatherPreset } from "../../lib/3d/lighting";
 
 /**
  * Attributes used for the capability probe. They mirror what Three.js requests,
@@ -174,6 +176,19 @@ export interface Site3DViewerProps {
    */
   xray?: boolean;
   /**
+   * Weather preset for visual lighting adjustment. Does not affect solar
+   * position, shadow camera, or energy calculations. See WeatherPreset type.
+   */
+  weatherPreset?: WeatherPreset;
+  /**
+   * Trees from application state (metres). Re-rendered whenever this array
+   * changes — Three.js never becomes the source of truth.
+   */
+  trees?: Tree[];
+  /**
+   * Tree currently highlighted in the viewport */
+  selectedTreeId?: string | null;
+  /**
    * Geographic anchor for the satellite ground texture: the WGS84 terrace
    * ring plus the UTM centroid the local frame was built against. Without
    * it the viewer keeps its neutral studio ground.
@@ -237,6 +252,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
     const ambientLightRef = useRef<THREE.AmbientLight | null>(null);
     const hemiLightRef = useRef<THREE.HemisphereLight | null>(null);
     const obstacleGroupRef = useRef<THREE.Group | null>(null);
+    const treeGroupRef = useRef<THREE.Group | null>(null);
     const panelGroupRef = useRef<THREE.Group[]>([]);
     const previewMeshRef = useRef<THREE.Mesh | null>(null);
     /** Translucent panel shown while manual placement is active. */
@@ -364,6 +380,11 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           disposeObstacleResources(obstacleGroupRef.current);
           sceneRef.current?.remove(obstacleGroupRef.current);
           obstacleGroupRef.current = null;
+        }
+        if (treeGroupRef.current) {
+          disposeTreeGroup(treeGroupRef.current);
+          sceneRef.current?.remove(treeGroupRef.current);
+          treeGroupRef.current = null;
         }
         if (previewMeshRef.current) {
           disposeObstacleResources(previewMeshRef.current);
@@ -599,11 +620,41 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       };
     }, [obstacles, hiddenObstacleId, localCoords, isInitialized]);
 
+    // Build the tree layer from application state (React is the source of truth).
+    useEffect(() => {
+      if (!isInitialized || !sceneRef.current) return;
+      const scene = sceneRef.current;
+
+      let group: THREE.Group;
+      try {
+        group = createTreeGroup(trees, localCoords.height, { selectedId: selectedTreeId });
+      } catch (err) {
+        console.error("[Site3DViewer] Tree update failed:", err);
+        return;
+      }
+
+      treeGroupRef.current = group;
+      scene.add(group);
+      requestShadowUpdate();
+
+      return () => {
+        scene.remove(group);
+        disposeTreeGroup(group);
+        if (treeGroupRef.current === group) treeGroupRef.current = null;
+      };
+    }, [trees, selectedTreeId, localCoords, isInitialized]);
+
     // Highlight the selected obstacle without rebuilding the whole layer.
     useEffect(() => {
       if (!obstacleGroupRef.current) return;
       applyObstacleSelection(obstacleGroupRef.current, selectedObstacleId);
     }, [selectedObstacleId, obstacles, isInitialized]);
+
+    // Highlight the selected tree without rebuilding the whole layer.
+    useEffect(() => {
+      if (!treeGroupRef.current) return;
+      applyTreeSelection(treeGroupRef.current, selectedTreeId);
+    }, [selectedTreeId, trees, isInitialized]);
 
     // Solar panel layers: one InstancedMesh per panel set, each rendered with
     // its own configuration, rebuilt from application state. The effect
@@ -1130,11 +1181,12 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
        * 3. apply the interpolated position to the light and refresh the
        *    shadow map only when the direction or day/night state changed.
        */
-      const syncSun = (now: number) => {
+      const syncSun = (now: number, weatherPreset: WeatherPreset = "sunny") => {
         const renderer = rendererRef.current;
         const sun = sunRef.current;
         const sunLight = sunLightRef.current;
         const ambient = ambientLightRef.current;
+        const hemi = hemiLightRef.current ?? undefined;
         if (!renderer || !sun || !sunLight || !ambient) return;
 
         if (sun.playing) {
@@ -1163,7 +1215,8 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           elevationDeg: state.elevationDeg,
           night: state.night,
         };
-        applySunToScene(sunLight, ambient, state, hemiLightRef.current ?? undefined);
+        applySunToScene(sunLight, ambient, state, hemi);
+        applyWeatherPreset(sunLight, ambient, hemi, weatherPreset);
         renderer.shadowMap.needsUpdate = true;
       };
 
@@ -1175,7 +1228,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         // through the next frame instead of being overwritten.
         const controls = controlsRef.current;
         if (controls) keepCameraOutsideBox(cameraRef.current!, controls, buildingBoxRef.current);
-        syncSun(now);
+        syncSun(now, weatherPreset ?? "sunny");
         rendererRef.current?.render(sceneRef.current!, cameraRef.current!);
       };
 

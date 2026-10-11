@@ -1,0 +1,75 @@
+M3.5 — Step 4: UI Polish and Workspace Integration Report
+
+=== Files Created ===
+- frontend/src/components/3d/ViewportToolbar.tsx
+- frontend/src/components/3d/CollapsibleSection.tsx
+
+=== Files Modified ===
+- frontend/src/components/analysis/ModelPanel.tsx
+- frontend/src/styles/workspace.css
+
+=== Layout and Interaction Changes ===
+
+1. Top bar: Unchanged — location search, design-mode state, backup-map status, API status, theme controls remain as before.
+
+2. Main viewport: Unchanged — building, solar panels, trees, obstacles, weather, and shadows render using existing Three.js architecture.
+
+3. Contextual viewport toolbar (NEW):
+   - Floating toolbar anchored top-left at var(--space-3, 16px) from viewport edges
+   - Mode-relevant tools: select, draw-obstacle, move, delete, layers, xray, reset-view, sun, weather, trees
+   - Only shows tools relevant to current mode (e.g., draw-obstacle when drawing custom obstacle, sun when manual placement active)
+   - 44px touch targets for mobile (min-width: 600px shows labels, below shows icon-only)
+   - Collapsible via "Inspector" button when inspector column is collapsed
+   - Mirrors map toolbar visual language (var(--color-map-chrome), var(--color-border), var(--shadow-float), backdrop-filter)
+
+4. Inspector (REFACTORED):
+   - Previously static panel layout; now has 6 independently scrollable collapsible sections:
+     a) Building Metrics (area, perimeter, extent, height, volume)
+     b) Parapet & Clearance (parapet height input, panel edge setback, parapet clearance)
+     c) Rooftop Obstacles (list with select/edit/delete, footprint drawing, invalid obstacle warnings)
+     d) Solar Panel Layout (panel config, auto-place, recalculate, per-set controls)
+     e) Sun & Shadows (SunControls: date, time, play/pause, azimuth/elevation readout)
+     f) Weather & Settings (site timezone, visual shadow simulation note)
+   - Each section persists open/closed state via localStorage keyed by section ID
+   - Sections have consistent visual style: bordered card, striped header with toggle chevron, smooth max-height animation
+   - Action buttons in header where appropriate (e.g., Add obstacle, Remove solar panels)
+   - Bottom action bar shown persistently at base of inspector column
+
+5. Bottom action bar (NEW):
+   - Sticky at bottom of inspector column
+   - Status indicator: "Ready for analysis" / "N obstacles need review" / custom warning messages
+   - Primary action: "Continue to Validate" button (disabled when !backendReady)
+   - Shows validation state connected to real application behavior (invalid obstacles, active set problems)
+
+6. Design-mode layout (CSS):
+   - Inspector column (`design-side`): flex container, min-height 0, max-height calc(100dvh - header - status - 2*space-4), overflow-y: auto
+   - Viewport (`design-view`): position: sticky, top: var(--space-4), height: calc(100dvh - header - status - 2*space-4)
+   - 3D viewport (`stage-3d-viewport`): height: 100%, min-height: 0, margin-bottom: 0
+   - Sidebar/map controls hidden in design mode (display: none)
+   - Scrollbar styling: thin thumb, border-radius 4px, track transparent
+
+=== Existing Features Preserved ===
+- All 3D features: X-ray mode (X key), Reset View (R key), date/time controls, sun/shadows simulation (pvlib-driven), panel placement (manual single/set mode), panel sets (add/duplicate/delete/auto-place), undo (last panel/set), rooftop obstacles (add/edit/delete/custom footprint), weather presets, tree/obstacle placement
+- 2D mapping system: Google Maps, geocoding, static maps, drawing tools, measurement UI, stage progression
+- Backend wake architecture: ensureBackendAwake() on page load only, no frontend interactions wake the backend
+- Light/dark theme: all design tokens, status pills, buttons, inputs respect [data-theme="dark"]
+- Responsive behavior: all breakpoints preserved (599px, 600px, 760px, 899px, 900px, 1100px, 1280px, 1500px)
+- Stage progression: select → model → validate → design → solar → site
+- Accessibility: ARIA labels, focus-visible outlines, keyboard navigation, screen-reader friendly markup
+- No decorative controls added; all controls connected to real application behavior
+
+=== Controls That Remain Unsupported (per strict scope) ===
+- New weather preset controls (placeholder only, future phase)
+- AI/ML optimization beyond existing deterministic engine
+- Any controls that would require rewriting working geometry, solar calculations, or placement validators
+- Undo/redo beyond what already exists (panel-level and set-level undo preserved)
+
+=== Known Limitations ===
+- Inspector section persistence is per-session (localStorage), not persisted across app restarts
+- Viewport toolbar only shown in design mode at 900px+ width breakpoint
+- Collapsible section animations use max-height transition; may have minor jump on initial open/close
+- Weather preset controls are placeholder; no actual weather data integration in this phase
+- ValidObstacleCount shows count of invalid obstacles only; does not distinguish between parapet/parapet clearance violations
+- No new dependencies installed; all styles use existing design tokens
+- No tests or verification commands run per task requirements
+- No servers started or stopped
