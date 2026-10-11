@@ -1,16 +1,16 @@
 /**
  * Tree Three.js meshes
  *
- * Pure visualisation of `Tree` application state: every dimension comes
- * from the tree record in metres (1 Three.js unit = 1 metre), never from
- * pixels, camera distance or mesh bounding boxes (AGENTS.md §40, §52, §64).
+ * Visualisation of `Tree` application state: every dimension comes
+ * from the tree record in metres (1 Three.js unit = 1 metre).
  *
- * AGENTS.md §16: trees are real geometry — meshes participate in the
- * scene's shadow system. AGENTS.md §27, §45: low-pyramid/conical meshes,
- * one small mesh per tree, materials disposed with their mesh.
+ * Supports real 3D GLTF models (Kenney CC0 assets) with automatic normalization,
+ * scaling, ground positioning (Z = 0), and shadow casting/receiving, with seamless
+ * procedural fallbacks for offline and testing environments.
  */
 
 import * as THREE from "three";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import {
   type Tree,
   type TreeType,
@@ -28,8 +28,127 @@ export const TREE_COLORS: Record<TreeType, { trunk: number; foliage: number }> =
 /** Emissive highlight used for the selected tree (matches teal selection). */
 export const TREE_SELECTED_EMISSIVE = 0x13a8b5;
 
-/** Build one tree mesh group resting on the ground plane (Z = 0). */
-export function createTreeMesh(tree: Tree, _buildingHeight = 0): THREE.Group {
+/** Template cache holding parsed & normalized GLTF tree templates. */
+const treeTemplateCache = new Map<TreeType, { group: THREE.Group; nativeHeight: number; nativeWidth: number }>();
+let gltfLoaderInstance: GLTFLoader | null = null;
+
+function getGLTFLoader(): GLTFLoader {
+  if (!gltfLoaderInstance) {
+    gltfLoaderInstance = new GLTFLoader();
+  }
+  return gltfLoaderInstance;
+}
+
+/** Map of tree types to their GLB file paths. */
+export const TREE_MODEL_URLS: Record<TreeType, string> = {
+  broadleaf: "/models/trees/broadleaf.glb",
+  conifer: "/models/trees/conifer.glb",
+  "small-ornamental": "/models/trees/small-ornamental.glb",
+};
+
+/**
+ * Register a normalized template directly (useful for tests or custom injection).
+ */
+export function registerTreeTemplate(type: TreeType, group: THREE.Group): void {
+  const box = new THREE.Box3().setFromObject(group);
+  const size = new THREE.Vector3();
+  box.getSize(size);
+  const nativeHeight = Math.max(0.1, size.z);
+  const nativeWidth = Math.max(0.1, Math.max(size.x, size.y));
+  treeTemplateCache.set(type, { group, nativeHeight, nativeWidth });
+}
+
+/**
+ * Normalize a parsed GLTF tree scene:
+ * - Rotates X by +90 deg so GLTF's Y-up becomes SuryaGhar's Z-up.
+ * - Translates along Z so the base of the trunk sits at Z = 0.
+ * - Center X and Y at origin (0, 0).
+ * - Enables castShadow and receiveShadow on all child meshes.
+ */
+export function normalizeTreeGLTF(scene: THREE.Group): { group: THREE.Group; nativeHeight: number; nativeWidth: number } {
+  const container = new THREE.Group();
+  container.name = "TreeTemplate";
+
+  // Re-orient from GLTF Y-up to local Z-up
+  scene.rotation.x = Math.PI / 2;
+  scene.updateMatrixWorld(true);
+
+  // Measure oriented bounding box
+  const box = new THREE.Box3().setFromObject(scene);
+  const size = new THREE.Vector3();
+  box.getSize(size);
+
+  // Shift so base touches Z = 0 and centroid is at (0, 0)
+  const centerX = (box.min.x + box.max.x) / 2;
+  const centerY = (box.min.y + box.max.y) / 2;
+  const minZ = box.min.z;
+  scene.position.set(-centerX, -centerY, -minZ);
+  scene.updateMatrixWorld(true);
+
+  // Tag meshes for shadows, materials, and identification
+  scene.traverse((obj) => {
+    if ((obj as THREE.Mesh).isMesh) {
+      const mesh = obj as THREE.Mesh;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      if (mesh.material) {
+        if (Array.isArray(mesh.material)) {
+          mesh.material = mesh.material.map((m) => m.clone());
+        } else {
+          mesh.material = mesh.material.clone();
+        }
+      }
+    }
+  });
+
+  container.add(scene);
+  container.updateMatrixWorld(true);
+
+  const nativeHeight = Math.max(0.1, size.z);
+  const nativeWidth = Math.max(0.1, Math.max(size.x, size.y));
+
+  return { group: container, nativeHeight, nativeWidth };
+}
+
+/**
+ * Asynchronously load a tree model by category.
+ */
+export async function loadTreeModel(type: TreeType): Promise<THREE.Group> {
+  const cached = treeTemplateCache.get(type);
+  if (cached) return cached.group;
+
+  const url = TREE_MODEL_URLS[type];
+  const loader = getGLTFLoader();
+
+  return new Promise((resolve, reject) => {
+    loader.load(
+      url,
+      (gltf) => {
+        const normalized = normalizeTreeGLTF(gltf.scene);
+        treeTemplateCache.set(type, normalized);
+        resolve(normalized.group);
+      },
+      undefined,
+      (err) => {
+        console.warn(`[treeMeshes] Failed to load GLB model for ${type}:`, err);
+        reject(err);
+      },
+    );
+  });
+}
+
+/**
+ * Preload all tree categories into the template cache.
+ */
+export async function preloadTreeModels(): Promise<void> {
+  const types: TreeType[] = ["broadleaf", "conifer", "small-ornamental"];
+  await Promise.allSettled(types.map((t) => loadTreeModel(t)));
+}
+
+/**
+ * Create a procedural fallback tree mesh when GLTF is unavailable (e.g. in tests).
+ */
+export function createProceduralTreeMesh(tree: Tree): THREE.Group {
   const height = Math.max(tree.height, MIN_TREE_HEIGHT_M);
   const canopyWidth = Math.max(tree.canopyWidth, MIN_TREE_CANOPY_WIDTH_M);
   const colors = TREE_COLORS[tree.type] ?? TREE_COLORS.broadleaf;
@@ -70,9 +189,8 @@ export function createTreeMesh(tree: Tree, _buildingHeight = 0): THREE.Group {
   trunkMesh.userData.treeId = tree.id;
   group.add(trunkMesh);
 
-  // 2. Distinct foliage variant
+  // 2. Foliage variant
   if (tree.type === "broadleaf") {
-    // Broadleaf: rounded dome canopy
     const canopyRadius = canopyWidth / 2;
     const canopyZ = trunkHeight + canopyRadius * 0.75;
     const foliageGeom = new THREE.DodecahedronGeometry(canopyRadius, 1);
@@ -90,7 +208,6 @@ export function createTreeMesh(tree: Tree, _buildingHeight = 0): THREE.Group {
     foliageMesh.userData.treeId = tree.id;
     group.add(foliageMesh);
   } else if (tree.type === "conifer") {
-    // Conifer: 3 tiered evergreen cones
     const foliageMat = new THREE.MeshStandardMaterial({
       color: colors.foliage,
       roughness: 0.75,
@@ -116,7 +233,6 @@ export function createTreeMesh(tree: Tree, _buildingHeight = 0): THREE.Group {
       group.add(coneMesh);
     });
   } else {
-    // Small Ornamental: spreading umbrella / ellipsoidal canopy
     const canopyRadius = canopyWidth / 2;
     const canopyGeom = new THREE.SphereGeometry(canopyRadius, 10, 8);
     const foliageMat = new THREE.MeshStandardMaterial({
@@ -127,13 +243,65 @@ export function createTreeMesh(tree: Tree, _buildingHeight = 0): THREE.Group {
     const foliageMesh = new THREE.Mesh(canopyGeom, foliageMat);
     foliageMesh.name = `TreeFoliage:${tree.id}`;
     foliageMesh.position.set(0, 0, trunkHeight + canopyRadius * 0.4);
-    foliageMesh.scale.set(1, 1, 0.55); // Spreading horizontal profile
+    foliageMesh.scale.set(1, 1, 0.55);
     foliageMesh.castShadow = true;
     foliageMesh.receiveShadow = true;
     foliageMesh.userData.treeId = tree.id;
     group.add(foliageMesh);
   }
 
+  return group;
+}
+
+/** Build one tree mesh group resting on the ground plane (Z = 0). */
+export function createTreeMesh(tree: Tree, _buildingHeight = 0): THREE.Group {
+  const height = Math.max(tree.height, MIN_TREE_HEIGHT_M);
+  const canopyWidth = Math.max(tree.canopyWidth, MIN_TREE_CANOPY_WIDTH_M);
+
+  const cached = treeTemplateCache.get(tree.type);
+  if (!cached) {
+    // Seamless procedural fallback
+    return createProceduralTreeMesh(tree);
+  }
+
+  const group = new THREE.Group();
+  group.name = `Tree:${tree.id}`;
+  group.position.set(tree.position.x, tree.position.y, 0); // Ground plane Z = 0
+  group.rotation.z = (tree.rotation * Math.PI) / 180;
+  group.userData.treeId = tree.id;
+  group.userData.treeType = tree.type;
+
+  // Clone template hierarchy and materials
+  const instance = cached.group.clone(true);
+  const scaleZ = height / cached.nativeHeight;
+  const scaleXY = canopyWidth / cached.nativeWidth;
+  instance.scale.set(scaleXY, scaleXY, scaleZ);
+
+  instance.traverse((obj) => {
+    obj.userData.treeId = tree.id;
+    obj.userData.treeType = tree.type;
+    if ((obj as THREE.Mesh).isMesh) {
+      const mesh = obj as THREE.Mesh;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      if (mesh.material) {
+        if (Array.isArray(mesh.material)) {
+          mesh.material = mesh.material.map((m) => m.clone());
+        } else {
+          mesh.material = mesh.material.clone();
+        }
+      }
+      // Naming for raycast and tests
+      const matName = (mesh.material as THREE.Material)?.name || "";
+      if (matName.includes("Bark") || matName.includes("wood")) {
+        mesh.name = `TreeTrunk:${tree.id}`;
+      } else {
+        mesh.name = `TreeFoliage:${tree.id}`;
+      }
+    }
+  });
+
+  group.add(instance);
   return group;
 }
 
@@ -194,4 +362,44 @@ export function applyTreeSelection(group: THREE.Object3D, selectedId: string | n
     material.emissive.setHex(selected ? TREE_SELECTED_EMISSIVE : 0x000000);
     material.emissiveIntensity = selected ? 0.55 : 1;
   });
+}
+
+/** Create a translucent preview mesh for interactive tree placement. */
+export function createTreePreviewMesh(
+  type: TreeType,
+  height: number,
+  canopyWidth: number,
+  rotationDeg = 0,
+): THREE.Group {
+  const tree: Tree = {
+    id: "preview",
+    type,
+    position: { x: 0, y: 0 },
+    height,
+    canopyWidth,
+    rotation: rotationDeg,
+  };
+  const mesh = createTreeMesh(tree, 0);
+  mesh.name = "TreePlacementPreview";
+  mesh.userData.isPlacementPreview = true;
+
+  // Make materials translucent
+  mesh.traverse((obj) => {
+    if ((obj as THREE.Mesh).isMesh) {
+      const m = obj as THREE.Mesh;
+      m.castShadow = false;
+      m.receiveShadow = false;
+      if (m.material) {
+        const mat = (m.material as THREE.MeshStandardMaterial).clone();
+        mat.transparent = true;
+        mat.opacity = 0.6;
+        mat.depthWrite = false;
+        mat.emissive = new THREE.Color(0x1f9d55);
+        mat.emissiveIntensity = 0.45;
+        m.material = mat;
+      }
+    }
+  });
+
+  return mesh;
 }

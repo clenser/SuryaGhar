@@ -177,3 +177,54 @@ describe("Ground tree 3D meshes", () => {
     disposeTreeGroup(group);
   });
 });
+
+describe("Tree 3D templates and interactive preview", () => {
+  it("normalizes a loaded GLTF group to have base at Z = 0 and enable shadow flags", async () => {
+    const root = new THREE.Group();
+    const geom = new THREE.BoxGeometry(2, 4, 2); // height 4 along Y
+    const mat = new THREE.MeshStandardMaterial({ name: "WoodBark" });
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.position.set(0, 2, 0); // centered at Y = 2
+    root.add(mesh);
+
+    // Call normalization
+    const { normalizeTreeGLTF } = await import("../lib/3d/treeMeshes");
+    const normalized = normalizeTreeGLTF(root);
+
+    expect(normalized.nativeHeight).toBeGreaterThan(0);
+    expect(normalized.nativeWidth).toBeGreaterThan(0);
+
+    // Bounds check on normalized.group: base min.z should be 0
+    const box = new THREE.Box3().setFromObject(normalized.group);
+    expect(box.min.z).toBeCloseTo(0, 1);
+
+    // Meshes inside normalized template must cast and receive shadows
+    let shadowsConfigured = false;
+    normalized.group.traverse((c) => {
+      if ((c as THREE.Mesh).isMesh) {
+        expect((c as THREE.Mesh).castShadow).toBe(true);
+        expect((c as THREE.Mesh).receiveShadow).toBe(true);
+        shadowsConfigured = true;
+      }
+    });
+    expect(shadowsConfigured).toBe(true);
+  });
+
+  it("builds a translucent tree placement preview mesh with isPlacementPreview flag", async () => {
+    const { createTreePreviewMesh } = await import("../lib/3d/treeMeshes");
+    const preview = createTreePreviewMesh("broadleaf", 7, 4.5, 30);
+    expect(preview.name).toBe("TreePlacementPreview");
+    expect(preview.userData.isPlacementPreview).toBe(true);
+
+    let translucentCount = 0;
+    preview.traverse((c) => {
+      if ((c as THREE.Mesh).isMesh) {
+        const mat = (c as THREE.Mesh).material as THREE.MeshStandardMaterial;
+        expect(mat.transparent).toBe(true);
+        expect(mat.opacity).toBeLessThan(1);
+        translucentCount++;
+      }
+    });
+    expect(translucentCount).toBeGreaterThan(0);
+  });
+});

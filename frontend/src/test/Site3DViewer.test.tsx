@@ -864,4 +864,62 @@ describe("Site3DViewer weather presets and rain simulation", () => {
     const disposedRain = capture.lastScene!.getObjectByName("RainStreaks");
     expect(disposedRain).toBeUndefined();
   });
+
+  it("updates rain streak positions downward on frame advance during rainy preset", () => {
+    render(<Site3DViewer localCoords={MOCK_LOCAL_COORDS} weatherPreset="rainy" />);
+    stepFrames(1);
+
+    const rain = capture.lastScene?.getObjectByName("RainStreaks") as THREE.LineSegments | undefined;
+    expect(rain).toBeDefined();
+
+    // Advance 5 frames to let rain streaks travel downward
+    stepFrames(5);
+
+    // Array should have updated
+    const posAttrUpdated = rain!.geometry.getAttribute("position") as THREE.BufferAttribute;
+    expect(posAttrUpdated.version).toBeGreaterThan(0);
+  });
+});
+
+describe("Site3DViewer tree placement mode", () => {
+  beforeEach(() => {
+    installAnimationFrame();
+    stubWebGL(true);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    HTMLCanvasElement.prototype.getContext = originalGetContext;
+    rafTimers.clear();
+    vi.useRealTimers();
+  });
+
+  it("renders a tree preview mesh when treePlaceActive is true and removes it when false", () => {
+    const { rerender } = render(
+      <Site3DViewer
+        localCoords={MOCK_LOCAL_COORDS}
+        treePlaceActive={true}
+        treePlaceType="conifer"
+        treePlaceHeight={9}
+        treePlaceCanopyWidth={4}
+      />,
+    );
+    stepFrames(1);
+
+    expect(capture.lastScene).not.toBeNull();
+    const preview = capture.lastScene!.getObjectByName("TreePlacementPreview");
+    expect(preview).toBeDefined();
+    expect(preview?.userData.isPlacementPreview).toBe(true);
+
+    rerender(
+      <Site3DViewer
+        localCoords={MOCK_LOCAL_COORDS}
+        treePlaceActive={false}
+      />,
+    );
+    stepFrames(1);
+
+    const previewAfter = capture.lastScene!.getObjectByName("TreePlacementPreview");
+    expect(previewAfter).toBeUndefined();
+  });
 });

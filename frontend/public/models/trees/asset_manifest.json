@@ -1,0 +1,34 @@
+{
+  "name": "SuryaGhar 3D Tree Assets",
+  "version": "1.0.0",
+  "license": "CC0-1.0 (Public Domain)",
+  "licenseUrl": "http://creativecommons.org/publicdomain/zero/1.0/",
+  "source": "Kenney Nature Kit (https://kenney.nl/assets/nature-kit)",
+  "author": "Kenney (https://kenney.nl)",
+  "models": [
+    {
+      "id": "broadleaf",
+      "file": "broadleaf.glb",
+      "originalName": "tree_oak.glb",
+      "type": "broadleaf",
+      "description": "Broadleaf deciduous oak tree with branching trunk and naturally irregular foliage canopy",
+      "license": "CC0"
+    },
+    {
+      "id": "conifer",
+      "file": "conifer.glb",
+      "originalName": "tree_pineDefaultA.glb",
+      "type": "conifer",
+      "description": "Conifer pine tree with layered evergreen branches",
+      "license": "CC0"
+    },
+    {
+      "id": "small-ornamental",
+      "file": "small-ornamental.glb",
+      "originalName": "tree_small.glb",
+      "type": "small-ornamental",
+      "description": "Small ornamental tree with realistic slender trunk and spreading canopy",
+      "license": "CC0"
+    }
+  ]
+}

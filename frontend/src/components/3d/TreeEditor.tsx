@@ -1,8 +1,8 @@
 /**
- * TreeEditor - Compact ground-based tree form
+ * TreeEditor - Compact ground-based tree inspector form
  *
- * Controlled form for adding and editing trees on the ground plane (Z = 0)
- * outside the building footprint. All values are metres/degrees.
+ * Controlled form for modifying tree variant, dimensions, and rotation.
+ * Placement is done interactively directly on the ground in the 3D viewport.
  */
 
 import { type FormEvent } from "react";
@@ -25,7 +25,7 @@ interface TreeEditorProps {
   onCancel: () => void;
 }
 
-type NumericField = "height" | "canopyWidth" | "rotation" | "x" | "y";
+type NumericField = "height" | "canopyWidth" | "rotation";
 
 export function TreeEditor({
   mode,
@@ -69,11 +69,15 @@ export function TreeEditor({
     </div>
   );
 
+  const posX = Number(draft.x);
+  const posY = Number(draft.y);
+  const hasCoords = Number.isFinite(posX) && Number.isFinite(posY);
+
   return (
     <form className="obstacle-form" onSubmit={handleSubmit} noValidate>
       <div className="obstacle-form__header">
         <h4 className="obstacle-form__title">
-          {mode === "adding" ? "Add ground tree" : "Edit tree"}
+          {mode === "adding" ? "Tree settings" : "Edit tree"}
         </h4>
         <button
           type="button"
@@ -102,16 +106,17 @@ export function TreeEditor({
       </div>
 
       <div className="obstacle-form__grid">
-        {numericInput("tree-height", "Tree height", "height", "m")}
+        {numericInput("tree-height", "Height", "height", "m")}
         {numericInput("tree-canopy-width", "Canopy width", "canopyWidth", "m")}
       </div>
 
-      <div className="obstacle-form__grid">
-        {numericInput("tree-pos-x", "East offset", "x", "m")}
-        {numericInput("tree-pos-y", "North offset", "y", "m")}
-      </div>
-
       {numericInput("tree-rotation", "Rotation", "rotation", "°")}
+
+      {hasCoords && (
+        <div style={{ fontSize: "0.8rem", color: "var(--text-muted, #8b949e)", marginTop: "2px" }}>
+          Ground coordinates: {posX.toFixed(1)} m E, {posY.toFixed(1)} m N
+        </div>
+      )}
 
       {error && (
         <p className="obstacle-form__error" role="alert">
@@ -121,7 +126,7 @@ export function TreeEditor({
 
       <div className="obstacle-form__actions">
         <button type="submit" className="btn btn--primary">
-          {mode === "adding" ? "Place tree" : "Save changes"}
+          {mode === "adding" ? "Apply" : "Save changes"}
         </button>
         <button type="button" className="btn btn--secondary" onClick={onCancel}>
           Cancel

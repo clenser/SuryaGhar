@@ -15,7 +15,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { RotateCcw, ArrowRight, Plus, Pencil, Trash2, AlertTriangle, Sun, TreePine, Eye, Moon, Grid3x3 } from "lucide-react";
+import { RotateCcw, ArrowRight, Plus, Pencil, Trash2, AlertTriangle, Sun, TreePine, Eye, Moon, Grid3x3, X } from "lucide-react";
 import { BACKEND_WAITING_LABEL } from "../../hooks/useBackendStatus";
 import type { LngLat, PolygonMetrics } from "../../lib/geo";
 import { formatArea } from "../../lib/geo";
@@ -52,6 +52,7 @@ import {
   type Tree,
   type TreeDraft,
   type TreeType,
+  TREE_TYPES,
   createTreeId,
   draftToTree,
   emptyTreeDraft,
@@ -207,6 +208,12 @@ export function ModelPanel({
   const [treeMode, setTreeMode] = useState<"idle" | "adding" | "editing">("idle");
   const [treeDraft, setTreeDraft] = useState<TreeDraft>(() => emptyTreeDraft("broadleaf"));
   const [treeSubmitted, setTreeSubmitted] = useState(false);
+  const [treePlaceActive, setTreePlaceActive] = useState(false);
+  const [selectedTreeType, setSelectedTreeType] = useState<TreeType>("broadleaf");
+  const [treePlaceHeight, setTreePlaceHeight] = useState(8.0);
+  const [treePlaceCanopyWidth, setTreePlaceCanopyWidth] = useState(5.0);
+  const [treePlaceRotation, setTreePlaceRotation] = useState(0);
+  const [treePlacementStatus, setTreePlacementStatus] = useState<string | null>(null);
   /**
    * Manual-placement mode. While on, a roof click places a panel (validated by
    * the shared validator) instead of being read as an obstacle pick. Turned
@@ -243,13 +250,17 @@ export function ModelPanel({
         cancelDrawing();
       } else if (manualPlaceActive) {
         setManualPlaceActive(false);
+      } else if (treePlaceActive) {
+        setTreePlaceActive(false);
       } else if (obstacleMode !== "idle") {
         closeObstacleEditor();
+      } else if (treeMode !== "idle") {
+        closeTreeEditor();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [footPoints, manualPlaceActive, obstacleMode]);
+  }, [footPoints, manualPlaceActive, treePlaceActive, obstacleMode, treeMode]);
   // Repair an orphaned active-set id (remounts, races): the id must always
   // resolve, otherwise config edits would silently match nothing.
   useEffect(() => {
@@ -945,15 +956,32 @@ export function ModelPanel({
   };
 
   const startAddTree = () => {
-    // Default position placed outside the building footprint
-    const maxVertexX = terraceRing.reduce((m: number, v: Point2) => Math.max(m, v.x), 5);
-    const draft = emptyTreeDraft("broadleaf");
-    draft.x = String(Math.round(maxVertexX + 5));
-    draft.y = "0";
-    setTreeDraft(draft);
-    setTreeMode("adding");
-    setTreeSubmitted(false);
+    setTreePlaceActive(true);
+    setTreeMode("idle");
     setSelectedTreeId(null);
+    setTreePlacementStatus(null);
+  };
+
+  const handleGroundPlace = (x: number, y: number) => {
+    if (!treePlaceActive) return;
+    const treeId = createTreeId();
+    const candidate: Tree = {
+      id: treeId,
+      type: selectedTreeType,
+      position: { x, y },
+      height: treePlaceHeight,
+      canopyWidth: treePlaceCanopyWidth,
+      rotation: treePlaceRotation,
+    };
+    const result = validateTree(candidate, terraceRing, trees);
+    if (!result.valid) {
+      setTreePlacementStatus(result.error);
+      return;
+    }
+    setTrees((list) => [...list, candidate]);
+    setSelectedTreeId(candidate.id);
+    setTreePlaceActive(false);
+    setTreePlacementStatus(null);
   };
 
   const startEditTree = (tree: Tree) => {
@@ -961,6 +989,7 @@ export function ModelPanel({
     setSelectedTreeId(tree.id);
     setTreeMode("editing");
     setTreeSubmitted(false);
+    setTreePlaceActive(false);
   };
 
   const closeTreeEditor = () => {
@@ -980,17 +1009,12 @@ export function ModelPanel({
 
   const handleTreeSubmit = () => {
     setTreeSubmitted(true);
-    const treeId = treeMode === "editing" && selectedTreeId ? selectedTreeId : createTreeId();
-    const candidate = draftToTree(treeDraft, treeId);
+    if (!selectedTreeId) return;
+    const candidate = draftToTree(treeDraft, selectedTreeId);
     const result = validateTree(candidate, terraceRing, trees);
     if (!result.valid) return;
 
-    if (treeMode === "adding") {
-      setTrees((list) => [...list, candidate]);
-    } else {
-      setTrees((list) => list.map((t) => (t.id === treeId ? candidate : t)));
-    }
-    setSelectedTreeId(candidate.id);
+    setTrees((list) => list.map((t) => (t.id === selectedTreeId ? candidate : t)));
     setTreeMode("idle");
     setTreeSubmitted(false);
   };
@@ -1157,7 +1181,22 @@ export function ModelPanel({
           weatherPreset={weatherPreset}
           trees={trees}
           selectedTreeId={selectedTreeId}
-          onTreeSelect={setSelectedTreeId}
+          onTreeSelect={(id) => {
+            setSelectedTreeId(id);
+            if (id) {
+              const found = trees.find((t) => t.id === id);
+              if (found) startEditTree(found);
+            } else if (treeMode !== "idle") {
+              closeTreeEditor();
+            }
+          }}
+          treePlaceActive={treePlaceActive}
+          treePlaceType={selectedTreeType}
+          treePlaceHeight={treePlaceHeight}
+          treePlaceCanopyWidth={treePlaceCanopyWidth}
+          treePlaceRotation={treePlaceRotation}
+          onGroundPlace={handleGroundPlace}
+          onCancelTreePlace={() => setTreePlaceActive(false)}
           className="model-viewport"
         />
         {/* Viewport Toolbar - floating contextual tools anchored to viewport */}
@@ -1578,12 +1617,121 @@ export function ModelPanel({
                   {trees.length === 0 ? "No trees around the building yet" : `${trees.length} tree${trees.length === 1 ? "" : "s"} on the ground`}
                 </p>
               </div>
-              {treeMode === "idle" && (
+              {treeMode === "idle" && !treePlaceActive && (
                 <button type="button" className="btn btn--secondary" onClick={startAddTree}>
                   <Plus size={15} strokeWidth={2} aria-hidden="true" /> Add tree
                 </button>
               )}
             </div>
+
+            {treePlaceActive && (
+              <div
+                className="stage-card"
+                style={{
+                  padding: "var(--space-3)",
+                  background: "var(--surface-sunken, #161b22)",
+                  border: "1px solid var(--border-subtle, #30363d)",
+                  borderRadius: "var(--radius-md)",
+                  marginBottom: "var(--space-3)",
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--space-2)" }}>
+                  <strong style={{ fontSize: "0.85rem", color: "var(--text-primary)" }}>Tree Placement Mode</strong>
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    onClick={() => setTreePlaceActive(false)}
+                    title="Cancel placement"
+                    aria-label="Cancel placement"
+                  >
+                    <X size={15} strokeWidth={2} />
+                  </button>
+                </div>
+                <p style={{ fontSize: "0.8rem", color: "var(--text-secondary)", marginBottom: "var(--space-2)" }}>
+                  Move cursor over ground outside the building to preview. Click to place. Press Esc to cancel.
+                </p>
+                <div className="field" style={{ marginBottom: "var(--space-2)" }}>
+                  <label htmlFor="tree-place-type" style={{ fontSize: "0.8rem" }}>Tree variant</label>
+                  <select
+                    id="tree-place-type"
+                    value={selectedTreeType}
+                    onChange={(e) => {
+                      const t = e.target.value as TreeType;
+                      setSelectedTreeType(t);
+                      const def = treeTypeDefinition(t);
+                      setTreePlaceHeight(def.defaultHeight);
+                      setTreePlaceCanopyWidth(def.defaultCanopyWidth);
+                    }}
+                    style={{ fontSize: "0.85rem" }}
+                  >
+                    {TREE_TYPES.map((def) => (
+                      <option key={def.type} value={def.type}>{def.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="obstacle-form__grid" style={{ marginBottom: "var(--space-2)" }}>
+                  <div className="field">
+                    <label htmlFor="tree-place-height" style={{ fontSize: "0.8rem" }}>Height</label>
+                    <div className="height-input-row">
+                      <input
+                        id="tree-place-height"
+                        type="number"
+                        step="0.5"
+                        min="1"
+                        max="30"
+                        value={treePlaceHeight}
+                        onChange={(e) => setTreePlaceHeight(Number(e.target.value) || 8)}
+                        style={{ fontSize: "0.85rem" }}
+                      />
+                      <span className="height-unit">m</span>
+                    </div>
+                  </div>
+                  <div className="field">
+                    <label htmlFor="tree-place-width" style={{ fontSize: "0.8rem" }}>Canopy width</label>
+                    <div className="height-input-row">
+                      <input
+                        id="tree-place-width"
+                        type="number"
+                        step="0.5"
+                        min="0.5"
+                        max="20"
+                        value={treePlaceCanopyWidth}
+                        onChange={(e) => setTreePlaceCanopyWidth(Number(e.target.value) || 5)}
+                        style={{ fontSize: "0.85rem" }}
+                      />
+                      <span className="height-unit">m</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="field" style={{ marginBottom: "var(--space-2)" }}>
+                  <label htmlFor="tree-place-rotation" style={{ fontSize: "0.8rem" }}>Rotation</label>
+                  <div className="height-input-row">
+                    <input
+                      id="tree-place-rotation"
+                      type="number"
+                      step="15"
+                      value={treePlaceRotation}
+                      onChange={(e) => setTreePlaceRotation(Number(e.target.value) || 0)}
+                      style={{ fontSize: "0.85rem" }}
+                    />
+                    <span className="height-unit">°</span>
+                  </div>
+                </div>
+                {treePlacementStatus && (
+                  <p className="obstacle-form__error" role="alert" style={{ marginBottom: "var(--space-2)" }}>
+                    {treePlacementStatus}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  className="btn btn--subtle"
+                  onClick={() => setTreePlaceActive(false)}
+                  style={{ width: "100%", justifyContent: "center" }}
+                >
+                  Cancel placement
+                </button>
+              </div>
+            )}
 
             {treeMode !== "idle" && (
               <TreeEditor

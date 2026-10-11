@@ -52,7 +52,10 @@ import {
   createTreeGroup,
   disposeTreeGroup,
   applyTreeSelection,
+  createTreePreviewMesh,
+  preloadTreeModels,
 } from "../../lib/3d/treeMeshes";
+import { validateTree, type TreeType } from "../../lib/3d/treeTypes";
 import { fetchSatelliteGround } from "../../lib/3d/satelliteGround";
 import type { LngLat } from "../../lib/geo";
 import {
@@ -195,6 +198,16 @@ export interface Site3DViewerProps {
   selectedTreeId?: string | null;
   /** Click-to-select: fires with the tree id, or null when empty space is clicked */
   onTreeSelect?: (id: string | null) => void;
+  /** Tree placement session: while true, pointer moves show a ground tree preview and clicks place on the ground */
+  treePlaceActive?: boolean;
+  treePlaceType?: TreeType;
+  treePlaceHeight?: number;
+  treePlaceCanopyWidth?: number;
+  treePlaceRotation?: number;
+  /** Click-to-place on ground: reports local-metre ground coordinates (Z = 0) */
+  onGroundPlace?: (x: number, y: number) => void;
+  /** Cancel active tree placement session */
+  onCancelTreePlace?: () => void;
   /**
    * Geographic anchor for the satellite ground texture: the WGS84 terrace
    * ring plus the UTM centroid the local frame was built against. Without
@@ -246,6 +259,13 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       trees = [],
       selectedTreeId = null,
       onTreeSelect,
+      treePlaceActive = false,
+      treePlaceType = "broadleaf",
+      treePlaceHeight = 8,
+      treePlaceCanopyWidth = 5,
+      treePlaceRotation = 0,
+      onGroundPlace,
+      onCancelTreePlace,
       weatherPreset = "sunny",
     },
     ref,
@@ -269,6 +289,8 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
     const previewMeshRef = useRef<THREE.Mesh | null>(null);
     /** Translucent panel shown while manual placement is active. */
     const panelPreviewMeshRef = useRef<THREE.Object3D | null>(null);
+    /** Translucent tree shown while ground tree placement is active. */
+    const treePreviewMeshRef = useRef<THREE.Group | null>(null);
     const texturedGroundRef = useRef<{ mesh: THREE.Mesh; texture: THREE.CanvasTexture } | null>(null);
     /**
      * Building volume in local metres, for camera containment. Rebuilt with
@@ -285,9 +307,11 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       geom: THREE.BufferGeometry;
       mat: THREE.LineBasicMaterial;
       positions: Float32Array;
+      speeds: Float32Array;
+      lengths: Float32Array;
       maxHeight: number;
       dropCount: number;
-      streakLength: number;
+      span: number;
     } | null>(null);
     const weatherPresetRef = useRef<WeatherPreset>(weatherPreset);
     weatherPresetRef.current = weatherPreset;
@@ -303,6 +327,12 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
     onObstacleSelectRef.current = onObstacleSelect;
     const onTreeSelectRef = useRef(onTreeSelect);
     onTreeSelectRef.current = onTreeSelect;
+    const treePlaceActiveRef = useRef(treePlaceActive);
+    treePlaceActiveRef.current = treePlaceActive;
+    const onGroundPlaceRef = useRef(onGroundPlace);
+    onGroundPlaceRef.current = onGroundPlace;
+    const onCancelTreePlaceRef = useRef(onCancelTreePlace);
+    onCancelTreePlaceRef.current = onCancelTreePlace;
     const obstacleDragEnabledRef = useRef(obstacleDragEnabled);
     obstacleDragEnabledRef.current = obstacleDragEnabled;
     const onObstacleDragMoveRef = useRef(onObstacleDragMove);
@@ -378,6 +408,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         setup.renderer.shadowMap.needsUpdate = true;
 
         setIsInitialized(true);
+        preloadTreeModels().catch(() => {});
         onReadyRef.current?.();
       } catch (err) {
         console.error("[Site3DViewer] Initialization failed:", err);
@@ -394,6 +425,11 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         if (animationFrameRef.current !== null) {
           cancelAnimationFrame(animationFrameRef.current);
           animationFrameRef.current = null;
+        }
+        if (treePreviewMeshRef.current) {
+          sceneRef.current?.remove(treePreviewMeshRef.current);
+          disposeTreeGroup(treePreviewMeshRef.current);
+          treePreviewMeshRef.current = null;
         }
         if (meshesRef.current) {
           // Detach before disposing, exactly like the rebuild path: a mesh
@@ -704,33 +740,38 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         return;
       }
 
-      // Rain streaks around building bounds
-      const dropCount = 500;
-      const streakLength = 0.6; // ~60cm streak length
+      // Rain streaks around building bounds: 1200 streaks with varied speed, length, and slight lateral drift
+      const dropCount = 1200;
       const maxCoord = localCoords.vertices.reduce((m, v) => Math.max(m, Math.abs(v.x), Math.abs(v.y)), 15);
-      const span = Math.max(60, maxCoord * 3);
-      const maxHeight = Math.max(35, localCoords.height + 25);
+      const span = Math.max(70, maxCoord * 3.5);
+      const maxHeight = Math.max(40, localCoords.height + 25);
       const positions = new Float32Array(dropCount * 2 * 3);
+      const speeds = new Float32Array(dropCount);
+      const lengths = new Float32Array(dropCount);
 
       for (let i = 0; i < dropCount; i++) {
         const x = (Math.random() - 0.5) * span;
         const y = (Math.random() - 0.5) * span;
         const z = Math.random() * maxHeight;
+        const len = 1.2 + Math.random() * 1.2; // 1.2m to 2.4m streak
+        lengths[i] = len;
+        speeds[i] = 26 + Math.random() * 12; // 26 - 38 m/s speed
+
         // Top vertex of streak
         positions[i * 6 + 0] = x;
         positions[i * 6 + 1] = y;
         positions[i * 6 + 2] = z;
-        // Bottom vertex of streak (pointing downward along -Z)
-        positions[i * 6 + 3] = x;
-        positions[i * 6 + 4] = y;
-        positions[i * 6 + 5] = z - streakLength;
+        // Bottom vertex of streak (pointing downward along -Z with slight wind tilt)
+        positions[i * 6 + 3] = x - 0.12;
+        positions[i * 6 + 4] = y - 0.08;
+        positions[i * 6 + 5] = z - len;
       }
 
       const geom = new THREE.BufferGeometry();
       geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
 
       const mat = new THREE.LineBasicMaterial({
-        color: 0x9bc4e2,
+        color: 0xa8c8e8,
         transparent: true,
         opacity: 0.55,
         depthWrite: false,
@@ -742,7 +783,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       lines.name = "RainStreaks";
 
       scene.add(lines);
-      rainRef.current = { lines, geom, mat, positions, maxHeight, dropCount, streakLength };
+      rainRef.current = { lines, geom, mat, positions, speeds, lengths, maxHeight, dropCount, span };
       requestShadowUpdate();
 
       return () => {
@@ -972,6 +1013,123 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         disposePreview();
       };
     }, [manualPanelPreview, panelLayers, obstacles, localCoords, footprintDrawing, previewObstacle, isInitialized]);
+
+    // Translucent tree preview while interactive tree placement is active.
+    useEffect(() => {
+      if (!isInitialized || !sceneRef.current || !treePlaceActive) return;
+      const canvas = canvasRef.current;
+      const scene = sceneRef.current;
+      const camera = cameraRef.current;
+      if (!canvas || !camera) return;
+
+      const disposePreview = () => {
+        if (treePreviewMeshRef.current) {
+          scene.remove(treePreviewMeshRef.current);
+          disposeTreeGroup(treePreviewMeshRef.current);
+          treePreviewMeshRef.current = null;
+        }
+      };
+      disposePreview();
+
+      let root: THREE.Group;
+      try {
+        root = createTreePreviewMesh(
+          treePlaceType,
+          treePlaceHeight,
+          treePlaceCanopyWidth,
+          treePlaceRotation,
+        );
+      } catch (err) {
+        console.error("[Site3DViewer] Tree preview creation failed:", err);
+        return () => {};
+      }
+
+      root.visible = false;
+      treePreviewMeshRef.current = root;
+      scene.add(root);
+      canvas.style.cursor = "crosshair";
+
+      const VALID_EMISSIVE = 0x1f9d55;
+      const INVALID_EMISSIVE = 0xd94b4b;
+
+      const terraceRing = localCoords.vertices.map((v) => ({ x: v.x, y: v.y }));
+      const raycaster = new THREE.Raycaster();
+      const groundPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+
+      const onMove = (event: PointerEvent) => {
+        const rect = canvas.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return;
+        camera.updateMatrixWorld(true);
+        raycaster.setFromCamera(
+          new THREE.Vector2(
+            ((event.clientX - rect.left) / rect.width) * 2 - 1,
+            -((event.clientY - rect.top) / rect.height) * 2 + 1,
+          ),
+          camera,
+        );
+        const hit = new THREE.Vector3();
+        if (!raycaster.ray.intersectPlane(groundPlane, hit)) {
+          root.visible = false;
+          return;
+        }
+
+        root.position.set(hit.x, hit.y, 0);
+        root.visible = true;
+
+        const candidateTree: Tree = {
+          id: "preview",
+          type: treePlaceType,
+          position: { x: hit.x, y: hit.y },
+          height: treePlaceHeight,
+          canopyWidth: treePlaceCanopyWidth,
+          rotation: treePlaceRotation,
+        };
+
+        const result = validateTree(candidateTree, terraceRing, trees ?? []);
+        const emissiveColor = result.valid ? VALID_EMISSIVE : INVALID_EMISSIVE;
+
+        root.traverse((obj) => {
+          if ((obj as THREE.Mesh).isMesh) {
+            const mat = (obj as THREE.Mesh).material as THREE.MeshStandardMaterial;
+            if (mat && mat.emissive) {
+              mat.emissive.setHex(emissiveColor);
+              mat.emissiveIntensity = 0.55;
+            }
+          }
+        });
+      };
+
+      const onLeave = () => {
+        root.visible = false;
+      };
+
+      const onKeyDown = (event: KeyboardEvent) => {
+        if (event.key === "Escape") {
+          onCancelTreePlaceRef.current?.();
+        }
+      };
+
+      canvas.addEventListener("pointermove", onMove);
+      canvas.addEventListener("pointerleave", onLeave);
+      window.addEventListener("keydown", onKeyDown);
+
+      return () => {
+        canvas.removeEventListener("pointermove", onMove);
+        canvas.removeEventListener("pointerleave", onLeave);
+        window.removeEventListener("keydown", onKeyDown);
+        canvas.style.cursor = "";
+        disposePreview();
+      };
+    }, [
+      treePlaceActive,
+      treePlaceType,
+      treePlaceHeight,
+      treePlaceCanopyWidth,
+      treePlaceRotation,
+      trees,
+      localCoords,
+      isInitialized,
+    ]);
 
     // Translucent draft preview while the obstacle editor holds a draft.
     useEffect(() => {
@@ -1231,6 +1389,16 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           return;
         }
 
+        if (treePlaceActiveRef.current) {
+          // Interactive ground tree session: click commits tree position at Z = 0
+          const groundPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+          const hit = new THREE.Vector3();
+          if (raycaster.ray.intersectPlane(groundPlane, hit)) {
+            onGroundPlaceRef.current?.(hit.x, hit.y);
+          }
+          return;
+        }
+
         const group = obstacleGroupRef.current;
         const targets: THREE.Object3D[] = [];
         if (group) {
@@ -1347,6 +1515,8 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         renderer.shadowMap.needsUpdate = true;
       };
 
+      let lastRainTime: number | null = null;
+
       const animate = (now: number) => {
         animationFrameRef.current = requestAnimationFrame(animate);
         controlsRef.current?.update();
@@ -1360,19 +1530,39 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
 
         // Advance rain simulation if active
         if (rainRef.current) {
-          const { geom, positions, maxHeight, dropCount, streakLength } = rainRef.current;
-          const fallSpeed = 24; // metres per second
-          const dt = lastFrame === null ? 0.016 : Math.min(Math.max((now - lastFrame) / 1000, 0), 0.1);
+          const dt = lastRainTime === null ? 0.016 : Math.min(Math.max((now - lastRainTime) / 1000, 0), 0.1);
+          lastRainTime = now;
+          const { geom, positions, speeds, lengths, maxHeight, dropCount, span } = rainRef.current;
+          const windX = -2.2;
+          const windY = -1.4;
+
           for (let i = 0; i < dropCount; i++) {
             const idx = i * 6;
-            let topZ = positions[idx + 2] - fallSpeed * dt;
+            const speed = speeds[i];
+            const len = lengths[i];
+
+            let topZ = positions[idx + 2] - speed * dt;
+            let topX = positions[idx + 0] + windX * dt;
+            let topY = positions[idx + 1] + windY * dt;
+
             if (topZ < 0) {
               topZ = maxHeight + Math.random() * 4;
+              topX = (Math.random() - 0.5) * span;
+              topY = (Math.random() - 0.5) * span;
             }
+
+            positions[idx + 0] = topX;
+            positions[idx + 1] = topY;
             positions[idx + 2] = topZ;
-            positions[idx + 5] = topZ - streakLength;
+
+            // Slanted bottom along wind vector
+            positions[idx + 3] = topX + windX * (len / speed);
+            positions[idx + 4] = topY + windY * (len / speed);
+            positions[idx + 5] = topZ - len;
           }
           geom.attributes.position.needsUpdate = true;
+        } else {
+          lastRainTime = null;
         }
 
         rendererRef.current?.render(sceneRef.current!, cameraRef.current!);
