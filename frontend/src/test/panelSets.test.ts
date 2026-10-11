@@ -9,6 +9,7 @@
 
 import { describe, expect, it, beforeEach } from "vitest";
 import {
+  autoPlaceAllSets,
   autoPlaceSet,
   createPanelSetId,
   defaultPanelSet,
@@ -20,6 +21,8 @@ import {
   validatePanelPlacement,
 } from "../lib/3d/panelSets";
 import { DEFAULT_PANEL_CONFIG, effectivePanelDims } from "../lib/3d/panels";
+import { rectangleCorners } from "../lib/3d/panelPlacement";
+import { footprintsOverlap } from "../lib/3d/obstacles";
 import type { Obstacle, Point2 } from "../lib/3d/obstacles";
 import {
   convexHull,
@@ -210,7 +213,7 @@ describe("shared placement validator", () => {
 
     // 8.8 keeps the setback rectangle fully inside the roof (so the earlier
     // containment rule passes), yet its nearest corner is only 0.63 m from the
-    // edge — the parapet inset rule must catch this specifically.
+    // edge â€” the parapet inset rule must catch this specifically.
     const refused = validatePanelPlacement(
       8.8, 0, 0, DEFAULT_PANEL_CONFIG, context({ parapetInsetM: 1.3 }),
     );
@@ -254,7 +257,7 @@ describe("obstacle shadow geometry", () => {
   });
 
   it("casts the shadow OPPOSITE the azimuth direction", () => {
-    // A 1 m box at the origin, sun to the east → shadow falls west (-X).
+    // A 1 m box at the origin, sun to the east â†’ shadow falls west (-X).
     const square: Point2[] = [
       { x: -0.5, y: -0.5 },
       { x: 0.5, y: -0.5 },
@@ -273,9 +276,55 @@ describe("obstacle shadow geometry", () => {
       { x: 0, y: 0 },
       { x: 2, y: 0 },
       { x: 2, y: 2 },
-      { x: 1, y: 1 }, // interior — must be dropped
+      { x: 1, y: 1 }, // interior â€” must be dropped
     ]);
     expect(hull).toHaveLength(3);
     expect(hull.some((p) => p.x === 1 && p.y === 1)).toBe(false);
+  });
+});
+
+describe("shared roof collision space", () => {
+  beforeEach(() => {
+    resetPanelSetIdsForTests();
+  });
+
+  it("never overlaps panels from different sets", () => {
+    const a = defaultPanelSet(createPanelSetId());
+    const b = defaultPanelSet(createPanelSetId());
+    const { sets } = autoPlaceAllSets([a, b], terrace(), []);
+    const dims = effectivePanelDims(DEFAULT_PANEL_CONFIG);
+    const all = sets.flatMap((s) => s.panels);
+    for (let i = 0; i < all.length; i++) {
+      for (let j = i + 1; j < all.length; j++) {
+        const ra = rectangleCorners(all[i].x, all[i].y, dims.widthM, dims.lengthM, all[i].rotationDeg);
+        const rb = rectangleCorners(all[j].x, all[j].y, dims.widthM, dims.lengthM, all[j].rotationDeg);
+        expect(footprintsOverlap(ra, rb)).toBe(false);
+      }
+    }
+  });
+
+  it("processes sets deterministically", () => {
+    const mk = () => [defaultPanelSet(createPanelSetId()), defaultPanelSet(createPanelSetId())];
+    const first = autoPlaceAllSets(mk(), terrace(), []);
+    resetPanelSetIdsForTests();
+    const second = autoPlaceAllSets(mk(), terrace(), []);
+    expect(first.sets.map((s) => s.panels)).toEqual(second.sets.map((s) => s.panels));
+  });
+
+  it("names a set that could not fit in the report", () => {
+    const a = defaultPanelSet(createPanelSetId());
+    const b = { ...defaultPanelSet(createPanelSetId()), name: "Crowded" };
+    // A postage-stamp roof: the first set takes everything, the second starves.
+    const tiny: Point2[] = [
+      { x: -1.2, y: -1.2 },
+      { x: 1.2, y: -1.2 },
+      { x: 1.2, y: 1.2 },
+      { x: -1.2, y: 1.2 },
+    ];
+    const { sets, report } = autoPlaceAllSets([a, b], tiny, []);
+    const total = sets.reduce((s, x) => s + x.panels.length, 0);
+    expect(total).toBeLessThanOrEqual(2);
+    if (total < 2) expect(report).toMatch(/Crowded/);
+    else expect(report).toBeNull();
   });
 });

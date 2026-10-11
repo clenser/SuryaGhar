@@ -195,6 +195,53 @@ export function resetPanelSetIdsForTests(): void {
   setCounter = 0;
 }
 
+/**
+ * Auto-place ALL sets into ONE shared collision space.
+ *
+ * Sets are processed in a deterministic order and each one sees the panels
+ * already accepted by the previous sets as occupied, so no two sets can ever
+ * overlap. A set that fits keeps its own arrangement; one that is partly
+ * blocked keeps the feasible subset and is named in the report.
+ */
+export function autoPlaceAllSets(
+  sets: PanelSet[],
+  terrace: Point2[],
+  obstacles: Obstacle[],
+): { sets: PanelSet[]; report: string | null } {
+  const reserved: PlacedPanelPeer[] = [];
+  const next: PanelSet[] = [];
+  const blocked: string[] = [];
+
+  for (const set of sets) {
+    const dims = effectivePanelDims(set.config);
+    // The lattice result is independent per set; the shared space is enforced
+    // by rejecting any candidate that collides with panels already reserved.
+    const result = placePanels({ terrace, obstacles, config: set.config });
+    const peers: PlacedPanelPeer[] = [...reserved];
+    const kept: PlacedSetPanel[] = [];
+    for (const p of result.panels) {
+      const rect = rectangleCorners(p.x, p.y, dims.widthM, dims.lengthM, p.rotationDeg);
+      const collides = peers.some((peer) =>
+        footprintsOverlap(rect, rectangleCorners(peer.x, peer.y, peer.width, peer.length, peer.rotationDeg)),
+      );
+      if (collides) continue;
+      peers.push({ x: p.x, y: p.y, rotationDeg: p.rotationDeg, width: dims.widthM, length: dims.lengthM });
+      kept.push({ index: kept.length, x: p.x, y: p.y, rotationDeg: p.rotationDeg });
+    }
+    if (kept.length === 0) blocked.push(set.name);
+    for (const p of kept) {
+      reserved.push({ x: p.x, y: p.y, rotationDeg: p.rotationDeg, width: dims.widthM, length: dims.lengthM });
+    }
+    next.push({ ...set, mode: "auto", userModified: false, panels: kept });
+  }
+
+  const report =
+    blocked.length > 0
+      ? `No room left for ${blocked.join(", ")} once the other sets were placed.`
+      : null;
+  return { sets: next, report };
+}
+
 /** Auto-place one set's panels, replacing whatever it currently holds. */
 export function autoPlaceSet(
   set: PanelSet,

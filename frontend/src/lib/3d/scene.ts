@@ -144,13 +144,24 @@ export function keepCameraOutsideBox(
 ): void {
   const position = camera.position;
   if (!box.containsPoint(position)) return;
+  const toCamera = position.clone().sub(controls.target);
+  const currentDistance = toCamera.length();
+  // A zero-length offset (camera exactly on the target) has no direction;
+  // straight up is always a valid exit for a rooftop scene.
+  const direction = currentDistance > 1e-9
+    ? toCamera.multiplyScalar(1 / currentDistance)
+    : new THREE.Vector3(0, 0, 1);
   const exit = new THREE.Vector3();
-  const ray = new THREE.Ray(controls.target, position.clone().sub(controls.target).normalize());
-  if (!ray.intersectBox(box, exit)) return;
-  const distance = controls.target.distanceTo(exit) + CAMERA_CLEARANCE_M;
-  position.copy(controls.target).add(
-    position.clone().sub(controls.target).normalize().multiplyScalar(distance),
-  );
+  const ray = new THREE.Ray(controls.target, direction);
+  const distance = ray.intersectBox(box, exit)
+    ? controls.target.distanceTo(exit)
+    : currentDistance;
+  // `intersectBox` returns the ray origin itself when the origin sits exactly
+  // on a face, which would make no forward progress — fall back to the roof.
+  const safe = distance > currentDistance + 1e-6
+    ? controls.target.clone().add(direction.multiplyScalar(distance + CAMERA_CLEARANCE_M))
+    : new THREE.Vector3(controls.target.x, controls.target.y, box.max.z + CAMERA_CLEARANCE_M);
+  position.copy(safe);
 }
 
 /** Margin outside the shell the camera is pushed to, in metres. Small enough
@@ -278,11 +289,79 @@ export function frameCamera(camera: THREE.PerspectiveCamera, framing: BuildingFr
 export function frameControls(controls: OrbitControls, framing: BuildingFraming): void {
   const size = Math.max(framing.footprint, framing.height, 1);
 
-  controls.minPolarAngle = 0.15;             // ~8.5° from straight down
-  controls.maxPolarAngle = Math.PI * 0.48;   // just above the horizon
+  // Full vertical range. This scene is Z-up with `camera.up = +Z`, and
+  // OrbitControls defines polar angle 0 as the camera's OWN up axis — so 0 is
+  // exactly perpendicular to the roof. The old 0.15 floor (~8.5°) stopped the
+  // user just short of the top-down plan view.
+  //
+  // 0 is safe here: OrbitControls clamps phi with `Math.max(minPolarAngle, …)`
+  // and then calls `Spherical.makeSafe()`, which nudges phi to EPS (1e-6 rad)
+  // before the position is recomputed. The view therefore reaches top-down to
+  // within 0.00006° — visually exactly perpendicular — while the exact pole
+  // (where azimuth is undefined and the camera would flip) stays unreachable.
+  controls.minPolarAngle = 0;
+  // Just below +X/+Y: the camera can never pass beneath the ground plane.
+  controls.maxPolarAngle = Math.PI * 0.48;
   controls.minDistance = Math.max(size * 0.15, 2);
   controls.maxDistance = Math.max(size * 12, 100);
   controls.target.set(0, 0, framing.height * 0.5);
+}
+
+/**
+ * Panning (Ctrl + left drag) on top of the existing OrbitControls.
+ *
+ * OrbitControls reads `mouseButtons.LEFT` when a pointer goes down, so a
+ * modifier gesture is enabled by swapping that mapping for the duration of the
+ * gesture — this stays ONE controller (no competing camera logic).
+ *
+ * The swap listener is registered on `container` in the CAPTURE phase, while
+ * OrbitControls listens on the canvas in the bubble phase. Capture runs
+ * parent -> target, so the mapping is already swapped by the time
+ * OrbitControls' own handler reads it. Registering on the canvas instead would
+ * not work: at the target, capture and bubble listeners fire in registration
+ * order, and OrbitControls registers first.
+ *
+ * Left drag without Ctrl stays ROTATE, so normal orbiting is untouched.
+ */
+export function enableCtrlDragPan(controls: OrbitControls, container: HTMLElement): () => void {
+  const ROTATE = THREE.MOUSE.ROTATE;
+  const PAN = THREE.MOUSE.PAN;
+  let panning = false;
+
+  const onDown = (event: PointerEvent) => {
+    if (event.button !== 0) return;
+    if (!event.ctrlKey && !event.metaKey) return;
+    // Swap for this gesture only.
+    controls.mouseButtons.LEFT = PAN;
+    controls.enablePan = true;
+    panning = true;
+  };
+
+  const onUp = () => {
+    if (!panning) return;
+    controls.mouseButtons.LEFT = ROTATE;
+    panning = false;
+  };
+
+  container.addEventListener("pointerdown", onDown, true);
+  // `up` is captured on the window so releasing outside the canvas still
+  // restores the mapping — otherwise a stray Ctrl-release would leave the
+  // viewer permanently in pan mode.
+  window.addEventListener("pointerup", onUp, true);
+  window.addEventListener("pointercancel", onUp, true);
+  // Dropping Ctrl mid-drag should end the gesture, not keep panning.
+  const onKeyUp = (event: KeyboardEvent) => {
+    if (event.key === "Control" || event.key === "Meta") onUp();
+  };
+  window.addEventListener("keyup", onKeyUp);
+
+  return () => {
+    container.removeEventListener("pointerdown", onDown, true);
+    window.removeEventListener("pointerup", onUp, true);
+    window.removeEventListener("pointercancel", onUp, true);
+    window.removeEventListener("keyup", onKeyUp);
+    if (panning) controls.mouseButtons.LEFT = ROTATE;
+  };
 }
 
 /**
@@ -297,11 +376,16 @@ export function createOrbitControls(
 
   controls.enableRotate = true;
   controls.enableZoom = true;
-  controls.enablePan = false;          // building stays the focus
+  // Panning exists, but is OFF for plain drags so left-drag keeps rotating.
+  // `enableCtrlDragPan` turns it on for the duration of a Ctrl+left gesture.
+  controls.enablePan = false;
   controls.enableDamping = true;       // smooth momentum
   controls.dampingFactor = 0.08;
   controls.rotateSpeed = 0.7;
   controls.zoomSpeed = 1.0;
+  // Pan in the screen plane, matching how the pointer moves.
+  controls.screenSpacePanning = true;
+  controls.panSpeed = 0.8;
 
   frameControls(controls, framing);
 

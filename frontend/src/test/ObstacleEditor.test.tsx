@@ -63,8 +63,16 @@ describe("ObstacleEditor", () => {
     expect(screen.getByLabelText("Width")).toBeInTheDocument();
     expect(screen.getByLabelText("Height")).toBeInTheDocument();
     expect(screen.getByLabelText("Rotation")).toBeInTheDocument();
-    expect(screen.getByLabelText("Position east")).toBeInTheDocument();
-    expect(screen.getByLabelText("Position north")).toBeInTheDocument();
+  });
+
+  it("does not expose manual position fields (placement is click/drag in 3D)", () => {
+    renderEditor();
+
+    expect(screen.queryByLabelText("Position east")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Position north")).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/drag it directly once placed/i),
+    ).toBeInTheDocument();
   });
 
   it("preselects the draft's obstacle type", () => {
@@ -103,16 +111,7 @@ describe("ObstacleEditor", () => {
     expect(last.type).toBe("water-tank"); // untouched fields are preserved
   });
 
-  it("emits position changes", async () => {
-    const { props } = renderEditor();
 
-    const east = screen.getByLabelText("Position east");
-    await userEvent.clear(east);
-    await userEvent.type(east, "6.25");
-
-    const last = props.onDraftChange.mock.calls.at(-1)![0];
-    expect(last.x).toBe("6.25");
-  });
 
   it("submits the form", async () => {
     const { props } = renderEditor();

@@ -5,16 +5,16 @@
  * extruded into a correctly scaled 3D building, plus the rooftop obstacle
  * editor (Phase 3).
  *
- * AGENTS.md §50: stage progression — Model follows Select (confirmed terrace).
- * AGENTS.md §4 / §52: the geographic polygon stays authoritative; everything
+ * AGENTS.md Â§50: stage progression â€” Model follows Select (confirmed terrace).
+ * AGENTS.md Â§4 / Â§52: the geographic polygon stays authoritative; everything
  * shown here (area, perimeter, extents, extrusion, obstacle footprints)
  * derives from projected metric geometry, never from screen pixels or the
  * Three.js mesh.
- * AGENTS.md §40 / §72: obstacle records live in application state; the
+ * AGENTS.md Â§40 / Â§72: obstacle records live in application state; the
  * viewport only renders them.
  */
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { RotateCcw, ArrowRight, Plus, Pencil, Trash2, AlertTriangle } from "lucide-react";
 import { BACKEND_WAITING_LABEL } from "../../hooks/useBackendStatus";
 import type { LngLat, PolygonMetrics } from "../../lib/geo";
@@ -34,6 +34,7 @@ import {
   draftToObstacle,
   emptyObstacleDraft,
   findInvalidObstacles,
+  footprintsOverlap,
   formatObstacleDimensions,
   obstacleToDraft,
   obstacleTypeLabel,
@@ -54,9 +55,9 @@ import { useSunSimulation } from "../../hooks/useSunSimulation";
 import { formatTimezoneLabel, formatSiteDateTime, localWallClockToUtc } from "../../lib/solar";
 import type { SunSample } from "../../lib/solar";
 import type { PlacedPanel } from "../../lib/3d/panelPlacement";
-import { placePanels } from "../../lib/3d/panelPlacement";
+import { placePanels, rectangleCorners } from "../../lib/3d/panelPlacement";
 import {
-  defaultPanelSet,
+  autoPlaceAllSets, defaultPanelSet,
   totalCapacityKw as totalSetsCapacityKw,
   validatePanelPlacement,
   type PanelSet,
@@ -81,7 +82,7 @@ interface ModelPanelProps {
   backendReady: boolean;
   /**
    * Selected place's country. Used only to resolve the site's timezone for
-   * the sun simulation — never to assume a shared offset for every site.
+   * the sun simulation â€” never to assume a shared offset for every site.
    */
   siteCountry?: string | null;
   /** Rooftop obstacles from application state */
@@ -148,7 +149,7 @@ export function ModelPanel({
   // Placement is derived from (terrace, obstacles, config) so it can never go
   // stale; the revision counter forces an explicit recalculation on demand.
   // Panels are strictly opt-in: a fresh building never auto-populates the
-  // roof — the user explicitly enables placement first.
+  // roof â€” the user explicitly enables placement first.
   //
   // M3: the configuration lives in PANEL SETS. The first set is seeded from
   // the old single-config defaults so a fresh project behaves exactly as
@@ -163,6 +164,25 @@ export function ModelPanel({
    */
   const [manualPlaceActive, setManualPlaceActive] = useState(false);
   const [panelRevision, setPanelRevision] = useState(0);
+  const [manualStatus, setManualStatus] = useState<string | null>(null);
+  // Escape cancels the active transient tool: drawing first, then manual
+  // panel placement, then the obstacle editor. One listener with cleanup, and
+  // it reads current state through refs-safe values because the effect
+  // re-subscribes whenever the mode flags change.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (footPoints !== null) {
+        cancelDrawing();
+      } else if (manualPlaceActive) {
+        setManualPlaceActive(false);
+      } else if (obstacleMode !== "idle") {
+        closeObstacleEditor();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [footPoints, manualPlaceActive, obstacleMode]);
   const [panelsEnabled, setPanelsEnabled] = useState(false);
 
   /** The set the inspector is currently editing. */
@@ -186,7 +206,7 @@ export function ModelPanel({
     }
   }, [sun.date, sun.timeMinutes, sun.timezone]);
 
-  // Terrace polygon + height → local 3D coordinates (metres, centroid at origin).
+  // Terrace polygon + height â†’ local 3D coordinates (metres, centroid at origin).
   const model = useMemo(() => {
     if (buildingHeight === null || vertices.length < 3) return null;
     try {
@@ -197,7 +217,7 @@ export function ModelPanel({
     }
   }, [vertices, buildingHeight]);
 
-  // Roof ring in local metres — the authoritative boundary for obstacle checks.
+  // Roof ring in local metres â€” the authoritative boundary for obstacle checks.
   const terraceRing = useMemo(
     () => (model ? model.coords.vertices.map((v) => ({ x: v.x, y: v.y })) : []),
     [model],
@@ -212,7 +232,20 @@ export function ModelPanel({
     if (parapetDraft === null) return null;
     return validateParapetHeight(Number(parapetDraft));
   }, [parapetDraft]);
+  /**
+   * Maintenance clearance from the roof edge (parapet wall + service gap).
+   * Used by PANEL placement and the shading model, where standing clear of
+   * the wall is a real requirement.
+   */
   const parapetInsetM = DEFAULT_PARAPET_THICKNESS_M + PARAPET_CLEARANCE_M;
+
+  /**
+   * Contact boundary for OBSTACLES: the inner face of the parapet wall.
+   * Obstacles may sit flush against this (fused to the parapet); the stricter
+   * `parapetInsetM` above stays reserved for panels, so loosening obstacle
+   * contact does not silently let panels sit against the wall.
+   */
+  const parapetContactM = DEFAULT_PARAPET_THICKNESS_M;
 
   // Inner usable roof ring for panel placement: footprint inset by the
   // parapet boundary. Falls back to the raw terrace when the offset
@@ -223,7 +256,7 @@ export function ModelPanel({
   }, [terraceRing, parapetInsetM]);
 
   // Transparency (X-ray) mode: see the roof boundary against interior
-  // structures. Mutates materials in place via rebuild — no scene reset.
+  // structures. Mutates materials in place via rebuild â€” no scene reset.
   const [xray, setXray] = useState(false);
 
   // Stable parapet descriptor: a fresh literal every render would rebuild
@@ -245,7 +278,7 @@ export function ModelPanel({
   );
 
   // Deterministic panel placement, derived from the roof, the obstacles and
-  // the each set's configuration — recomputed when any of them change (the
+  // the each set's configuration â€” recomputed when any of them change (the
   // revision counter backs the explicit "Recalculate" action). Disabled by
   // default: an empty configuration produces zero panel meshes, never a full
   // roof. EVERY set is placed with the SAME placePanels lattice, so auto and
@@ -259,7 +292,7 @@ export function ModelPanel({
     });
   }, [usableRing, obstacles, panelSets, panelRevision, panelsEnabled]);
 
-  // Capacity: count × watts / 1000, across every set.
+  // Capacity: count Ã— watts / 1000, across every set.
   const panelCount = panelsEnabled
     ? panelSets.reduce((sum, set) => sum + set.panels.length, 0)
     : 0;
@@ -292,7 +325,7 @@ export function ModelPanel({
    *
    * Derived from the same real solar-position model the 3D viewport uses
    * (`sampleSolarDay`), so the sun direction in the simulation matches the
-   * sun the user sees — and changing the date in SunControls re-samples both.
+   * sun the user sees â€” and changing the date in SunControls re-samples both.
    */
   const hourlySun = useMemo(() => {
     if (!sun.samples) return [];
@@ -329,7 +362,7 @@ export function ModelPanel({
       const { mounting, ...rest } = patch;
       return {
         ...set,
-        // A configuration change applies to every member of the set — the data
+        // A configuration change applies to every member of the set â€” the data
         // model deliberately has no per-panel overrides, so this is stated
         // rather than silently diverging.
         config: { ...set.config, ...rest, mounting: mounting === undefined ? set.config.mounting : "flat" },
@@ -387,23 +420,51 @@ export function ModelPanel({
   };
 
   /** Auto-place one set, replacing its panels. */
+  /**
+   * Auto-place ONE set while preserving every other set.
+   *
+   * The lattice is independent per set, so without extra work the new
+   * arrangement could land on another set's panels. Instead every other
+   * set's panels are reserved first; only candidates clear of them are kept.
+   * A set that no longer fits keeps the feasible subset and the shortfall is
+   * named in the warning. Nothing from the other sets moves.
+   */
   const handleAutoPlaceSet = () => {
     if (!activeSet) return;
-    setPanelSets((sets) => sets.map((s) => {
-      if (s.id !== activeSetId) return s;
-      const result = placePanels({ terrace: usableRing, obstacles, config: s.config });
-      return { ...s, mode: "auto", userModified: false, panels: result.panels };
-    }));
+    const dims = effectivePanelDims(activeSet.config);
+    const reserved = panelSets
+      .filter((s) => s.id !== activeSetId)
+      .flatMap((s) => {
+        const d = effectivePanelDims(s.config);
+        return s.panels.map((x) => ({ x: x.x, y: x.y, rotationDeg: x.rotationDeg, width: d.widthM, length: d.lengthM }));
+      });
+    const result = placePanels({ terrace: usableRing, obstacles, config: activeSet.config });
+    const kept: Array<{ index: number; x: number; y: number; rotationDeg: number }> = [];
+    const seen = [...reserved];
+    for (const x of result.panels) {
+      const rect = rectangleCorners(x.x, x.y, dims.widthM, dims.lengthM, x.rotationDeg);
+      if (seen.some((peer) => footprintsOverlap(rect, rectangleCorners(peer.x, peer.y, peer.width, peer.length, peer.rotationDeg)))) continue;
+      seen.push({ x: x.x, y: x.y, rotationDeg: x.rotationDeg, width: dims.widthM, length: dims.lengthM });
+      kept.push({ index: kept.length, x: x.x, y: x.y, rotationDeg: x.rotationDeg });
+    }
+    setPanelSets((sets) => sets.map((s) => (s.id !== activeSetId ? s : { ...s, mode: "auto", userModified: false, panels: kept })));
+    setPlaceWarning(kept.length < result.panels.length ? `${activeSet.name} placed ${kept.length} of ${result.panels.length} panels: the rest overlap other sets.` : null);
   };
 
-  /** Auto-place every set at once. */
+  /** Warning from the most recent auto-place-all (a set that could not fit). */
+  const [placeWarning, setPlaceWarning] = useState<string | null>(null);
+
+  /**
+   * Auto-place every set into ONE shared collision space.
+   *
+   * utoPlaceAllSets walks the sets in order, reserving each accepted
+   * panel so later sets cannot occupy it. Never silently overlaps: an
+   * unplaceable set keeps its feasible subset and is named in the warning.
+   */
   const handleAutoPlaceAll = () => {
-    setPanelSets((sets) => sets.map((s) => ({
-      ...s,
-      mode: "auto",
-      userModified: false,
-      panels: placePanels({ terrace: usableRing, obstacles, config: s.config }).panels,
-    })));
+    const { sets, report } = autoPlaceAllSets(panelSets, usableRing, obstacles);
+    setPanelSets(sets);
+    setPlaceWarning(report);
   };
 
   /**
@@ -439,7 +500,10 @@ export function ModelPanel({
     if (!manualPlaceActive || !activeSet) return false;
     // Place the panel at the set's configured azimuth, matching the auto layout.
     const rotation = ((((-activeSet.config.azimuthDeg) % 360) + 360) % 360);
-    return handleManualPlace(x, y, rotation);
+    const placed = handleManualPlace(x, y, rotation);
+    // An invalid preview refuses the commit; say why instead of staying silent.
+    setManualStatus(placed ? null : "Cannot place here - the panel would cross the roof edge, an obstacle, or another panel.");
+    return placed;
   };
 
   /** Remove the last panel of the active set (undo for accidental placement). */
@@ -453,8 +517,8 @@ export function ModelPanel({
 
   // Obstacles that no longer satisfy the rules (e.g. the terrace changed).
   const invalidObstacles = useMemo(
-    () => findInvalidObstacles(obstacles, terraceRing, parapetInsetM),
-    [obstacles, terraceRing, parapetInsetM],
+    () => findInvalidObstacles(obstacles, terraceRing, parapetInsetM, parapetContactM),
+    [obstacles, terraceRing, parapetInsetM, parapetContactM],
   );
 
   // Draft candidate + its deterministic validation result (drives the ghost).
@@ -463,7 +527,7 @@ export function ModelPanel({
     const others = obstacles.filter(
       (o) => obstacleMode !== "editing" || o.id !== selectedObstacleId,
     );
-    return validateObstacle(candidate, { terrace: terraceRing, others, parapetInsetM });
+    return validateObstacle(candidate, { terrace: terraceRing, others, parapetInsetM, parapetContactM });
   }, [obstacleDraft, selectedObstacleId, obstacles, obstacleMode, terraceRing, parapetInsetM]);
 
   // Live ghost for the drawn footprint: placed before the no-height early
@@ -489,7 +553,7 @@ export function ModelPanel({
 
   const drawnValid = useMemo(() => {
     if (!drawnTemp) return footPoints !== null && footPoints.length < 3;
-    return validateObstacle(drawnTemp, { terrace: terraceRing, others: obstacles, parapetInsetM }).valid;
+    return validateObstacle(drawnTemp, { terrace: terraceRing, others: obstacles, parapetInsetM, parapetContactM }).valid;
   }, [drawnTemp, footPoints, terraceRing, obstacles, parapetInsetM]);
 
   // No height yet (or the user asked to change it): collect it first.
@@ -507,10 +571,10 @@ export function ModelPanel({
       />
     );
   }
-  const areaText = metrics ? formatArea(metrics.areaM2) : "—";
-  const perimeterText = metrics ? `${metrics.perimeterM.toFixed(1)} m` : "—";
-  const volumeText = metrics ? `${(metrics.areaM2 * model.heightM).toFixed(1)} m³` : "—";
-  const extentText = `${model.extentM.east.toFixed(1)} m × ${model.extentM.north.toFixed(1)} m`;
+  const areaText = metrics ? formatArea(metrics.areaM2) : "â€”";
+  const perimeterText = metrics ? `${metrics.perimeterM.toFixed(1)} m` : "â€”";
+  const volumeText = metrics ? `${(metrics.areaM2 * model.heightM).toFixed(1)} mÂ³` : "â€”";
+  const extentText = `${model.extentM.east.toFixed(1)} m Ã— ${model.extentM.north.toFixed(1)} m`;
 
   const closeObstacleEditor = () => {
     setObstacleMode("idle");
@@ -566,6 +630,44 @@ export function ModelPanel({
     if (selectedObstacleId === id || obstacleMode !== "idle") closeObstacleEditor();
   };
 
+
+  /**
+   * Obstacle drag-to-move (viewer gesture, editor open).
+   *
+   * Positions are rounded to the centimetre before entering state - well inside
+   * hand-drawn terrace accuracy - so sub-centimetre pointer jitter does not
+   * rebuild the preview mesh on every mousemove. The draft preview (and its
+   * red/green validity) follows automatically because it derives from the draft.
+   */
+  const handleObstacleDragMove = (id: string, x: number, y: number) => {
+    if (obstacleMode !== "editing" || id !== selectedObstacleId) return;
+    const rx = Math.round(x * 100) / 100;
+    const ry = Math.round(y * 100) / 100;
+    setObstacleDraft((draft) => {
+      if (draft.x === String(rx) && draft.y === String(ry)) return draft;
+      return { ...draft, x: String(rx), y: String(ry) };
+    });
+  };
+
+  /**
+   * Obstacle drag end: commit the move only when the dropped footprint is
+   * valid, otherwise revert the draft to the stored obstacle. Selection and
+   * the editor stay open either way.
+   */
+  const handleObstacleDragEnd = (id: string) => {
+    if (obstacleMode !== "editing" || id !== selectedObstacleId) return;
+    const original = obstacles.find((o) => o.id === id);
+    if (!original) return;
+    const candidate = draftToObstacle(obstacleDraft, id);
+    const others = obstacles.filter((o) => o.id !== id);
+    const result = validateObstacle(candidate, { terrace: terraceRing, others, parapetInsetM, parapetContactM });
+    if (result.valid) {
+      onUpdateObstacle?.(candidate);
+    } else {
+      setObstacleDraft(obstacleToDraft(original));
+    }
+  };
+
   const handleRoofPlace = (x: number, y: number) => {
     // Manual panel placement wins: while it is active a roof click places a
     // panel (or is refused) and nothing else consumes the click.
@@ -598,6 +700,20 @@ export function ModelPanel({
     setFootError(null);
   };
 
+  /**
+   * Undo the most recently added footprint vertex.
+   *
+   * `footPoints` is the single source of truth (React state, never the Three.js
+   * overlay), so removing the last array element is all that is needed: the
+   * marker/edge/cursor overlay derives from it and updates on the next render.
+   * Undo only ever removes one vertex and never touches a committed obstacle â€”
+   * `finishFootprint` already cleared `footPoints` to null by the time an
+   * obstacle exists, so there is nothing left to undo.
+   */
+  const undoFootPoint = () => {
+    setFootPoints((prev) => (prev && prev.length > 0 ? prev.slice(0, -1) : prev));
+  };
+
   const cancelDrawing = () => {
     setFootPoints(null);
     setFootError(null);
@@ -609,6 +725,7 @@ export function ModelPanel({
       terrace: terraceRing,
       others: obstacles,
       parapetInsetM,
+      parapetContactM,
     });
     if (!result.valid) {
       setFootError(result.error);
@@ -643,6 +760,14 @@ export function ModelPanel({
           previewValid={drawing ? drawnValid : draftResult.valid}
 
           onObstacleSelect={handleObstacleSelect}
+          obstacleDragEnabled={obstacleMode === "editing"}
+          onObstacleDragMove={handleObstacleDragMove}
+          onObstacleDragEnd={handleObstacleDragEnd}
+          manualPanelPreview={
+            manualPlaceActive && panelsEnabled && activeSet
+              ? { config: activeSet.config, insetM: parapetInsetM }
+              : null
+          }
           onRoofPlace={handleRoofPlace}
           onRoofFinish={drawing ? finishFootprint : undefined}
           footprintPoints={drawing ? footPoints : null}
@@ -660,8 +785,8 @@ export function ModelPanel({
       <p className="stage-card__hint" style={{ marginBottom: "var(--space-3)" }}>
         <RotateCcw size={14} strokeWidth={1.75} aria-hidden="true" />
         {obstacleMode !== "idle"
-          ? "Click the roof to position the footprint · Drag to rotate · Scroll or pinch to zoom"
-          : "Drag to rotate · Scroll or pinch to zoom · Click an obstacle to select it"}
+          ? "Click the roof to position the footprint Â· Drag to rotate Â· Scroll or pinch to zoom"
+          : "Drag to rotate Â· Scroll or pinch to zoom Â· Click an obstacle to select it"}
         <button
           type="button"
           className="btn"
@@ -704,7 +829,7 @@ export function ModelPanel({
         Rotate and zoom to inspect the building from all angles.
       </p>
 
-      {/* Building metrics — all values come from the projected geometry */}
+      {/* Building metrics â€” all values come from the projected geometry */}
       <dl className="metric-list" style={{ marginBottom: "var(--space-3)" }}>
         <div>
           <dt>Terrace area</dt>
@@ -715,7 +840,7 @@ export function ModelPanel({
           <dd>{perimeterText}</dd>
         </div>
         <div>
-          <dt>Footprint extent (E × N)</dt>
+          <dt>Footprint extent (E Ã— N)</dt>
           <dd>{extentText}</dd>
         </div>
         <div>
@@ -802,7 +927,7 @@ export function ModelPanel({
             <span>
               {invalidObstacles
                 .map((entry) => `${obstacleTypeLabel(entry.obstacle.type)}: ${entry.error}`)
-                .join(" · ")}
+                .join(" Â· ")}
             </span>
           </p>
         )}
@@ -810,7 +935,7 @@ export function ModelPanel({
         {drawing ? (
           <div className="obstacle-draw" role="group" aria-label="Draw rooftop footprint">
             <p className="obstacle-form__hint">
-              Rooftop footprint selection is active — click on the roof to add points
+              Rooftop footprint selection is active â€” click on the roof to add points
               ({footPoints.length} so far). Double-click or Confirm to finish; the height
               step follows.
             </p>
@@ -822,6 +947,17 @@ export function ModelPanel({
             <div className="obstacle-form__actions">
               <button type="button" className="btn btn--primary" onClick={finishFootprint}>
                 Confirm footprint
+              </button>
+              {/* Undo removes only the last vertex and keeps drawing; Cancel is
+                  what exits the session, so the two are deliberately separate. */}
+              <button
+                type="button"
+                className="btn btn--secondary"
+                onClick={undoFootPoint}
+                disabled={(footPoints?.length ?? 0) === 0}
+                title="Remove the last drawn point"
+              >
+                Undo point
               </button>
               <button type="button" className="btn btn--subtle" onClick={cancelDrawing}>
                 Cancel
@@ -860,9 +996,9 @@ export function ModelPanel({
                   <div className="obstacle-item__body">
                     <span className="obstacle-item__name">{label}</span>
                     <span className="obstacle-item__meta">
-                      {formatObstacleDimensions(obstacle)} · {obstacle.rotation}° · E{" "}
-                      {obstacle.position.x.toFixed(1)} · N {obstacle.position.y.toFixed(1)}
-                      {invalid ? ` · ${invalid.error}` : ""}
+                      {formatObstacleDimensions(obstacle)} Â· {obstacle.rotation}Â° Â· E{" "}
+                      {obstacle.position.x.toFixed(1)} Â· N {obstacle.position.y.toFixed(1)}
+                      {invalid ? ` Â· ${invalid.error}` : ""}
                     </span>
                   </div>
                   <div className="obstacle-item__actions">
@@ -920,6 +1056,7 @@ export function ModelPanel({
             manualPlaceActive={manualPlaceActive}
             onToggleManualPlace={() => setManualPlaceActive((v) => !v)}
             manualPlacedCount={activeSet?.panels.length ?? 0}
+            manualStatus={manualStatus}
             onClearManual={() =>
               setPanelSets((sets) => sets.map((s) => s.id !== activeSetId ? s : {
                 ...s, panels: [], userModified: true,
@@ -927,7 +1064,7 @@ export function ModelPanel({
             }
             panelCount={panelCount}
             capacityKw={capacityKw}
-            warning={activeSet ? (placements[panelSets.indexOf(activeSet)]?.reason ?? null) : null}
+            warning={placeWarning ?? (activeSet ? (placements[panelSets.indexOf(activeSet)]?.reason ?? null) : null)}
             energy={energy}
           />
         </>

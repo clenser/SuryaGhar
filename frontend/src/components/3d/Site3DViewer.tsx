@@ -24,6 +24,7 @@ import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js
 import type { LocalCoords3D } from "../../lib/3d/coordinates";
 import {
   buildingBounds,
+  enableCtrlDragPan,
   frameCamera,
   frameControls,
   framingFromBox,
@@ -34,9 +35,10 @@ import {
 import { createBuildingMeshes, disposeBuildingMeshes, createDesignBuildingMaterial, createDesignRoofMaterial, setShellTransparent, type BuildingMeshes } from "../../lib/3d/geometry";
 import { applySunToScene, shadowCameraExtent } from "../../lib/3d/lighting";
 import type { Obstacle } from "../../lib/3d/obstacles";
-import { createPanelGroup, disposePanelGroup } from "../../lib/3d/panelMeshes";
-import type { PlacedPanel } from "../../lib/3d/panelPlacement";
-import type { PanelLayoutConfig } from "../../lib/3d/panels";
+import { createPanelGroup, createPanelUnitGeometry, disposePanelGroup } from "../../lib/3d/panelMeshes";
+import { panelRotationForAzimuth, type PlacedPanel } from "../../lib/3d/panelPlacement";
+import { effectivePanelDims, type PanelLayoutConfig } from "../../lib/3d/panels";
+import { validatePanelPlacement } from "../../lib/3d/panelSets";
 import {
   applyObstacleSelection,
   createFootprintMarkerGroup,
@@ -92,6 +94,24 @@ export interface Site3DViewerProps {
    * clicked (deselect). Suppressed while a preview is shown.
    */
   onObstacleSelect?: (id: string | null) => void;
+  /**
+   * Obstacle drag-to-move: when true, pressing on an obstacle mesh starts a
+   * move gesture instead of a camera orbit (the editor is open and owns the
+   * draft). Disabled during footprint drawing and manual panel placement so
+   * one pointer gesture is never claimed by two tools.
+   */
+  obstacleDragEnabled?: boolean;
+  /** Live drag position in local metres, reported on the roof plane. */
+  onObstacleDragMove?: (id: string, x: number, y: number) => void;
+  /** Fires when the drag gesture ends (commit or revert is the parent's job). */
+  onObstacleDragEnd?: (id: string) => void;
+  /**
+   * Manual panel placement preview: while set, a translucent panel follows
+   * the pointer on the roof plane, tinted green/red by the shared placement
+   * validator. Null hides it. Requires `insetM` (the parapet clearance) so
+   * the preview validates exactly what a commit would validate.
+   */
+  manualPanelPreview?: { config: PanelLayoutConfig; insetM: number } | null;
   /**
    * Click-to-place: while a preview is shown, clicking the roof plane reports
    * the local-metre position under the cursor for the draft footprint.
@@ -166,6 +186,10 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       previewObstacle = null,
       previewValid = true,
       onObstacleSelect,
+      obstacleDragEnabled = false,
+      onObstacleDragMove,
+      onObstacleDragEnd,
+      manualPanelPreview = null,
       onRoofPlace,
       onRoofFinish,
       footprintPoints = null,
@@ -197,6 +221,8 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
     const obstacleGroupRef = useRef<THREE.Group | null>(null);
     const panelGroupRef = useRef<THREE.Group | null>(null);
     const previewMeshRef = useRef<THREE.Mesh | null>(null);
+    /** Translucent panel shown while manual placement is active. */
+    const panelPreviewMeshRef = useRef<THREE.Mesh | null>(null);
     const texturedGroundRef = useRef<{ mesh: THREE.Mesh; texture: THREE.CanvasTexture } | null>(null);
     /**
      * Building volume in local metres, for camera containment. Rebuilt with
@@ -205,6 +231,8 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
      * triggering a React re-render.
      */
     const buildingBoxRef = useRef<THREE.Box3>(new THREE.Box3());
+    /** Teardown for the Ctrl+left-drag pan wrapper, or null before init. */
+    const ctrlPanCleanupRef = useRef<(() => void) | null>(null);
 
     // Latest values for effects that must run exactly once per mount.
     const localCoordsRef = useRef(localCoords);
@@ -215,6 +243,14 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
     onReadyRef.current = onReady;
     const onObstacleSelectRef = useRef(onObstacleSelect);
     onObstacleSelectRef.current = onObstacleSelect;
+    const obstacleDragEnabledRef = useRef(obstacleDragEnabled);
+    obstacleDragEnabledRef.current = obstacleDragEnabled;
+    const onObstacleDragMoveRef = useRef(onObstacleDragMove);
+    onObstacleDragMoveRef.current = onObstacleDragMove;
+    const onObstacleDragEndRef = useRef(onObstacleDragEnd);
+    onObstacleDragEndRef.current = onObstacleDragEnd;
+    const manualPanelPreviewRef = useRef(manualPanelPreview);
+    manualPanelPreviewRef.current = manualPanelPreview;
     const onRoofPlaceRef = useRef(onRoofPlace);
     onRoofPlaceRef.current = onRoofPlace;
     const onRoofFinishRef = useRef(onRoofFinish);
@@ -268,6 +304,10 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         rendererRef.current = setup.renderer;
         cameraRef.current = setup.camera;
         controlsRef.current = setup.controls;
+        // Ctrl + left drag pans the view centre. Bound on the CONTAINER in the
+        // capture phase so the mapping swap lands before OrbitControls (which
+        // listens on the canvas) reads it. Cleaned up on unmount.
+        ctrlPanCleanupRef.current = enableCtrlDragPan(setup.controls, container);
         lightsRef.current = setup.lights;
         sunLightRef.current = setup.sunLight;
         ambientLightRef.current = setup.ambientLight;
@@ -283,6 +323,12 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       }
 
       return () => {
+        // Detach the Ctrl+left-drag pan wrapper first so no listener can fire
+        // against a torn-down camera.
+        if (ctrlPanCleanupRef.current) {
+          ctrlPanCleanupRef.current();
+          ctrlPanCleanupRef.current = null;
+        }
         if (animationFrameRef.current !== null) {
           cancelAnimationFrame(animationFrameRef.current);
           animationFrameRef.current = null;
@@ -558,6 +604,129 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       };
     }, [panelLayer, localCoords, isInitialized]);
 
+    // Manual panel placement preview: a translucent panel follows the pointer
+    // on the roof plane, tinted green/red by the SAME validator a commit uses.
+    //
+    // The preview tracks the pointer inside this effect (no React state per
+    // mousemove — AGENTS.md §73); only validation tinting changes. Geometry is
+    // built from the active set's real config, so the preview matches the
+    // committed panel in footprint, rotation, tilt, mounting height and style.
+    // It is suppressed while footprint drawing or an obstacle draft owns the
+    // pointer (§11 priority).
+    useEffect(() => {
+      if (!isInitialized || !sceneRef.current) return;
+      const scene = sceneRef.current;
+      const canvas = canvasRef.current;
+      const camera = cameraRef.current;
+      if (!canvas || !camera) return;
+
+      const disposePreview = () => {
+        if (panelPreviewMeshRef.current) {
+          scene.remove(panelPreviewMeshRef.current);
+          panelPreviewMeshRef.current.geometry.dispose();
+          (panelPreviewMeshRef.current.material as THREE.Material).dispose();
+          panelPreviewMeshRef.current = null;
+        }
+      };
+      disposePreview();
+
+      const preview = manualPanelPreview;
+      if (!preview) return;
+      // Drawing and obstacle drafts own the pointer first.
+      if (footprintDrawing || previewObstacle) {
+        canvas.style.cursor = "";
+        return () => {};
+      }
+
+      const config = preview.config;
+      const rotation = panelRotationForAzimuth(config.azimuthDeg);
+      const roofZ = localCoords.height;
+      let mesh: THREE.Mesh;
+      try {
+        const geometry = createPanelUnitGeometry(
+          config.panelTypeId,
+          config.mounting,
+          config.tiltDeg,
+          config.mountHeightM,
+        );
+        const material = new THREE.MeshStandardMaterial({
+          vertexColors: true,
+          transparent: true,
+          opacity: 0.55,
+          depthWrite: false,
+          roughness: 0.45,
+          metalness: 0.45,
+          emissive: new THREE.Color(0x1f9d55),
+          emissiveIntensity: 0.55,
+        });
+        mesh = new THREE.Mesh(geometry, material);
+      } catch (err) {
+        console.error("[Site3DViewer] Panel preview failed:", err);
+        return () => {};
+      }
+      mesh.castShadow = false;
+      mesh.receiveShadow = false;
+      mesh.rotation.z = (rotation * Math.PI) / 180;
+      mesh.visible = false;
+      mesh.name = "PanelPreview";
+      panelPreviewMeshRef.current = mesh;
+      scene.add(mesh);
+      canvas.style.cursor = "crosshair";
+
+      const VALID_EMISSIVE = 0x1f9d55;
+      const INVALID_EMISSIVE = 0xd94b4b;
+
+      const terraceRing = localCoords.vertices.map((v) => ({ x: v.x, y: v.y }));
+      const raycaster = new THREE.Raycaster();
+      const roofPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -roofZ);
+      const onMove = (event: PointerEvent) => {
+        const rect = canvas.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return;
+        camera.updateMatrixWorld(true);
+        raycaster.setFromCamera(
+          new THREE.Vector2(
+            ((event.clientX - rect.left) / rect.width) * 2 - 1,
+            -((event.clientY - rect.top) / rect.height) * 2 + 1,
+          ),
+          camera,
+        );
+        const hit = new THREE.Vector3();
+        // The mathematical roof plane — never an obstacle top — so a preview
+        // over an obstacle validates against the roof below it and shows red.
+        if (!raycaster.ray.intersectPlane(roofPlane, hit)) {
+          mesh.visible = false;
+          return;
+        }
+        mesh.position.set(hit.x, hit.y, roofZ);
+        mesh.visible = true;
+        // Validate the WHOLE rotated footprint, not just the cursor point.
+        const peers = (panelLayer?.panels ?? []).map((p) => {
+          const d = effectivePanelDims(panelLayer?.config ?? config);
+          return { x: p.x, y: p.y, rotationDeg: p.rotationDeg, width: d.widthM, length: d.lengthM };
+        });
+        const result = validatePanelPlacement(hit.x, hit.y, rotation, config, {
+          terrace: terraceRing,
+          obstacles,
+          parapetInsetM: preview.insetM,
+          peers,
+        });
+        (mesh.material as THREE.MeshStandardMaterial).emissive.setHex(
+          result.valid ? VALID_EMISSIVE : INVALID_EMISSIVE,
+        );
+      };
+      const onLeave = () => {
+        mesh.visible = false;
+      };
+      canvas.addEventListener("pointermove", onMove);
+      canvas.addEventListener("pointerleave", onLeave);
+      return () => {
+        canvas.removeEventListener("pointermove", onMove);
+        canvas.removeEventListener("pointerleave", onLeave);
+        canvas.style.cursor = "";
+        disposePreview();
+      };
+    }, [manualPanelPreview, panelLayer, obstacles, localCoords, footprintDrawing, previewObstacle, isInitialized]);
+
     // Translucent draft preview while the obstacle editor holds a draft.
     useEffect(() => {
       if (!isInitialized || !sceneRef.current) return;
@@ -640,6 +809,109 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       };
     }, [footprintDrawing, footprintPoints, localCoords, isInitialized]);
 
+    // Obstacle drag-to-move: pressing on an obstacle mesh while the editor is
+    // open starts a move gesture instead of a camera orbit. Priority (§11):
+    // footprint drawing and manual panel placement win over dragging, and a
+    // Ctrl/Meta gesture always stays a camera pan. While dragging, the camera
+    // is frozen so the same gesture cannot rotate the view; the parent owns
+    // the draft and commits or reverts on release.
+    useEffect(() => {
+      if (!isInitialized) return;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
+      const draggingRef: { id: string } | null = null;
+      // (drag state lives in this closure; the parent owns the draft)
+      let dragging: { id: string } | null = null;
+
+      const toNdc = (event: PointerEvent) => {
+        const rect = canvas.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return null;
+        return new THREE.Vector2(
+          ((event.clientX - rect.left) / rect.width) * 2 - 1,
+          -((event.clientY - rect.top) / rect.height) * 2 + 1,
+        );
+      };
+
+      const pickObstacle = (ndc: THREE.Vector2): string | null => {
+        const camera = cameraRef.current;
+        const group = obstacleGroupRef.current;
+        if (!camera || !group) return null;
+        camera.updateMatrixWorld(true);
+        group.updateMatrixWorld(true);
+        const raycaster = new THREE.Raycaster();
+        raycaster.setFromCamera(ndc, camera);
+        const targets: THREE.Object3D[] = [];
+        for (const child of group.children) {
+          if ((child as THREE.Mesh).isMesh) targets.push(child);
+        }
+        if (targets.length === 0) return null;
+        const hits = raycaster.intersectObjects(targets, false);
+        return hits.length ? ((hits[0].object.userData.obstacleId as string | undefined) ?? null) : null;
+      };
+
+      const roofHit = (ndc: THREE.Vector2): { x: number; y: number } | null => {
+        const camera = cameraRef.current;
+        if (!camera) return null;
+        camera.updateMatrixWorld(true);
+        const raycaster = new THREE.Raycaster();
+        raycaster.setFromCamera(ndc, camera);
+        const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -localCoordsRef.current.height);
+        const hit = new THREE.Vector3();
+        return raycaster.ray.intersectPlane(plane, hit) ? { x: hit.x, y: hit.y } : null;
+      };
+
+      // Capture phase on the canvas: OrbitControls listens in the bubble
+      // phase, so disabling the controls here wins before it reads the event.
+      const handleDown = (event: PointerEvent) => {
+        if (event.button !== 0 || event.ctrlKey || event.metaKey) return;
+        if (!obstacleDragEnabledRef.current) return;
+        if (manualPanelPreviewRef.current) return;
+        if (previewActiveRef.current || onRoofFinishRef.current) return;
+        const ndc = toNdc(event);
+        if (!ndc) return;
+        const id = pickObstacle(ndc);
+        if (!id) return; // empty space: ordinary camera orbit
+        dragging = { id };
+        if (controlsRef.current) controlsRef.current.enabled = false;
+        canvas.style.cursor = "grabbing";
+        event.preventDefault();
+        event.stopPropagation();
+      };
+
+      const handleMove = (event: PointerEvent) => {
+        if (!dragging) return;
+        const ndc = toNdc(event);
+        if (!ndc) return;
+        const hit = roofHit(ndc);
+        if (!hit) return;
+        onObstacleDragMoveRef.current?.(dragging.id, hit.x, hit.y);
+      };
+
+      const handleUp = () => {
+        if (!dragging) return;
+        const id = dragging.id;
+        dragging = null;
+        if (controlsRef.current) controlsRef.current.enabled = true;
+        canvas.style.cursor = "";
+        onObstacleDragEndRef.current?.(id);
+      };
+
+      canvas.addEventListener("pointerdown", handleDown, true);
+      window.addEventListener("pointermove", handleMove);
+      window.addEventListener("pointerup", handleUp);
+      window.addEventListener("pointercancel", handleUp);
+      return () => {
+        canvas.removeEventListener("pointerdown", handleDown, true);
+        window.removeEventListener("pointermove", handleMove);
+        window.removeEventListener("pointerup", handleUp);
+        window.removeEventListener("pointercancel", handleUp);
+        if (dragging && controlsRef.current) controlsRef.current.enabled = true;
+        dragging = null;
+      };
+      void draggingRef;
+    }, [isInitialized]);
+
     // Pointer interaction: a click (press + release without movement) either
     // places the draft footprint on the roof plane or picks an obstacle.
     // Dragging past the threshold is a camera orbit and selects nothing.
@@ -658,6 +930,10 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         const start = press;
         press = null;
         if (!start || start.button !== 0) return;
+        // A Ctrl/Meta gesture is a camera pan by contract, never a click: skip
+        // placement and selection entirely so panning cannot place a panel,
+        // pick an obstacle or deselect the current one.
+        if (event.ctrlKey || event.metaKey) return;
         if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > CLICK_DRAG_THRESHOLD_PX) {
           return; // camera orbit
         }

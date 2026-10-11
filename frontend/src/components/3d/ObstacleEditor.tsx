@@ -33,7 +33,7 @@ interface ObstacleEditorProps {
   onDrawFootprint?: () => void;
 }
 
-type NumericField = "length" | "width" | "height" | "rotation" | "x" | "y";
+type NumericField = "length" | "width" | "height" | "rotation";
 
 export function ObstacleEditor({
   mode,
@@ -109,7 +109,7 @@ export function ObstacleEditor({
         {draft.polygon && draft.polygon.length >= 3 ? (
           <p className="obstacle-form__hint">
             Drawn polygon footprint — reshape by deleting this obstacle and drawing a new one.
-            Position, rotation and height remain editable below.
+            Rotation and height remain editable below; drag the obstacle in the 3D view to move it.
           </p>
         ) : (
           <>
@@ -119,13 +119,11 @@ export function ObstacleEditor({
         )}
         {numericInput("obstacle-height", "Height", "height", "m")}
         {numericInput("obstacle-rotation", "Rotation", "rotation", "°")}
-        {numericInput("obstacle-x", "Position east", "x", "m")}
-        {numericInput("obstacle-y", "Position north", "y", "m")}
       </div>
 
       <p className="obstacle-form__hint">
-        Click the roof in the 3D view to position the footprint. Rotation turns the footprint
-        counter-clockwise around the vertical axis.
+        Click the roof in the 3D view to position the footprint, or drag it directly once placed.
+        Rotation turns the footprint counter-clockwise around the vertical axis.
       </p>
 
       {error && (

@@ -57,11 +57,11 @@ describe("SolarPanelSection", () => {
   it("emits numeric patches from the geometry fields", () => {
     const props = baseProps();
     render(<SolarPanelSection {...props} />);
-    fireEvent.change(screen.getByLabelText(/Tilt/), { target: { value: "25" } });
+    fireEvent.change(screen.getByLabelText("Tilt"), { target: { value: "25" } });
     expect(props.onConfigChange).toHaveBeenCalledWith({ tiltDeg: 25 });
-    fireEvent.change(screen.getByLabelText(/Azimuth/), { target: { value: "90" } });
+    fireEvent.change(screen.getByLabelText("Azimuth (from N)"), { target: { value: "90" } });
     expect(props.onConfigChange).toHaveBeenCalledWith({ azimuthDeg: 90 });
-    fireEvent.change(screen.getByLabelText(/setback/i), { target: { value: "0.8" } });
+    fireEvent.change(screen.getByLabelText("Edge setback"), { target: { value: "0.8" } });
     expect(props.onConfigChange).toHaveBeenCalledWith({ setbackM: 0.8 });
   });
 
@@ -83,3 +83,27 @@ describe("SolarPanelSection", () => {
     expect(screen.getByRole("output").textContent).toMatch(/0 × 550 W|0.00 kWp/);
   });
 });
+
+
+  it("keeps each slider synchronized with its number field", () => {
+    const props = baseProps();
+    render(<SolarPanelSection {...props} />);
+    // One slider per numeric geometry control, sharing the same value.
+    const slider = screen.getByLabelText("Tilt slider") as HTMLInputElement;
+    const field = screen.getByLabelText("Tilt") as HTMLInputElement;
+    expect(slider).toHaveValue("15");
+    expect(field).toHaveValue(15);
+    fireEvent.change(slider, { target: { value: "30" } });
+    expect(props.onConfigChange).toHaveBeenCalledWith({ tiltDeg: 30 });
+  });
+
+  it("rejects out-of-range text without corrupting the model", () => {
+    const props = baseProps();
+    render(<SolarPanelSection {...props} />);
+    // Sliders always emit finite in-range values; free text goes through
+    // the domain validator instead of entering the layout silently.
+    const slider = screen.getByLabelText("Panel mounting height slider") as HTMLInputElement;
+    expect(slider).toHaveAttribute("min", "0.02");
+    expect(slider).toHaveAttribute("max", "2");
+    expect(slider).toHaveValue("0.4");
+  });

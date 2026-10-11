@@ -52,6 +52,8 @@ interface SolarPanelSectionProps {
   manualPlacedCount?: number;
   /** Clear the active set's panels. */
   onClearManual?: () => void;
+  /** Last manual-placement refusal, shown next to the placement controls. */
+  manualStatus?: string | null;
   panelCount: number;
   capacityKw: number;
   /** Zero-panel explanation, or an invalid-configuration error. */
@@ -60,8 +62,16 @@ interface SolarPanelSectionProps {
   energy?: EnergySimulation | null;
 }
 
-/** Small labelled number input in the existing `.field` style. */
-function NumberField({
+/**
+ * Paired slider + number input in the existing `.field` style.
+ *
+ * The slider and the numeric field write the SAME value through one onChange,
+ * so they can never desynchronise. The slider always emits a finite in-range
+ * value; free text may be out of range or non-numeric, which the domain
+ * validator (`validatePanelConfig`) then reports instead of corrupting the
+ * layout — placement refuses with a message rather than placing garbage.
+ */
+function SliderNumberField({
   id,
   label,
   value,
@@ -80,6 +90,10 @@ function NumberField({
   unit: string;
   onChange: (value: number) => void;
 }) {
+  // Clamp only for the slider thumb position: the number field keeps showing
+  // the true value so an out-of-range entry stays visible (and invalid) rather
+  // than silently snapping.
+  const thumb = Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : min;
   return (
     <div className="field">
       <label htmlFor={id}>{label}</label>
@@ -98,6 +112,16 @@ function NumberField({
           {unit}
         </span>
       </div>
+      <input
+        type="range"
+        aria-label={`${label} slider`}
+        className="field-slider"
+        value={thumb}
+        min={min}
+        max={max}
+        step={step}
+        onChange={(e) => onChange(Number(e.target.value))}
+      />
     </div>
   );
 }
@@ -120,6 +144,7 @@ export function SolarPanelSection({
   onToggleManualPlace,
   manualPlacedCount = 0,
   onClearManual,
+  manualStatus = null,
   panelCount,
   capacityKw,
   warning,
@@ -218,6 +243,18 @@ export function SolarPanelSection({
         </button>
       </div>
 
+      {/* A manually edited set keeps its stored positions when the configuration
+          changes — the new tilt/height/dimensions apply to rendering, but the
+          arrangement is no longer the lattice output. Auto-place regenerates it
+          (overwriting the custom layout), Recalculate only refreshes
+          validation. Neither happens silently: both are explicit buttons. */}
+      {activeSet?.userModified && (
+        <p className="panel-group__hint" role="note">
+          Custom arrangement — changing settings keeps these panel positions. Use
+          Auto-place set to regenerate the layout (this overwrites the custom arrangement).
+        </p>
+      )}
+
       {/* Placement: auto per set, auto for all, and undo for manual edits. */}
       <div className="panel-set-actions">
         <button
@@ -277,6 +314,12 @@ export function SolarPanelSection({
           </button>
         )}
       </div>
+      {manualStatus && (
+        <p className="obstacle-warning" role="alert">
+          <AlertTriangle size={14} strokeWidth={1.75} aria-hidden="true" />
+          <span>{manualStatus}</span>
+        </p>
+      )}
 
       {/* Panel rating — representative module sizes, configurable */}
       <div className="panel-group">
@@ -347,7 +390,7 @@ export function SolarPanelSection({
       </div>
 
       <div className="field-grid">
-        <NumberField
+        <SliderNumberField
           id="panel-tilt"
           label={tiltLabel}
           value={config.tiltDeg}
@@ -357,7 +400,7 @@ export function SolarPanelSection({
           unit="°"
           onChange={(value) => onConfigChange({ tiltDeg: value })}
         />
-        <NumberField
+        <SliderNumberField
           id="panel-azimuth"
           label="Azimuth (from N)"
           value={config.azimuthDeg}
@@ -367,7 +410,7 @@ export function SolarPanelSection({
           unit="°"
           onChange={(value) => onConfigChange({ azimuthDeg: value })}
         />
-        <NumberField
+        <SliderNumberField
           id="panel-spacing"
           label="Panel spacing"
           value={config.spacingM}
@@ -377,7 +420,7 @@ export function SolarPanelSection({
           unit="m"
           onChange={(value) => onConfigChange({ spacingM: value })}
         />
-        <NumberField
+        <SliderNumberField
           id="panel-setback"
           label="Edge setback"
           value={config.setbackM}
@@ -393,7 +436,7 @@ export function SolarPanelSection({
           both the panel lift and the support/leg geometry, so the rendered
           array rises and its supports grow with the value. */}
       <div className="field-grid">
-        <NumberField
+        <SliderNumberField
           id="panel-mount-height"
           label="Panel mounting height"
           value={config.mountHeightM}
@@ -403,7 +446,7 @@ export function SolarPanelSection({
           unit="m"
           onChange={(value) => onConfigChange({ mountHeightM: value })}
         />
-        <NumberField
+        <SliderNumberField
           id="panel-custom-width"
           label="Custom width (optional)"
           value={config.customWidthM ?? selected.widthM}
@@ -413,7 +456,7 @@ export function SolarPanelSection({
           unit="m"
           onChange={(value) => onConfigChange({ customWidthM: value })}
         />
-        <NumberField
+        <SliderNumberField
           id="panel-custom-length"
           label="Custom length (optional)"
           value={config.customLengthM ?? selected.lengthM}

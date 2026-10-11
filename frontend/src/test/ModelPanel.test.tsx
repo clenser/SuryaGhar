@@ -250,9 +250,14 @@ describe("ModelPanel obstacles", () => {
     renderPanel({ buildingHeight: 17.2, obstacles: [], onAddObstacle });
 
     await userEvent.click(screen.getByRole("button", { name: "Add obstacle" }));
-    const east = screen.getByLabelText("Position east");
-    await userEvent.clear(east);
-    await userEvent.type(east, "500");
+    // Position is placed in the 3D view now (no manual fields), so an
+    // oversized footprint is what pushes the obstacle off the roof.
+    // The test roof is ~61 m wide but only ~55 m deep: a 59 m length
+    // (valid dimension, under the 60 m cap) hangs off the north/south
+    // edges while a 59 m width would still fit east-west.
+    const length = screen.getByLabelText("Length");
+    await userEvent.clear(length);
+    await userEvent.type(length, "59");
     await userEvent.click(screen.getByRole("button", { name: "Add obstacle" }));
 
     expect(screen.getByRole("alert")).toHaveTextContent(/beyond the rooftop boundary/);
@@ -317,21 +322,20 @@ describe("ModelPanel obstacles", () => {
     renderPanel({ buildingHeight: 17.2, obstacles: [], onAddObstacle });
 
     await userEvent.click(screen.getByRole("button", { name: "Add obstacle" }));
-    const east = screen.getByLabelText("Position east");
-    await userEvent.clear(east);
-    await userEvent.type(east, "7");
+    // Manual position fields are gone: placement happens in the 3D view,
+    // so the draft starts at the roof centre and the category change
+    // must preserve that placed position while reloading the preset.
+    expect(screen.queryByLabelText("Position east")).not.toBeInTheDocument();
     await userEvent.selectOptions(screen.getByLabelText("Obstacle type"), "lift-room");
 
-    // Preset footprint reloaded…
+    // Preset footprint reloaded ...
     expect(screen.getByLabelText("Length")).toHaveValue("3");
     expect(screen.getByLabelText("Height")).toHaveValue("3");
-    // …but the placed position is preserved.
-    expect(screen.getByLabelText("Position east")).toHaveValue("7");
 
     await userEvent.click(screen.getByRole("button", { name: "Add obstacle" }));
     expect(onAddObstacle.mock.calls[0][0]).toMatchObject({
       type: "lift-room",
-      position: { x: 7, y: 0 },
+      position: { x: 0, y: 0 },
     });
   });
 
