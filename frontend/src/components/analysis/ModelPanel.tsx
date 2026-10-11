@@ -1520,6 +1520,7 @@ export function ModelPanel({
           {BACKEND_WAITING_LABEL} 3D view works offline; validation needs the analysis server.
         </p>
       )}
+      </div>
       {/* Inspector: independently scrollable collapsible sections */}
       <div className="design-side">
         {/* Viewport Toolbar - floating contextual tools anchored to viewport */}
@@ -1537,7 +1538,7 @@ export function ModelPanel({
             sunPlaying={sun.playing}
             onToggleSunPlay={sun.togglePlay}
             inspectorCollapsed={inspectorCollapsed}
-          />}
+          />
         )}
 
         <div className="inspector-panel" style={{ flex: 1 }}>
@@ -1688,7 +1689,7 @@ export function ModelPanel({
                   {parapetClearanceError}
                 </span>
               )}
-            </dd>
+            </div>
           </CollapsibleSection>
 
           {/* Rooftop Obstacles */}
@@ -1923,19 +1924,19 @@ export function ModelPanel({
               <div className="weather-preset-btn-group">
                 <button
                   type="button"
-                  className={\`weather-preset-btn${weatherPreset === "sunny" ? " weather-preset-btn--active" : ""}\`}
+                  className={"weather-preset-btn" + (weatherPreset === "sunny" ? " weather-preset-btn--active" : "")}
                   onClick={() => setWeatherPreset("sunny")}
                   title="Sunny"
                 >Sunny</button>
                 <button
                   type="button"
-                  className={\`weather-preset-btn${weatherPreset === "cloudy" ? " weather-preset-btn--active" : ""}\`}
+                  className={"weather-preset-btn" + (weatherPreset === "cloudy" ? " weather-preset-btn--active" : "")}
                   onClick={() => setWeatherPreset("cloudy")}
                   title="Cloudy"
                 >Cloudy</button>
                 <button
                   type="button"
-                  className={\`weather-preset-btn${weatherPreset === "rainy" ? " weather-preset-btn--active" : ""}\`}
+                  className={"weather-preset-btn" + (weatherPreset === "rainy" ? " weather-preset-btn--active" : "")}
                   onClick={() => setWeatherPreset("rainy")}
                   title="Rainy"
                 >Rainy</button>
@@ -1946,7 +1947,7 @@ export function ModelPanel({
           {/* Bottom Action Bar */}
           <div className="inspector-actions">
             {/* Status */}
-            <div className={`inspector-actions__status${validObstacleCount > 0 || activeSetProblems ? "" : " inspector-actions__status--valid"}`} role="status">
+            <div className={validObstacleCount > 0 || activeSetProblems ? "inspector-actions__status" : "inspector-actions__status inspector-actions__status--valid"} role="status">
               <span className="inspector-actions__status-icon">
                 {validObstacleCount > 0 ? (
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--color-warning)" strokeWidth="2">
@@ -1976,6 +1977,7 @@ export function ModelPanel({
           </div>
         </div>
       </div>
+    </div>
     </div>
   );
 }
