@@ -214,7 +214,10 @@ describe("placePanels", () => {
       ...request(),
       config: { ...DEFAULT_PANEL_CONFIG, panelTypeId: "panel-450w" },
     });
-    expect(tall.panels.length).toBeGreaterThan(base.panels.length);
+    // Smaller modules fit at least as many complete sets; block granularity
+    // can tie the count, but the installed capacity always differs.
+    expect(tall.panels.length).toBeGreaterThanOrEqual(base.panels.length);
+    expect(tall.panels.length % (2 * 5)).toBe(0);
     expect(totalCapacityKw(tall.panels.length, 450)).not.toBe(
       totalCapacityKw(base.panels.length, 550),
     );
@@ -269,16 +272,55 @@ describe("placePanels", () => {
     }
   });
 
-  it("caps automatic placement at maxPanels deterministically", () => {
-    const full = placePanels(request());
-    expect(full.panels.length).toBeGreaterThan(3);
-    const capped = placePanels({
+  it("places each set as a complete rows-by-columns block", () => {
+    const config = { ...DEFAULT_PANEL_CONFIG, setRows: 2, setCols: 5 };
+    const { panels, reason } = placePanels({ ...request(), config });
+    expect(reason).toBeNull();
+    // 10 panels per block; the count is always a multiple of the block size.
+    expect(panels.length).toBeGreaterThan(0);
+    expect(panels.length % (2 * 5)).toBe(0);
+  });
+
+  it("rejects a set that would cross the roof instead of clipping it", () => {
+    // A 2x5 block of 550 W portrait panels needs ~7 m x ~12 m plus setbacks:
+    // far too wide for a 6 m roof, so nothing is placed and the reason says so.
+    const config = { ...DEFAULT_PANEL_CONFIG, setRows: 2, setCols: 5 };
+    const { panels, reason } = placePanels({ ...request(), terrace: rectRing(6, 6), config });
+    expect(panels).toHaveLength(0);
+    expect(reason).toMatch(/2x5|set/i);
+  });
+
+  it("fits several complete sets on a large roof without overlap", () => {
+    const config = { ...DEFAULT_PANEL_CONFIG, setRows: 1, setCols: 2 };
+    const { panels } = placePanels({ ...request(), terrace: rectRing(30, 20), config });
+    expect(panels.length).toBeGreaterThanOrEqual(4);
+    expect(panels.length % 2).toBe(0);
+    const type = panelTypeDefinition(config.panelTypeId);
+    for (let i = 0; i < panels.length; i++) {
+      for (let j = i + 1; j < panels.length; j++) {
+        const a = panels[i];
+        const b = panels[j];
+        expect(
+          footprintsOverlap(
+            rectangleCorners(a.x, a.y, type.widthM, type.lengthM, a.rotationDeg),
+            rectangleCorners(b.x, b.y, type.widthM, type.lengthM, b.rotationDeg),
+          ),
+        ).toBe(false);
+      }
+    }
+  });
+
+  it("relays out when set dimensions change", () => {
+    const twoByFive = placePanels({
       ...request(),
-      config: { ...DEFAULT_PANEL_CONFIG, maxPanels: 3 },
+      config: { ...DEFAULT_PANEL_CONFIG, setRows: 2, setCols: 5 },
     });
-    expect(capped.panels).toHaveLength(3);
-    // The first N of the uncapped lattice, in order - never a reshuffle.
-    expect(capped.panels).toEqual(full.panels.slice(0, 3));
-    expect(capped.reason).toBeNull();
+    const oneByFour = placePanels({
+      ...request(),
+      config: { ...DEFAULT_PANEL_CONFIG, setRows: 1, setCols: 4 },
+    });
+    expect(twoByFive.panels.length % 10).toBe(0);
+    expect(oneByFour.panels.length % 4).toBe(0);
+    expect(oneByFour.panels).not.toEqual(twoByFive.panels);
   });
 });

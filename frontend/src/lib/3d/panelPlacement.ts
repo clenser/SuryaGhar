@@ -260,6 +260,11 @@ export function placePanels(request: PlacementRequest): PlacementResult {
 
   const rowSpacing = effectiveRowSpacingM(config);
   const colSpacing = effectiveColSpacingM(config);
+  const rows = config.setRows;
+  const cols = config.setCols;
+  if (!Number.isInteger(rows) || rows < 1 || !Number.isInteger(cols) || cols < 1) {
+    return { panels: [], reason: "Panel set rows and columns must be positive whole numbers" };
+  }
   const stepU = width + colSpacing;
   const stepV = length + rowSpacing;
   const insetU = width / 2 + config.setbackM;
@@ -267,28 +272,19 @@ export function placePanels(request: PlacementRequest): PlacementResult {
   if (uMax - uMin < 2 * insetU || vMax - vMin < 2 * insetV) {
     return {
       panels: [],
-      reason: `Roof is too small for one ${width.toFixed(2)} × ${length.toFixed(2)} m panel with a ${config.setbackM} m setback`,
+      reason: `Roof is too small for one ${width.toFixed(2)} x ${length.toFixed(2)} m panel with a ${config.setbackM} m setback`,
     };
   }
 
   const inflateU = colSpacing > 0 ? colSpacing : 0;
   const inflateV = rowSpacing > 0 ? rowSpacing : 0;
-  // Optional per-set cap: stop accepting once reached. Deterministic because
-  // the lattice order is fixed, so the same inputs always keep the same first
-  // N panels. Null means fill the usable roof.
-  const cap =
-    config.maxPanels !== null &&
-    config.maxPanels !== undefined &&
-    Number.isFinite(config.maxPanels)
-      ? Math.floor(config.maxPanels)
-      : null;
 
   /**
    * Lattice phases to try, as fractions of one step. The lattice is anchored on
    * the terrace bounding box, so an unaligned origin can strand a whole row or
    * column. Sweeping a few deterministic phases and keeping the densest result
    * recovers those columns without changing the spacing rule: within any one
-   * phase the step is still exactly `width + spacing`.
+   * phase the step is still exactly one panel pitch per axis.
    */
   const PHASES = [0, 0.5, 0.25, 0.75];
 
@@ -303,23 +299,24 @@ export function placePanels(request: PlacementRequest): PlacementResult {
     }
   }
 
-  if (cap !== null && best.length > cap) best = best.slice(0, cap);
-
   if (best.length === 0) {
     return {
       panels: [],
       reason:
         obstacles.length > 0
-          ? "Obstacles and roof edges leave no room for a panel with the current setback"
-          : `No room for a panel with a ${config.setbackM} m setback — try a smaller setback`,
+          ? `Obstacles and roof edges leave no room for one ${rows}x${cols} set with the current setback`
+          : `No room for one ${rows}x${cols} set with a ${config.setbackM} m setback - try a smaller set or setback`,
     };
   }
   return { panels: best, reason: null };
 
   /**
-   * One lattice anchored at (originU, originV) in the panel frame. Every
-   * candidate is validated against the roof, the obstacles and the panels
-   * already accepted in THIS phase, so each result is a valid layout.
+   * One lattice anchored at (originU, originV) in the panel frame. Each
+   * lattice point is the centre of panel (0, 0) of a candidate rows x cols
+   * block; the block is accepted only when EVERY panel in it passes the
+   * roof, obstacle and peer checks (all-or-nothing: a set never straddles
+   * an edge, an obstacle or another set). Block pitch equals the intra-set
+   * panel pitch, so gaps stay uniform within and between sets.
    */
   function latticeAt(originU: number, originV: number): PlacedPanel[] {
     const placed: PlacedPanel[] = [];
@@ -328,46 +325,73 @@ export function placePanels(request: PlacementRequest): PlacementResult {
     // phase starts completely off-roof (which `continue`s on every candidate).
     const uLimit = uMax;
     const vLimit = vMax;
-    for (let cv = originV; cv <= vLimit + 1e-9; cv += stepV) {
+    for (let bv = originV; bv <= vLimit + 1e-9; bv += stepV) {
       let placedInRow = false;
-      for (let cu = originU; cu <= uLimit + 1e-9; cu += stepU) {
-        const cx = cu * u.x + cv * v.x;
-        const cy = cu * u.y + cv * v.y;
-
-        // 1. Setback: the rectangle inflated by the setback must fit inside.
-        const insetRect = rectangleCorners(
-          cx,
-          cy,
-          width + 2 * config.setbackM,
-          length + 2 * config.setbackM,
-          rotation,
-        );
-        if (!footprintInsidePolygon(insetRect, terrace)) continue;
-
-        // 2. Obstacles: the panel must clear every exclusion ring.
-        const rect = rectangleCorners(cx, cy, width, length, rotation);
-        if (obstacleRings.some((ring) => footprintsOverlap(rect, ring))) continue;
-
-        // 3. Panel-to-panel spacing: exact clear gap between panel edges,
-        // resolved per axis (columns along width, rows along length).
-        if (
-          placed.some((p) =>
-            footprintsOverlap(
-              rect,
-              rectangleCorners(p.x, p.y, width + inflateU, length + inflateV, rotation),
-            ),
-          )
-        ) {
-          continue;
-        }
-
-        placed.push({ index: placed.length, x: cx, y: cy, rotationDeg: rotation });
+      for (let bu = originU; bu <= uLimit + 1e-9; bu += stepU) {
+        const block = blockAt(bu, bv, placed);
+        if (block === null) continue;
+        for (const panel of block) placed.push({ ...panel, index: placed.length });
         placedInRow = true;
       }
-      // A row that places nothing means every later row is empty too: the
+      // A row that places nothing means every later row is also empty: the
       // lattice only walks away from the roof bounding box.
       if (!placedInRow) break;
     }
     return placed;
+  }
+
+  /**
+   * Validate one candidate block whose (0, 0) panel centre sits at (bu, bv)
+   * in the panel frame. Returns the rows x cols panels with running indices,
+   * or null when any single panel fails - the whole set is then skipped and
+   * the lattice moves on, leaving that roof area for other candidates.
+   */
+  function blockAt(bu: number, bv: number, accepted: PlacedPanel[]): PlacedPanel[] | null {
+    // Panel (r, c) centre in panel-frame coordinates.
+    const toWorld = (pu: number, pv: number): Point2 => ({
+      x: pu * u.x + pv * v.x,
+      y: pu * u.y + pv * v.y,
+    });
+    const rects: Point2[][] = [];
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const centre = toWorld(bu + c * stepU, bv + r * stepV);
+        const rect = rectangleCorners(centre.x, centre.y, width, length, rotation);
+        // 1. Setback: the rectangle inflated by the setback must fit inside.
+        const insetRect = rectangleCorners(
+          centre.x,
+          centre.y,
+          width + 2 * config.setbackM,
+          length + 2 * config.setbackM,
+          rotation,
+        );
+        if (!footprintInsidePolygon(insetRect, terrace)) return null;
+        // 2. Obstacles: the panel must clear every exclusion ring.
+        if (obstacleRings.some((ring) => footprintsOverlap(rect, ring))) return null;
+        rects.push(rect);
+      }
+    }
+    // 3. Panel-to-panel spacing against everything accepted so far, using
+    // the per-axis clear gap between panel edges. Siblings inside this
+    // block are exactly one pitch apart by construction, so only the
+    // accepted set needs checking.
+    for (const rect of rects) {
+      if (
+        accepted.some((p) =>
+          footprintsOverlap(
+            rect,
+            rectangleCorners(p.x, p.y, width + inflateU, length + inflateV, rotation),
+          ),
+        )
+      ) {
+        return null;
+      }
+    }
+    return rects.map((_, i) => {
+      const r = Math.floor(i / cols);
+      const c = i % cols;
+      const centre = toWorld(bu + c * stepU, bv + r * stepV);
+      return { index: -1, x: centre.x, y: centre.y, rotationDeg: rotation };
+    });
   }
 }

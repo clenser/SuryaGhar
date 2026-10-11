@@ -101,17 +101,23 @@ export interface PanelLayoutConfig {
   customWidthM: number | null;
   customLengthM: number | null;
   /**
-   * Support legs rendered per panel (flat mounting). Visual mounting-hardware
-   * parameter only: 4 puts a leg under each panel corner, 6 adds a mid-span
-   * pair on the long edges. Makes no structural-safety claim.
+   * Panel-set grid: rows × columns of panels placed as one rectangular group.
+   * Rows advance along the panel length axis, columns along the width axis
+   * (before azimuth rotation). Positive integers; the roof geometry bounds
+   * what actually fits.
    */
-  legCount: 4 | 6;
+  setRows: number;
+  setCols: number;
   /**
-   * Cap on panels placed in this set. Null means "fill the usable roof".
-   * Automatic placement stops once this many panels are accepted; manual
-   * placement refuses additions beyond it.
+   * Support-leg grid rendered under each panel (flat mounting): legRows legs
+   * spread along the row (width) direction, legCols along the column (length)
+   * direction, so legRows × legCols legs stand under every panel. The default
+   * 2 × 2 is exactly the four corner legs; 2 × 3 adds a mid-span pair on the
+   * long edges. Visual mounting-hardware parameter only: positions follow the
+   * panel footprint, and no structural-safety claim is made.
    */
-  maxPanels: number | null;
+  legRows: number;
+  legCols: number;
 }
 
 /** How the module's short/long sides map to the roof's X/Y axes. */
@@ -155,10 +161,14 @@ export const PANEL_MOUNT_HEIGHT_MAX_M = 2;
 export const PANEL_MIN_SIDE_M = 0.3;
 /** Largest module side the UI accepts, metres (roof-scale sanity limit). */
 export const PANEL_MAX_SIDE_M = 4;
-/** Support-leg options offered for flat mounting (visual only). */
-export const PANEL_LEG_COUNTS = [4, 6] as const;
-/** Largest placeable-panel cap accepted (prevents runaway layouts). */
-export const PANEL_MAX_COUNT = 500;
+/** Support-leg range per direction (a single centred leg up to a dense row). */
+export const PANEL_LEGS_MIN = 1;
+export const PANEL_LEGS_MAX = 6;
+/** Panel-set grid range per direction (input sanity; the roof bounds reality). */
+export const PANEL_SET_ROWS_MIN = 1;
+export const PANEL_SET_ROWS_MAX = 50;
+export const PANEL_SET_COLS_MIN = 1;
+export const PANEL_SET_COLS_MAX = 50;
 
 /** Defaults: south-facing, modest tilt, small gaps (India rooftop typical). */
 export const DEFAULT_PANEL_CONFIG: PanelLayoutConfig = {
@@ -176,8 +186,10 @@ export const DEFAULT_PANEL_CONFIG: PanelLayoutConfig = {
   orientation: "portrait",
   customWidthM: null,
   customLengthM: null,
-  legCount: 4,
-  maxPanels: null,
+  setRows: 2,
+  setCols: 5,
+  legRows: 2,
+  legCols: 2,
 };
 
 /** Row gap actually used: explicit value, else the shared spacing. */
@@ -237,15 +249,26 @@ export function validatePanelConfig(config: PanelLayoutConfig): string | null {
       return `${label} must be between ${PANEL_SPACING_MIN_M} and ${PANEL_SPACING_MAX_M} m`;
     }
   }
-  if (config.legCount !== 4 && config.legCount !== 6) {
-    return "Structure legs must be 4 or 6";
+  if (
+    !Number.isInteger(config.setRows) ||
+    config.setRows < PANEL_SET_ROWS_MIN ||
+    config.setRows > PANEL_SET_ROWS_MAX
+  ) {
+    return `Panel rows must be a whole number between ${PANEL_SET_ROWS_MIN} and ${PANEL_SET_ROWS_MAX}`;
   }
-  if (config.maxPanels !== null && config.maxPanels !== undefined) {
-    if (!Number.isFinite(config.maxPanels) || Math.floor(config.maxPanels) !== config.maxPanels) {
-      return "Panel count must be a whole number of panels";
-    }
-    if (config.maxPanels < 1 || config.maxPanels > PANEL_MAX_COUNT) {
-      return `Panel count must be between 1 and ${PANEL_MAX_COUNT}`;
+  if (
+    !Number.isInteger(config.setCols) ||
+    config.setCols < PANEL_SET_COLS_MIN ||
+    config.setCols > PANEL_SET_COLS_MAX
+  ) {
+    return `Panel columns must be a whole number between ${PANEL_SET_COLS_MIN} and ${PANEL_SET_COLS_MAX}`;
+  }
+  for (const [value, label] of [
+    [config.legRows, "Row legs"],
+    [config.legCols, "Column legs"],
+  ] as Array<[number, string]>) {
+    if (!Number.isInteger(value) || value < PANEL_LEGS_MIN || value > PANEL_LEGS_MAX) {
+      return `${label} must be a whole number between ${PANEL_LEGS_MIN} and ${PANEL_LEGS_MAX}`;
     }
   }
   return null;

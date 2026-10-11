@@ -13,9 +13,14 @@
 import { RefreshCw, AlertTriangle, Grid3x3, Plus, Copy, Trash2, Wand2 } from "lucide-react";
 import {
   MOUNTING_TYPES,
+  PANEL_LEGS_MAX,
+  PANEL_LEGS_MIN,
   PANEL_MIN_SIDE_M,
   PANEL_MAX_SIDE_M,
-  PANEL_MAX_COUNT,
+  PANEL_SET_COLS_MAX,
+  PANEL_SET_COLS_MIN,
+  PANEL_SET_ROWS_MAX,
+  PANEL_SET_ROWS_MIN,
   PANEL_SPACING_MIN_M,
   PANEL_SPACING_MAX_M,
   PANEL_TYPES,
@@ -128,6 +133,55 @@ function SliderNumberField({
     </div>
   );
 }
+
+/**
+ * Compact integer stepper for whole-number frame parameters (set grid, leg
+ * grid). Native number spinners plus an explicit integer commit: fractional
+ * or empty input becomes NaN, which `validatePanelConfig` reports instead of
+ * silently rounding into the layout.
+ */
+function IntStepperField({
+  id,
+  label,
+  title,
+  value,
+  min,
+  max,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  title: string;
+  value: number;
+  min: number;
+  max: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <div className="field">
+      <label htmlFor={id} title={title}>
+        {label}
+      </label>
+      <div className="height-input-row">
+        <input
+          id={id}
+          title={title}
+          type="number"
+          inputMode="numeric"
+          min={min}
+          max={max}
+          step={1}
+          value={Number.isFinite(value) ? value : ""}
+          onChange={(e) => {
+            const raw = e.target.value;
+            onChange(raw.trim() === "" ? Number.NaN : Math.floor(Number(raw)));
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
 
 export function SolarPanelSection({
   sets,
@@ -475,12 +529,33 @@ export function SolarPanelSection({
         restores the catalogue size.
       </p>
 
-      {/* Mounting frame: physical frame parameters for this set. Row and
-          column spacing refine Panel spacing per axis (unset follows it);
-          Structure legs selects the rendered support pattern, visual only;
-          Panels in set caps auto-fill (blank fills the usable roof). */}
+      {/* Mounting frame: physical frame parameters for this set. Panel Set
+          rows x columns defines the rectangular group placed as one unit;
+          row/column spacing refine Panel spacing per axis (unset follows it);
+          Structure legs sets the rendered support grid, visual only. */}
       <div className="panel-group">
         <span className="panel-group__label" id="panel-frame-label">Frame</span>
+        <span className="panel-group__label" id="panel-set-label">Panel Set</span>
+        <div className="field-grid" role="group" aria-labelledby="panel-set-label">
+          <IntStepperField
+            id="panel-set-rows"
+            label="Rows"
+            title="Panels per set along the row direction"
+            value={config.setRows}
+            min={PANEL_SET_ROWS_MIN}
+            max={PANEL_SET_ROWS_MAX}
+            onChange={(value) => onConfigChange({ setRows: value })}
+          />
+          <IntStepperField
+            id="panel-set-cols"
+            label="Columns"
+            title="Panels per set along the column direction"
+            value={config.setCols}
+            min={PANEL_SET_COLS_MIN}
+            max={PANEL_SET_COLS_MAX}
+            onChange={(value) => onConfigChange({ setCols: value })}
+          />
+        </div>
         <div className="field-grid">
           <SliderNumberField
             id="panel-row-spacing"
@@ -503,53 +578,33 @@ export function SolarPanelSection({
             onChange={(value) => onConfigChange({ colSpacingM: value })}
           />
         </div>
-        <div className="field-grid">
-          <div className="field">
-            <label htmlFor="panel-max-count">Panels in set (max)</label>
-            <div className="height-input-row">
-              <input
-                id="panel-max-count"
-                type="number"
-                inputMode="numeric"
-                min={1}
-                max={PANEL_MAX_COUNT}
-                step={1}
-                placeholder="Unlimited"
-                value={config.maxPanels ?? ""}
-                onChange={(e) => {
-                  const raw = e.target.value;
-                  onConfigChange({ maxPanels: raw === "" ? null : Number(raw) });
-                }}
-              />
-              <span className="height-unit" aria-hidden="true">
-                panels
-              </span>
-            </div>
-          </div>
-        </div>
         <span className="panel-group__label" id="panel-legs-label" style={{ marginTop: "var(--space-2)" }}>
-          Structure legs
+          Structure Legs
         </span>
-        <div className="segmented" role="group" aria-labelledby="panel-legs-label">
-          {([4, 6] as const).map((legs) => (
-            <button
-              key={legs}
-              type="button"
-              className={`segmented__btn${config.legCount === legs ? " is-active" : ""}`}
-              aria-pressed={config.legCount === legs}
-              onClick={() => onConfigChange({ legCount: legs })}
-            >
-              {legs} legs
-              <span className="segmented__meta">
-                {legs === 4 ? "corners" : "corners + mid-span"}
-              </span>
-            </button>
-          ))}
+        <div className="field-grid" role="group" aria-labelledby="panel-legs-label">
+          <IntStepperField
+            id="panel-leg-rows"
+            label="Rows"
+            title="Support legs along the row (width) direction"
+            value={config.legRows}
+            min={PANEL_LEGS_MIN}
+            max={PANEL_LEGS_MAX}
+            onChange={(value) => onConfigChange({ legRows: value })}
+          />
+          <IntStepperField
+            id="panel-leg-cols"
+            label="Columns"
+            title="Support legs along the column (length) direction"
+            value={config.legCols}
+            min={PANEL_LEGS_MIN}
+            max={PANEL_LEGS_MAX}
+            onChange={(value) => onConfigChange({ legCols: value })}
+          />
         </div>
         <p className="panel-group__hint">
-          Row and column spacing follow Panel spacing until set. Legs change only
-          the rendered supports, never structural engineering. Blank panel count
-          fills the usable roof.
+          Each set places as one rows-by-columns group; only complete groups
+          that fit are placed. Legs change only the rendered supports, never
+          structural engineering.
         </p>
       </div>
 

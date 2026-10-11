@@ -92,7 +92,7 @@ describe("validatePanelConfig", () => {
   });
 
   it("accepts unset frame fields and validates explicit ones", () => {
-    // Null row/column gaps follow the shared spacing; null count is uncapped.
+    // Null row/column gaps follow the shared spacing.
     expect(validatePanelConfig(DEFAULT_PANEL_CONFIG)).toBeNull();
     expect(
       validatePanelConfig({ ...DEFAULT_PANEL_CONFIG, rowSpacingM: 0.4, colSpacingM: 0.1 }),
@@ -103,16 +103,23 @@ describe("validatePanelConfig", () => {
     expect(validatePanelConfig({ ...DEFAULT_PANEL_CONFIG, colSpacingM: -1 })).toMatch(
       /Column spacing/,
     );
-    expect(validatePanelConfig({ ...DEFAULT_PANEL_CONFIG, legCount: 6 })).toBeNull();
-    expect(validatePanelConfig({ ...DEFAULT_PANEL_CONFIG, legCount: 5 as never })).toMatch(
-      /legs/,
+    expect(
+      validatePanelConfig({ ...DEFAULT_PANEL_CONFIG, setRows: 2, setCols: 5 }),
+    ).toBeNull();
+    expect(validatePanelConfig({ ...DEFAULT_PANEL_CONFIG, setRows: 0 })).toMatch(
+      /Panel rows/,
     );
-    expect(validatePanelConfig({ ...DEFAULT_PANEL_CONFIG, maxPanels: 12 })).toBeNull();
-    expect(validatePanelConfig({ ...DEFAULT_PANEL_CONFIG, maxPanels: 0 })).toMatch(
-      /Panel count/,
+    expect(validatePanelConfig({ ...DEFAULT_PANEL_CONFIG, setCols: 2.5 })).toMatch(
+      /Panel columns/,
     );
-    expect(validatePanelConfig({ ...DEFAULT_PANEL_CONFIG, maxPanels: 2.5 })).toMatch(
-      /whole number/,
+    expect(
+      validatePanelConfig({ ...DEFAULT_PANEL_CONFIG, legRows: 2, legCols: 2 }),
+    ).toBeNull();
+    expect(validatePanelConfig({ ...DEFAULT_PANEL_CONFIG, legRows: 0 })).toMatch(
+      /Row legs/,
+    );
+    expect(validatePanelConfig({ ...DEFAULT_PANEL_CONFIG, legCols: 7 })).toMatch(
+      /Column legs/,
     );
   });
 

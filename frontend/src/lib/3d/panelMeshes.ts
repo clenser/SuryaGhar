@@ -120,8 +120,9 @@ function wedge(widthM: number, lengthM: number, backHeightM: number): THREE.Buff
  * `mountHeightM` is the support height above the roof plane - it lifts the
  * whole assembly and stretches every leg/support accordingly, so the rendered
  * geometry matches the configured value rather than a fixed stand-off.
- * `legCount` selects the visual support pattern for flat mounting (4 corner
- * legs, or 6 with an added mid-span pair); other mounting types ignore it.
+ * `legRows`/`legCols` select the visual support pattern for flat mounting
+ * (legs spread along the row/column directions); other mounting types
+ * ignore them.
  * Returned geometry must be disposed by the caller when the layout changes.
  */
 export function createPanelUnitGeometry(
@@ -129,7 +130,8 @@ export function createPanelUnitGeometry(
   mounting: MountingType,
   tiltDeg: number,
   mountHeightM: number = DEFAULT_MOUNT_HEIGHT_M,
-  legCount: 4 | 6 = 4,
+  legRows = 2,
+  legCols = 2,
 ): THREE.BufferGeometry {
   const type = panelTypeDefinition(panelTypeId);
   const w = type.widthM;
@@ -181,10 +183,21 @@ export function createPanelUnitGeometry(
     // leg length and the panel centre both derive from mountHeight, so
     // changing the control raises the array and stretches the supports.
     const centerH = ROOF_STANDOFF_M + mountHeight + (l / 2) * sin;
-    const legXs = [-(w / 2 - 0.14), w / 2 - 0.14];
-    const legYs = legCount === 6
-      ? [-(l / 2 - 0.18), 0, l / 2 - 0.18]
-      : [-(l / 2 - 0.18), l / 2 - 0.18];
+    // Legs spread evenly across the footprint: legRows positions along the
+    // row (width) direction, legCols along the column (length) direction.
+    // 2 x 2 lands exactly on the four corners; a count of 1 centres.
+    const spanX = (n: number): number[] => {
+      const count = Math.max(1, Math.floor(n));
+      if (count <= 1) return [0];
+      return Array.from({ length: count }, (_, i) => -(w / 2 - 0.14) + (i * (w - 0.28)) / (count - 1));
+    };
+    const spanY = (n: number): number[] => {
+      const count = Math.max(1, Math.floor(n));
+      if (count <= 1) return [0];
+      return Array.from({ length: count }, (_, i) => -(l / 2 - 0.18) + (i * (l - 0.36)) / (count - 1));
+    };
+    const legXs = spanX(legRows);
+    const legYs = spanY(legCols);
     for (const sx of legXs) {
       for (const sy of legYs) {
         // Each leg runs from the roof up to the panel underside at its own
@@ -239,13 +252,14 @@ export function createPanelGroup(
   tiltDeg: number,
   roofZ: number,
   mountHeightM: number = DEFAULT_MOUNT_HEIGHT_M,
-  legCount: 4 | 6 = 4,
+  legRows = 2,
+  legCols = 2,
 ): THREE.Group {
   const group = new THREE.Group();
   group.name = "SolarPanels";
   if (panels.length === 0) return group;
 
-  const geometry = createPanelUnitGeometry(panelTypeId, mounting, tiltDeg, mountHeightM, legCount);
+  const geometry = createPanelUnitGeometry(panelTypeId, mounting, tiltDeg, mountHeightM, legRows, legCols);
   const material = new THREE.MeshStandardMaterial({
     vertexColors: true,
     roughness: 0.45,

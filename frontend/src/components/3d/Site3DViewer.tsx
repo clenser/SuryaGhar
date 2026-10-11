@@ -616,7 +616,8 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
             layer.config.tiltDeg,
             localCoords.height,
             layer.config.mountHeightM,
-            layer.config.legCount,
+            layer.config.legRows,
+            layer.config.legCols,
           );
           groups.push(group);
           scene.add(group);
@@ -686,7 +687,8 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           config.mounting,
           config.tiltDeg,
           config.mountHeightM,
-          config.legCount,
+          config.legRows,
+          config.legCols,
         );
         const material = new THREE.MeshStandardMaterial({
           vertexColors: true,

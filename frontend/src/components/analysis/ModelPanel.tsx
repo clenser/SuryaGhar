@@ -561,8 +561,6 @@ export function ModelPanel({
       terrace: usableRing, obstacles, parapetInsetM, peers,
     });
     if (!result.valid) return "blocked";
-    const cap = activeSet.config.maxPanels;
-    if (cap !== null && cap !== undefined && activeSet.panels.length >= cap) return "capped";
     setPanelSets((sets) => sets.map((s) => s.id !== activeSetId ? s : {
       ...s,
       mode: "manual",
@@ -586,9 +584,7 @@ export function ModelPanel({
     setManualStatus(
       refusal === null
         ? null
-        : refusal === "capped"
-          ? "This set already holds its maximum panel count."
-          : "Cannot place here - the panel would cross the roof edge, an obstacle, or another panel.",
+        : "Cannot place here - the panel would cross the roof edge, an obstacle, or another panel.",
     );
     return refusal === null;
   };
