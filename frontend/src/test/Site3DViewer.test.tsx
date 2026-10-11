@@ -12,6 +12,8 @@ import { Site3DViewer } from "../components/3d/Site3DViewer";
 import type { LocalCoords3D } from "../lib/3d/coordinates";
 import { buildingBounds, frameCamera, framingFromBox } from "../lib/3d/scene";
 import type { Obstacle } from "../lib/3d/obstacles";
+import { setBlockPanels } from "../lib/3d/panelSets";
+import { DEFAULT_PANEL_CONFIG } from "../lib/3d/panels";
 import { AMBIENT_NIGHT_INTENSITY, sunDirectionVector } from "../lib/3d/lighting";
 import { createSunClock, sampleSolarDay, sunStateAt, type SunClock } from "../lib/solar";
 
@@ -611,6 +613,100 @@ describe("Site3DViewer obstacle interaction", () => {
 
     expect(onObstacleSelect).toHaveBeenCalledWith("obstacle-7");
     expect(onRoofPlace).not.toHaveBeenCalled();
+  });
+
+  it("previews the whole configured set as one rows-by-columns group", () => {
+    // The preview must follow the selected rows/columns - no hard-coded
+    // 2 x 5 default - because the same positions are committed on click.
+    const config = { ...DEFAULT_PANEL_CONFIG, setRows: 3, setCols: 3 };
+    render(
+      <Site3DViewer
+        localCoords={MOCK_LOCAL_COORDS}
+        manualPlaceActive
+        manualPanelPreview={{ config, insetM: 0.5, mode: "set", rotationDeg: 0 }}
+        onRoofPlace={vi.fn()}
+      />,
+    );
+
+    stepFrames(1);
+    const group = capture.lastScene!.getObjectByName("PanelSetPreview") as THREE.Group | undefined;
+    expect(group).toBeTruthy();
+    expect(group!.children).toHaveLength(9);
+  });
+
+  it("previews a 1 x 4 configuration as four panels", () => {
+    const config = { ...DEFAULT_PANEL_CONFIG, setRows: 1, setCols: 4 };
+    render(
+      <Site3DViewer
+        localCoords={MOCK_LOCAL_COORDS}
+        manualPlaceActive
+        manualPanelPreview={{ config, insetM: 0.5, mode: "set", rotationDeg: 0 }}
+        onRoofPlace={vi.fn()}
+      />,
+    );
+
+    stepFrames(1);
+    const group = capture.lastScene!.getObjectByName("PanelSetPreview") as THREE.Group | undefined;
+    expect(group!.children).toHaveLength(4);
+  });
+
+  it("moves every previewed panel to the block the cursor anchors", () => {
+    // A pointer move must position the preview exactly where a commit would
+    // place the panels: same rows, same columns, same rotation, one mesh each.
+    const config = { ...DEFAULT_PANEL_CONFIG, setRows: 2, setCols: 5 };
+    render(
+      <Site3DViewer
+        localCoords={MOCK_LOCAL_COORDS}
+        manualPlaceActive
+        manualPanelPreview={{ config, insetM: 0.5, mode: "set", rotationDeg: 0 }}
+        onRoofPlace={vi.fn()}
+        onObstacleSelect={vi.fn()}
+      />,
+    );
+
+    const point = clientPointFor(4, -3, MOCK_LOCAL_COORDS.height);
+    const canvas = document.querySelector("canvas")!;
+    act(() => {
+      canvas.dispatchEvent(new MouseEvent("pointermove", { ...point, bubbles: true }));
+    });
+    stepFrames(1);
+
+    const group = capture.lastScene!.getObjectByName("PanelSetPreview") as THREE.Group;
+    expect(group.children).toHaveLength(10);
+    const expected = setBlockPanels(config, 4, -3, 0);
+    group.children.forEach((child, index) => {
+      expect(child.position.x).toBeCloseTo(expected[index].x, 6);
+      expect(child.position.y).toBeCloseTo(expected[index].y, 6);
+      expect(child.position.z).toBeCloseTo(MOCK_LOCAL_COORDS.height, 6);
+      expect(child.rotation.z).toBeCloseTo(0, 6);
+    });
+  });
+
+  it("drops the set preview when the mode is cancelled", () => {
+    const config = { ...DEFAULT_PANEL_CONFIG, setRows: 2, setCols: 2 };
+    const view = render(
+      <Site3DViewer
+        localCoords={MOCK_LOCAL_COORDS}
+        manualPlaceActive
+        manualPanelPreview={{ config, insetM: 0.5, mode: "set", rotationDeg: 0 }}
+        onRoofPlace={vi.fn()}
+      />,
+    );
+    stepFrames(1);
+    expect(
+      capture.lastScene!.getObjectByName("PanelSetPreview"),
+    ).toBeTruthy();
+
+    view.rerender(
+      <Site3DViewer
+        localCoords={MOCK_LOCAL_COORDS}
+        manualPlaceActive={false}
+        manualPanelPreview={null}
+        onRoofPlace={vi.fn()}
+      />,
+    );
+    stepFrames(1);
+    expect(capture.lastScene!.getObjectByName("PanelSetPreview")).toBeUndefined();
   });
 });
 

@@ -179,7 +179,7 @@ export const DEFAULT_PANEL_CONFIG: PanelLayoutConfig = {
   spacingM: 0.2,
   rowSpacingM: null,
   colSpacingM: null,
-  setbackM: 0.5,
+  setbackM: 0.3,
   // Matches the support stand-off the mesh builder uses by default, so the
   // default configuration renders predictably above the roof surface.
   mountHeightM: 0.4,

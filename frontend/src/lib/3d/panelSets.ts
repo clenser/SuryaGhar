@@ -18,7 +18,9 @@ import {
   type Point2,
 } from "./obstacles";
 import {
+  effectiveColSpacingM,
   effectivePanelDims,
+  effectiveRowSpacingM,
   panelTypeDefinition,
   validatePanelConfig,
   type PanelLayoutConfig,
@@ -344,7 +346,7 @@ export function defaultPanelSet(
       spacingM: 0.2,
       rowSpacingM: null,
       colSpacingM: null,
-      setbackM: 0.5,
+      setbackM: 0.3,
       mountHeightM: 0.4,
       orientation: "portrait",
       customWidthM: null,
@@ -379,4 +381,129 @@ export function findInvalidPanels(
     if (!result.valid) invalid.push({ panel, error: result.error ?? "Invalid panel" });
   }
   return invalid;
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Manual set placement: rectangular rows x cols groups.               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Panel centres for one rows x cols block centred on (centreX, centreY).
+ *
+ * Axis mapping (documented, not guessed): the block lives in the panel
+ * frame shared with `rectangleCorners` and the auto lattice. Columns step
+ * along the panel WIDTH axis by width + column spacing; rows step along the
+ * panel LENGTH axis by length + row spacing. `rotationDeg` is the shared
+ * CCW panel rotation (from the set azimuth plus any manual group rotation).
+ * Panel (r, c) sits at centre + c pitches along width + r pitches along
+ * length, so a 2 x 5 set is 2 deep and 5 across with uniform gaps.
+ */
+export function setBlockPanels(
+  config: PanelLayoutConfig,
+  centreX: number,
+  centreY: number,
+  rotationDeg: number,
+): Array<{ x: number; y: number; rotationDeg: number }> {
+  const dims = effectivePanelDims(config);
+  const rowSpacing = effectiveRowSpacingM(config);
+  const colSpacing = effectiveColSpacingM(config);
+  const rad = (rotationDeg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  // Unit axes of the panel frame in world metres (same frame as the auto
+  // lattice: u = width axis, v = length axis).
+  const ux = cos;
+  const uy = sin;
+  const vx = -sin;
+  const vy = cos;
+  const stepU = dims.widthM + colSpacing;
+  const stepV = dims.lengthM + rowSpacing;
+  const panels: Array<{ x: number; y: number; rotationDeg: number }> = [];
+  for (let r = 0; r < config.setRows; r++) {
+    for (let c = 0; c < config.setCols; c++) {
+      const du = (c - (config.setCols - 1) / 2) * stepU;
+      const dv = (r - (config.setRows - 1) / 2) * stepV;
+      panels.push({
+        x: centreX + du * ux + dv * vx,
+        y: centreY + du * uy + dv * vy,
+        rotationDeg,
+      });
+    }
+  }
+  return panels;
+}
+
+/**
+ * Validate a whole set block atomically: every panel must satisfy the same
+ * rules the single-panel validator enforces (roof, parapet, obstacles,
+ * peers). Siblings inside the candidate block join the peer set, so
+ * intra-block spacing is enforced exactly like cross-set spacing.
+ *
+ * Returns the panels to commit on success (positions already computed, so
+ * the commit path cannot drift from what was validated). On any failure the
+ * whole block is rejected with the first precise reason - never partially
+ * committed.
+ */
+export function validateSetPlacement(
+  centreX: number,
+  centreY: number,
+  rotationDeg: number,
+  config: PanelLayoutConfig,
+  context: PlacementContext,
+): { valid: true; panels: Array<{ x: number; y: number; rotationDeg: number }> } | { valid: false; error: string } {
+  if (!Number.isFinite(centreX) || !Number.isFinite(centreY)) {
+    return { valid: false, error: "Set position is not a valid number" };
+  }
+  if (!Number.isFinite(rotationDeg)) {
+    return { valid: false, error: "Set rotation is not a valid number" };
+  }
+  const configError = validatePanelConfig(config);
+  if (configError) return { valid: false, error: configError };
+  if (context.terrace.length < 3) return { valid: false, error: "Roof footprint is missing" };
+  const block = setBlockPanels(config, centreX, centreY, rotationDeg);
+  const dims = effectivePanelDims(config);
+  for (let i = 0; i < block.length; i++) {
+    const peers: PlacedPanelPeer[] = [
+      ...context.peers,
+      ...block
+        .filter((_, j) => j !== i)
+        .map((p) => ({ x: p.x, y: p.y, rotationDeg: p.rotationDeg, width: dims.widthM, length: dims.lengthM })),
+    ];
+    const result = validatePanelPlacement(block[i].x, block[i].y, rotationDeg, config, {
+      ...context,
+      peers,
+    });
+    if (!result.valid) {
+      return { valid: false, error: result.error ?? "Set does not fit here" };
+    }
+  }
+  return { valid: true, panels: block };
+}
+
+/**
+ * Approximate upper bounds for set rows/columns on a rectangular usable
+ * area of usableW x usableH metres (same frame as the block: width/columns
+ * along X, length/rows along Y, before azimuth rotation). n panels need
+ * n * size + (n - 1) * gap metres, so n <= floor((extent + gap) / pitch).
+ *
+ * Approximate on purpose: it guides the steppers, while the polygon-level
+ * validator has the final word on irregular roofs.
+ */
+export function maxSetGrid(
+  config: PanelLayoutConfig,
+  usableW: number,
+  usableH: number,
+): { maxRows: number; maxCols: number } {
+  const dims = effectivePanelDims(config);
+  const rowSpacing = effectiveRowSpacingM(config);
+  const colSpacing = effectiveColSpacingM(config);
+  const fit = (extent: number, size: number, gap: number): number => {
+    if (!(extent > 0) || !(size > 0)) return 0;
+    return Math.max(0, Math.floor((extent + gap) / (size + gap)));
+  };
+  return {
+    maxRows: fit(usableH, dims.lengthM, rowSpacing),
+    maxCols: fit(usableW, dims.widthM, colSpacing),
+  };
 }

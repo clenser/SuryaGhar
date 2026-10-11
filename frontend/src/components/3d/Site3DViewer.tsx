@@ -36,9 +36,9 @@ import { createBuildingMeshes, disposeBuildingMeshes, createDesignBuildingMateri
 import { applySunToScene, shadowCameraExtent } from "../../lib/3d/lighting";
 import type { Obstacle } from "../../lib/3d/obstacles";
 import { createPanelGroup, createPanelUnitGeometry, disposePanelGroup } from "../../lib/3d/panelMeshes";
-import { panelRotationForAzimuth, type PlacedPanel } from "../../lib/3d/panelPlacement";
+import { type PlacedPanel } from "../../lib/3d/panelPlacement";
 import { effectivePanelDims, type PanelLayoutConfig } from "../../lib/3d/panels";
-import { validatePanelPlacement } from "../../lib/3d/panelSets";
+import { setBlockPanels, validatePanelPlacement, validateSetPlacement } from "../../lib/3d/panelSets";
 import {
   applyObstacleSelection,
   createFootprintMarkerGroup,
@@ -106,12 +106,19 @@ export interface Site3DViewerProps {
   /** Fires when the drag gesture ends (commit or revert is the parent's job). */
   onObstacleDragEnd?: (id: string) => void;
   /**
-   * Manual panel placement preview: while set, a translucent panel follows
+   * Manual panel placement preview: while set, a translucent preview follows
    * the pointer on the roof plane, tinted green/red by the shared placement
    * validator. Null hides it. Requires `insetM` (the parapet clearance) so
-   * the preview validates exactly what a commit would validate.
+   * the preview validates exactly what a commit would validate. In "set"
+   * mode the preview shows the whole rows-by-columns group at `rotationDeg`;
+   * in "single" mode it shows one panel.
    */
-  manualPanelPreview?: { config: PanelLayoutConfig; insetM: number } | null;
+  manualPanelPreview?: {
+    config: PanelLayoutConfig;
+    insetM: number;
+    mode: "single" | "set";
+    rotationDeg: number;
+  } | null;
   /**
    * Click-to-place: while a preview is shown, clicking the roof plane reports
    * the local-metre position under the cursor for the draft footprint.
@@ -233,7 +240,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
     const panelGroupRef = useRef<THREE.Group[]>([]);
     const previewMeshRef = useRef<THREE.Mesh | null>(null);
     /** Translucent panel shown while manual placement is active. */
-    const panelPreviewMeshRef = useRef<THREE.Mesh | null>(null);
+    const panelPreviewMeshRef = useRef<THREE.Object3D | null>(null);
     const texturedGroundRef = useRef<{ mesh: THREE.Mesh; texture: THREE.CanvasTexture } | null>(null);
     /**
      * Building volume in local metres, for camera containment. Rebuilt with
@@ -659,13 +666,25 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       const camera = cameraRef.current;
       if (!canvas || !camera) return;
 
+      // Disposal collects each distinct geometry/material once: set-mode
+      // meshes share one of each, and double-dispose would be wasteful noise.
       const disposePreview = () => {
-        if (panelPreviewMeshRef.current) {
-          scene.remove(panelPreviewMeshRef.current);
-          panelPreviewMeshRef.current.geometry.dispose();
-          (panelPreviewMeshRef.current.material as THREE.Material).dispose();
-          panelPreviewMeshRef.current = null;
-        }
+        const root = panelPreviewMeshRef.current;
+        if (!root) return;
+        scene.remove(root);
+        const geometries = new Set<THREE.BufferGeometry>();
+        const materials = new Set<THREE.Material>();
+        root.traverse((child) => {
+          const mesh = child as THREE.Mesh;
+          if (!mesh.isMesh) return;
+          if (mesh.geometry) geometries.add(mesh.geometry);
+          const material = mesh.material as THREE.Material | THREE.Material[] | undefined;
+          if (Array.isArray(material)) material.forEach((m) => materials.add(m));
+          else if (material) materials.add(material);
+        });
+        geometries.forEach((geometry) => geometry.dispose());
+        materials.forEach((material) => material.dispose());
+        panelPreviewMeshRef.current = null;
       };
       disposePreview();
 
@@ -678,9 +697,12 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       }
 
       const config = preview.config;
-      const rotation = panelRotationForAzimuth(config.azimuthDeg);
+      // The parent computes the effective rotation (azimuth plus any manual
+      // group rotation) so preview and commit can never disagree about it.
+      const rotation = preview.rotationDeg;
       const roofZ = localCoords.height;
-      let mesh: THREE.Mesh;
+      let root: THREE.Object3D;
+      let material: THREE.MeshStandardMaterial;
       try {
         const geometry = createPanelUnitGeometry(
           config.panelTypeId,
@@ -690,7 +712,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           config.legRows,
           config.legCols,
         );
-        const material = new THREE.MeshStandardMaterial({
+        material = new THREE.MeshStandardMaterial({
           vertexColors: true,
           transparent: true,
           opacity: 0.55,
@@ -700,18 +722,34 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           emissive: new THREE.Color(0x1f9d55),
           emissiveIntensity: 0.55,
         });
-        mesh = new THREE.Mesh(geometry, material);
+        const makePanelMesh = (): THREE.Mesh => {
+          const mesh = new THREE.Mesh(geometry, material);
+          mesh.castShadow = false;
+          mesh.receiveShadow = false;
+          mesh.rotation.z = (rotation * Math.PI) / 180;
+          return mesh;
+        };
+        if (preview.mode === "set") {
+          // One shared geometry + material across the whole group: the block
+          // previews exactly what a commit would place, at a fraction of the
+          // resource cost of per-panel meshes.
+          const group = new THREE.Group();
+          group.name = "PanelSetPreview";
+          const count = Math.max(1, config.setRows * config.setCols);
+          for (let i = 0; i < count; i++) group.add(makePanelMesh());
+          root = group;
+        } else {
+          const mesh = makePanelMesh();
+          mesh.name = "PanelPreview";
+          root = mesh;
+        }
       } catch (err) {
         console.error("[Site3DViewer] Panel preview failed:", err);
         return () => {};
       }
-      mesh.castShadow = false;
-      mesh.receiveShadow = false;
-      mesh.rotation.z = (rotation * Math.PI) / 180;
-      mesh.visible = false;
-      mesh.name = "PanelPreview";
-      panelPreviewMeshRef.current = mesh;
-      scene.add(mesh);
+      root.visible = false;
+      panelPreviewMeshRef.current = root;
+      scene.add(root);
       canvas.style.cursor = "crosshair";
 
       const VALID_EMISSIVE = 0x1f9d55;
@@ -732,34 +770,48 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           camera,
         );
         const hit = new THREE.Vector3();
-        // The mathematical roof plane — never an obstacle top — so a preview
+        // The mathematical roof plane - never an obstacle top - so a preview
         // over an obstacle validates against the roof below it and shows red.
         if (!raycaster.ray.intersectPlane(roofPlane, hit)) {
-          mesh.visible = false;
+          root.visible = false;
           return;
         }
-        mesh.position.set(hit.x, hit.y, roofZ);
-        mesh.visible = true;
         // Validate the WHOLE rotated footprint, not just the cursor point,
         // against every set's panels so cross-set collisions show red too.
+        // In set mode the cursor anchors the BLOCK CENTRE and every panel of
+        // the candidate group is validated atomically, exactly as a commit
+        // would validate it.
         const peers = (panelLayers ?? []).flatMap((layer) => {
           const d = effectivePanelDims(layer.config);
           return layer.panels.map((p) => (
             { x: p.x, y: p.y, rotationDeg: p.rotationDeg, width: d.widthM, length: d.lengthM }
           ));
         });
-        const result = validatePanelPlacement(hit.x, hit.y, rotation, config, {
+        const context = {
           terrace: terraceRing,
           obstacles,
           parapetInsetM: preview.insetM,
           peers,
-        });
-        (mesh.material as THREE.MeshStandardMaterial).emissive.setHex(
-          result.valid ? VALID_EMISSIVE : INVALID_EMISSIVE,
-        );
+        };
+        if (preview.mode === "set") {
+          const group = root as THREE.Group;
+          const block = setBlockPanels(config, hit.x, hit.y, rotation);
+          group.children.forEach((child, i) => {
+            (child as THREE.Mesh).position.set(block[i].x, block[i].y, roofZ);
+          });
+          root.visible = true;
+          const result = validateSetPlacement(hit.x, hit.y, rotation, config, context);
+          material.emissive.setHex(result.valid ? VALID_EMISSIVE : INVALID_EMISSIVE);
+        } else {
+          const mesh = root as THREE.Mesh;
+          mesh.position.set(hit.x, hit.y, roofZ);
+          root.visible = true;
+          const result = validatePanelPlacement(hit.x, hit.y, rotation, config, context);
+          material.emissive.setHex(result.valid ? VALID_EMISSIVE : INVALID_EMISSIVE);
+        }
       };
       const onLeave = () => {
-        mesh.visible = false;
+        root.visible = false;
       };
       canvas.addEventListener("pointermove", onMove);
       canvas.addEventListener("pointerleave", onLeave);

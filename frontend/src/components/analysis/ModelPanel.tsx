@@ -61,8 +61,11 @@ import {
   createPanelSetId,
   defaultPanelSet,
   findInvalidPanels,
+  maxSetGrid,
+  reindexSet,
   totalCapacityKw as totalSetsCapacityKw,
   validatePanelPlacement,
+  validateSetPlacement,
   type PanelSet,
 } from "../../lib/3d/panelSets";
 import { effectivePanelDims } from "../../lib/3d/panels";
@@ -166,6 +169,20 @@ export function ModelPanel({
    * two interactions can never fight over the same click.
    */
   const [manualPlaceActive, setManualPlaceActive] = useState(false);
+  /**
+   * Manual placement granularity. `single` keeps the existing one-panel
+   * click workflow untouched; `set` arms the whole-block workflow. Defaults
+   * to single so nothing about the current behavior changes unprompted.
+   */
+  const [manualPlaceMode, setManualPlaceMode] = useState<"single" | "set">("single");
+  /**
+   * Extra group rotation (degrees, quarter turns) applied on top of the
+   * set-azimuth rotation for set placement and its preview. Cycled by an
+   * explicit Rotate control, never implicitly.
+   */
+  const [setExtraRotation, setSetExtraRotation] = useState(0);
+  /** Indices of the most recently committed manual set, for set-level undo. */
+  const [lastSetCommit, setLastSetCommit] = useState<{ setId: string; indices: number[] } | null>(null);
   const [panelRevision, setPanelRevision] = useState(0);
   const [manualStatus, setManualStatus] = useState<string | null>(null);
   // Escape cancels the active transient tool: drawing first, then manual
@@ -197,6 +214,13 @@ export function ModelPanel({
 
   /** The set the inspector is currently editing. */
   const activeSet = panelSets.find((s) => s.id === activeSetId) ?? panelSets[0] ?? null;
+  /**
+   * Effective rotation for manual set placement and its preview: the set
+   * azimuth plus the explicit group rotation, normalised to [0, 360).
+   */
+  const manualSetRotation = activeSet
+    ? (((panelRotationForAzimuth(activeSet.config.azimuthDeg) + setExtraRotation) % 360) + 360) % 360
+    : 0;
   const timezoneLabel = useMemo(() => {
     try {
       return formatTimezoneLabel(
@@ -264,6 +288,50 @@ export function ModelPanel({
     if (terraceRing.length < 3) return terraceRing;
     return offsetPolygonInward(terraceRing, parapetInsetM) ?? terraceRing;
   }, [terraceRing, parapetInsetM]);
+
+  /**
+   * Live re-validation of the active set's stored panels. A relevant change
+   * (spacing, tilt, an obstacle, a reshaped terrace) can invalidate a set that
+   * was placed by hand; nothing is moved automatically - the reason is
+   * reported and the user repositions or recalculates deliberately
+   * (AGENTS.md 37, 51).
+   */
+  const activeSetProblems = useMemo(() => {
+    if (!activeSet || activeSet.panels.length === 0) return null;
+    const invalid = findInvalidPanels(activeSet, {
+      terrace: usableRing,
+      obstacles,
+      parapetInsetM,
+    });
+    if (invalid.length === 0) return null;
+    return `${invalid.length} panel${invalid.length === 1 ? "" : "s"} of ${activeSet.name} no longer ${
+      invalid.length === 1 ? "fits" : "fit"
+    } the roof, an obstacle, or the parapet edge. Reposition or recalculate.`;
+  }, [activeSet, usableRing, obstacles, parapetInsetM]);
+
+  /**
+   * Roof-derived upper bounds for the set rows/columns.
+   *
+   * Guides the steppers so the user cannot request a group that obviously
+   * cannot fit. Approximate by design (usable-ring bounding box plus the
+   * configured spacing) - the polygon-level validator still has the final
+   * word on irregular roofs, and rejection always comes with a reason.
+   */
+  const setLimits = useMemo(() => {
+    if (!activeSet || usableRing.length < 3) return { maxRows: null, maxCols: null };
+    let minX = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    for (const ring of usableRing) {
+      if (ring.x < minX) minX = ring.x;
+      if (ring.x > maxX) maxX = ring.x;
+      if (ring.y < minY) minY = ring.y;
+      if (ring.y > maxY) maxY = ring.y;
+    }
+    const limits = maxSetGrid(activeSet.config, maxX - minX, maxY - minY);
+    return { maxRows: limits.maxRows, maxCols: limits.maxCols };
+  }, [activeSet, usableRing]);
 
   // Transparency (X-ray) mode: see the roof boundary against interior
   // structures. Mutates materials in place via rebuild â€” no scene reset.
@@ -577,6 +645,7 @@ export function ModelPanel({
    */
   const handleManualRoofClick = (x: number, y: number): boolean => {
     if (!manualPlaceActive || !activeSet) return false;
+    if (manualPlaceMode === "set") return handleManualSetClick(x, y);
     // Place the panel at the set's configured azimuth, matching the auto layout.
     const rotation = ((((-activeSet.config.azimuthDeg) % 360) + 360) % 360);
     const refusal = handleManualPlace(x, y, rotation);
@@ -587,6 +656,62 @@ export function ModelPanel({
         : "Cannot place here - the panel would cross the roof edge, an obstacle, or another panel.",
     );
     return refusal === null;
+  };
+
+  /**
+   * Manual set placement: commit a whole rows-by-columns block at one click.
+   * The block is validated atomically against the roof, obstacles and every
+   * set's panels; any single failure rejects the entire set with the precise
+   * reason, and nothing is committed. Committed indices are remembered so
+   * set-level undo can remove exactly this block later.
+   */
+  const handleManualSetPlace = (x: number, y: number, rotationDeg: number): string | null => {
+    if (!activeSet) return "not ready";
+    const peers = panelSets.flatMap((s) => {
+      const d = effectivePanelDims(s.config);
+      return s.panels.map((p) => ({
+        x: p.x, y: p.y, rotationDeg: p.rotationDeg,
+        width: d.widthM, length: d.lengthM,
+      }));
+    });
+    const result = validateSetPlacement(x, y, rotationDeg, activeSet.config, {
+      terrace: usableRing, obstacles, parapetInsetM, peers,
+    });
+    if (!result.valid) return result.error;
+    const startIndex = activeSet.panels.length;
+    const committed = result.panels.map((p, i) => ({ ...p, index: startIndex + i }));
+    setPanelSets((sets) => sets.map((s) => s.id !== activeSetId ? s : {
+      ...s,
+      mode: "manual",
+      userModified: true,
+      panels: [...s.panels, ...committed],
+    }));
+    setLastSetCommit({
+      setId: activeSetId,
+      indices: committed.map((p) => p.index),
+    });
+    return null;
+  };
+
+  /** Click entry for set mode: the cursor anchors the block centre. */
+  const handleManualSetClick = (x: number, y: number): boolean => {
+    if (!manualPlaceActive || !activeSet) return false;
+    const error = handleManualSetPlace(x, y, manualSetRotation);
+    setManualStatus(error);
+    return error === null;
+  };
+
+  /** Remove exactly the most recently committed manual set, if still present. */
+  const handleUndoLastSet = () => {
+    if (!lastSetCommit) return;
+    const { setId, indices } = lastSetCommit;
+    const doomed = new Set(indices);
+    setPanelSets((sets) => sets.map((s) => {
+      if (s.id !== setId) return s;
+      const kept = s.panels.filter((p) => !doomed.has(p.index));
+      return { ...s, panels: reindexSet(kept), userModified: true };
+    }));
+    setLastSetCommit(null);
   };
 
   /** Remove the last panel of the active set (undo for accidental placement). */
@@ -848,7 +973,12 @@ export function ModelPanel({
           onObstacleDragEnd={handleObstacleDragEnd}
           manualPanelPreview={
             manualPlaceActive && panelsEnabled && activeSet
-              ? { config: activeSet.config, insetM: parapetInsetM }
+              ? {
+                  config: activeSet.config,
+                  insetM: parapetInsetM,
+                  mode: manualPlaceMode,
+                  rotationDeg: manualSetRotation,
+                }
               : null
           }
           manualPlaceActive={manualPlaceActive}
@@ -1147,8 +1277,17 @@ export function ModelPanel({
             onUndoLast={handleUndoLastPanel}
             manualPlaceActive={manualPlaceActive}
             onToggleManualPlace={() => setManualPlaceActive((v) => !v)}
+            manualPlaceMode={manualPlaceMode}
+            onManualPlaceModeChange={setManualPlaceMode}
             manualPlacedCount={activeSet?.panels.length ?? 0}
             manualStatus={manualStatus}
+            setWarning={activeSetProblems}
+            maxSetRows={setLimits.maxRows}
+            maxSetCols={setLimits.maxCols}
+            setRotationDeg={manualSetRotation}
+            onRotateSet={(delta) => setSetExtraRotation((deg) => deg + delta)}
+            onUndoLastSet={handleUndoLastSet}
+            canUndoLastSet={lastSetCommit !== null}
             onClearManual={() =>
               setPanelSets((sets) => sets.map((s) => s.id !== activeSetId ? s : {
                 ...s, panels: [], userModified: true,

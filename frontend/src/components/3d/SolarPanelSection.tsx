@@ -10,7 +10,7 @@
  * viewport only renders the result (AGENTS.md §40, §72).
  */
 
-import { RefreshCw, AlertTriangle, Grid3x3, Plus, Copy, Trash2, Wand2 } from "lucide-react";
+import { RefreshCw, AlertTriangle, Grid3x3, Plus, Copy, Trash2, Wand2, RotateCw } from "lucide-react";
 import {
   MOUNTING_TYPES,
   PANEL_LEGS_MAX,
@@ -56,12 +56,36 @@ interface SolarPanelSectionProps {
   /** Whether manual placement mode is currently capturing roof clicks. */
   manualPlaceActive?: boolean;
   onToggleManualPlace?: () => void;
+  /**
+   * Manual-placement granularity: "single" places one panel per click (the
+   * original workflow), "set" places the whole configured rows-by-columns
+   * group per click. Independent of whether the mode is armed.
+   */
+  manualPlaceMode?: "single" | "set";
+  onManualPlaceModeChange?: (mode: "single" | "set") => void;
   /** How many panels the active set currently has (manual count readout). */
   manualPlacedCount?: number;
   /** Clear the active set's panels. */
   onClearManual?: () => void;
   /** Last manual-placement refusal, shown next to the placement controls. */
   manualStatus?: string | null;
+  /** Live "no longer fits" report for the active set (never auto-moved). */
+  setWarning?: string | null;
+  /**
+   * Roof-derived upper bounds for the set rows/columns. Null when the usable
+   * roof cannot be measured; 0 means this axis cannot hold a single panel.
+   * They clamp the input rather than silently rejecting a typed value, so the
+   * tooltip states the reason and the hint shows the ceiling.
+   */
+  maxSetRows?: number | null;
+  maxSetCols?: number | null;
+  /** Rotation (degrees CCW) of the set group being placed. */
+  setRotationDeg?: number;
+  /** Rotate the group by a quarter turn (+/- 90 degrees). */
+  onRotateSet?: (deltaDeg: number) => void;
+  /** Undo the most recently committed whole set. */
+  onUndoLastSet?: () => void;
+  canUndoLastSet?: boolean;
   panelCount: number;
   capacityKw: number;
   /** Zero-panel explanation, or an invalid-configuration error. */
@@ -148,6 +172,7 @@ function IntStepperField({
   min,
   max,
   onChange,
+  hint,
 }: {
   id: string;
   label: string;
@@ -156,6 +181,7 @@ function IntStepperField({
   min: number;
   max: number;
   onChange: (value: number) => void;
+  hint?: string | null;
 }) {
   return (
     <div className="field">
@@ -178,6 +204,7 @@ function IntStepperField({
           }}
         />
       </div>
+      {hint && <span className="panel-group__hint">{hint}</span>}
     </div>
   );
 }
@@ -199,9 +226,18 @@ export function SolarPanelSection({
   onUndoLast,
   manualPlaceActive = false,
   onToggleManualPlace,
+  manualPlaceMode = "single",
+  onManualPlaceModeChange,
   manualPlacedCount = 0,
   onClearManual,
   manualStatus = null,
+  setWarning = null,
+  maxSetRows = null,
+  maxSetCols = null,
+  setRotationDeg = 0,
+  onRotateSet,
+  onUndoLastSet,
+  canUndoLastSet = false,
   panelCount,
   capacityKw,
   warning,
@@ -214,6 +250,11 @@ export function SolarPanelSection({
   const setsList = sets ?? [];
   const activeId = activeSetId ?? setsList[0]?.id ?? "";
   const activeSet = setsList.find((s) => s.id === activeId) ?? setsList[0] ?? null;
+  // Set size, guarded for display: a cleared or fractional entry shows 0 until
+  // the domain validator reports it, never a bogus total.
+  const setRowsValue = Number.isInteger(config.setRows) && config.setRows > 0 ? config.setRows : 0;
+  const setColsValue = Number.isInteger(config.setCols) && config.setCols > 0 ? config.setCols : 0;
+  const setTotal = setRowsValue * setColsValue;
 
   return (
     <div className="obstacle-section">
@@ -342,23 +383,91 @@ export function SolarPanelSection({
         </button>
       </div>
 
-      {/* Manual placement mode. While on, a roof click places a panel at the
-          set's configured azimuth and is validated by the SAME rules the
-          auto-placement lattice uses. */}
+      {/* Manual placement mode. Two granularities share one roof-click stream:
+          "single" keeps the original one-panel-per-click behaviour, "set"
+          commits the whole configured rows-by-columns group in one click. Both
+          are validated by the SAME shared validator the auto-placement lattice
+          uses, so either way an invalid position places nothing. */}
       <div className="panel-set-actions">
         <button
           type="button"
           className={`btn${manualPlaceActive ? " btn--primary" : " btn--secondary"}`}
           onClick={onToggleManualPlace}
           aria-pressed={manualPlaceActive}
-          title="Click the roof to place panels one by one"
+          title={
+            manualPlaceMode === "set"
+              ? "Click the roof to place the whole panel set"
+              : "Click the roof to place one panel at a time"
+          }
         >
-          {manualPlaceActive ? "Manual placement: on" : "Manual placement"}
+          {manualPlaceActive
+            ? `Manual placement: on${manualPlaceMode === "set" ? " (set)" : ""}`
+            : "Manual placement"}
         </button>
+        {onManualPlaceModeChange && (
+          <div className="segmented" role="group" aria-label="Manual placement granularity">
+            <button
+              type="button"
+              className={`segmented__btn${manualPlaceMode === "single" ? " is-active" : ""}`}
+              aria-pressed={manualPlaceMode === "single"}
+              onClick={() => onManualPlaceModeChange("single")}
+              title="Each roof click adds one panel"
+            >
+              One panel
+            </button>
+            <button
+              type="button"
+              className={`segmented__btn${manualPlaceMode === "set" ? " is-active" : ""}`}
+              aria-pressed={manualPlaceMode === "set"}
+              onClick={() => onManualPlaceModeChange("set")}
+              title="Each roof click adds the whole configured panel set"
+            >
+              Whole set
+            </button>
+          </div>
+        )}
+        {onUndoLastSet && (
+          <button
+            type="button"
+            className="btn btn--secondary"
+            onClick={onUndoLastSet}
+            disabled={!canUndoLastSet}
+            title="Remove the most recently placed panel set"
+          >
+            Undo last set
+          </button>
+        )}
         {manualPlaceActive && (
           <span className="panel-group__hint">
-            Click the roof to add a panel · {manualPlacedCount} placed
+            {manualPlaceMode === "set"
+              ? `Move the pointer over the roof to preview ${config.setRows} x ${config.setCols}, then click to place the whole set - ${manualPlacedCount} in this set`
+              : `Click the roof to add a panel - ${manualPlacedCount} placed`}
           </span>
+        )}
+        {manualPlaceMode === "set" && onRotateSet && (
+          <div className="panel-set-actions">
+            <button
+              type="button"
+              className="btn btn--secondary"
+              onClick={() => onRotateSet(-90)}
+              title="Rotate the group 90 degrees anticlockwise"
+              aria-label="Rotate group left"
+            >
+              <RotateCw size={14} strokeWidth={2} aria-hidden="true" style={{ transform: "scaleX(-1)" }} /> 90&deg;
+            </button>
+            <span className="panel-group__hint" role="status">
+              Group rotation: {Math.round(((setRotationDeg % 360) + 360) % 360)}&deg;
+            </span>
+            <button
+              type="button"
+              className="btn btn--secondary"
+              onClick={() => onRotateSet(90)}
+              title="Rotate the group 90 degrees clockwise"
+              aria-label="Rotate group right"
+            >
+              <RotateCw size={14} strokeWidth={2} aria-hidden="true" /> 90&deg;
+            </button>
+          </div>
         )}
         {manualPlacedCount > 0 && (
           <button
@@ -371,13 +480,68 @@ export function SolarPanelSection({
           </button>
         )}
       </div>
-      {manualStatus && (
+
+      {/* Panels in set: the rows x columns size of the whole group, directly
+          under the One panel / Whole set switch so whole-set placement is
+          configured where it is used. The maxima come from the usable roof,
+          the panel orientation, dimensions and spacing, so an impossible
+          request is refused with a reason instead of being silently
+          clamped. */}
+      {(manualPlaceMode === "set" || manualPlaceActive) && (
+        <div className="panel-group">
+        <span className="panel-group__label" id="panel-set-label">Panels in set</span>
+        <div className="field-grid" role="group" aria-labelledby="panel-set-label">
+          <IntStepperField
+            id="panel-set-rows"
+            label="Rows"
+            title="Panel rows in the set: they stack along the panel length direction (roof north-south before rotation)"
+            value={config.setRows}
+            min={PANEL_SET_ROWS_MIN}
+            max={maxSetRows && maxSetRows > 0 ? Math.min(maxSetRows, PANEL_SET_ROWS_MAX) : PANEL_SET_ROWS_MAX}
+            hint={
+              maxSetRows === null
+                ? null
+                : maxSetRows === 0
+                  ? "No row fits the usable roof"
+                  : `Max ${maxSetRows} on this roof`
+            }
+            onChange={(value) => onConfigChange({ setRows: value })}
+          />
+          <IntStepperField
+            id="panel-set-cols"
+            label="Columns"
+            title="Panel columns in the set: they run along the panel width direction (roof east-west before rotation)"
+            value={config.setCols}
+            min={PANEL_SET_COLS_MIN}
+            max={maxSetCols && maxSetCols > 0 ? Math.min(maxSetCols, PANEL_SET_COLS_MAX) : PANEL_SET_COLS_MAX}
+            hint={
+              maxSetCols === null
+                ? null
+                : maxSetCols === 0
+                  ? "No column fits the usable roof"
+                  : `Max ${maxSetCols} on this roof`
+            }
+            onChange={(value) => onConfigChange({ setCols: value })}
+          />
+        </div>
+        <p className="sun-readout" role="status">
+          Panels in set: {setRowsValue} &times; {setColsValue} = {setTotal}
+        </p>
+        {(maxSetRows !== null && config.setRows > maxSetRows) ||
+        (maxSetCols !== null && config.setCols > maxSetCols) ? (
+          <p className="panel-group__hint" role="note">
+            Larger than this roof can hold ({maxSetRows ?? "?"} rows / {maxSetCols ?? "?"} columns).
+            The preview stays red and placement is refused until the set fits.
+          </p>
+        ) : null}
+      </div>
+      )}
+      {(manualStatus || setWarning) && (
         <p className="obstacle-warning" role="alert">
           <AlertTriangle size={14} strokeWidth={1.75} aria-hidden="true" />
-          <span>{manualStatus}</span>
+          <span>{manualStatus ?? setWarning}</span>
         </p>
       )}
-
       {/* Panel rating — representative module sizes, configurable */}
       <div className="panel-group">
         <span className="panel-group__label" id="panel-rating-label">
@@ -529,33 +693,13 @@ export function SolarPanelSection({
         restores the catalogue size.
       </p>
 
-      {/* Mounting frame: physical frame parameters for this set. Panel Set
-          rows x columns defines the rectangular group placed as one unit;
-          row/column spacing refine Panel spacing per axis (unset follows it);
-          Structure legs sets the rendered support grid, visual only. */}
+      {/* Mounting frame: spacing and support parameters for this set. The
+          set SIZE (rows x columns) is edited in the placement block above,
+          next to One panel / Whole set, so whole-set placement is configured
+          where it is used. Structure legs sets the rendered support grid,
+          visual only. */}
       <div className="panel-group">
         <span className="panel-group__label" id="panel-frame-label">Frame</span>
-        <span className="panel-group__label" id="panel-set-label">Panel Set</span>
-        <div className="field-grid" role="group" aria-labelledby="panel-set-label">
-          <IntStepperField
-            id="panel-set-rows"
-            label="Rows"
-            title="Panels per set along the row direction"
-            value={config.setRows}
-            min={PANEL_SET_ROWS_MIN}
-            max={PANEL_SET_ROWS_MAX}
-            onChange={(value) => onConfigChange({ setRows: value })}
-          />
-          <IntStepperField
-            id="panel-set-cols"
-            label="Columns"
-            title="Panels per set along the column direction"
-            value={config.setCols}
-            min={PANEL_SET_COLS_MIN}
-            max={PANEL_SET_COLS_MAX}
-            onChange={(value) => onConfigChange({ setCols: value })}
-          />
-        </div>
         <div className="field-grid">
           <SliderNumberField
             id="panel-row-spacing"
@@ -585,7 +729,7 @@ export function SolarPanelSection({
           <IntStepperField
             id="panel-leg-rows"
             label="Rows"
-            title="Support legs along the row (width) direction"
+            title="Legs along the panel length axis (panel rows): each one carries the row of panels above it"
             value={config.legRows}
             min={PANEL_LEGS_MIN}
             max={PANEL_LEGS_MAX}
@@ -594,7 +738,7 @@ export function SolarPanelSection({
           <IntStepperField
             id="panel-leg-cols"
             label="Columns"
-            title="Support legs along the column (length) direction"
+            title="Legs along the panel width axis (panel columns): each one carries the column of panels beside it"
             value={config.legCols}
             min={PANEL_LEGS_MIN}
             max={PANEL_LEGS_MAX}

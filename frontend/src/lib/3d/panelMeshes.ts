@@ -31,8 +31,44 @@ const GRID_COLOR = 0x1d3050;
 /** Mounting rails / legs / wedges. */
 const SUPPORT_COLOR = 0x8f97a3;
 
+/**
+ * Part colours, exported so tests can tell which merged vertices belong to the
+ * plate, the glass or the supports (each part of the unit geometry is painted
+ * one flat colour, so colour is the only discriminator after the merge).
+ */
+export const PANEL_PART_COLORS = {
+  /** Aluminium frame rim (its bottom face sits on the panel underside). */
+  frame: FRAME_COLOR,
+  /** Photovoltaic glass (recessed inside the frame). */
+  glass: GLASS_COLOR,
+  /** Cell-grid lines painted on the glass. */
+  grid: GRID_COLOR,
+  /** Legs, rails and wedges. */
+  support: SUPPORT_COLOR,
+} as const;
+
+/**
+ * Roof stand-off, exported so tests can assert the supports actually touch
+ * the roof plane (0 in the unit frame).
+ */
+export const PANEL_ROOF_STANDOFF_M = 0.02;
 /** Small stand-off keeping supports off the roof plane (avoids z-fighting). */
-const ROOF_STANDOFF_M = 0.02;
+const ROOF_STANDOFF_M = PANEL_ROOF_STANDOFF_M;
+/**
+ * How far a support is pushed INTO the panel (or roof) it carries.
+ *
+ * A support whose top face is exactly coplanar with the panel underside
+ * z-fights with it at close zoom, and any rounding error turns into a visible
+ * gap. A 1.5 mm penetration is invisible at working distances, removes the
+ * flicker, and guarantees the assembly reads as connected from every angle.
+ */
+const SUPPORT_OVERLAP_M = 0.0015;
+/**
+ * Shortest support that is still drawable. A degenerate mount (the panel
+ * resting almost on the roof) keeps a stub rather than inverting or leaving a
+ * floating 4 cm post.
+ */
+const MIN_SUPPORT_LENGTH_M = 0.004;
 /** Default mounting height when a caller does not specify one. Matches
  * `DEFAULT_PANEL_CONFIG.mountHeightM` so explicit and implicit paths agree. */
 const DEFAULT_MOUNT_HEIGHT_M = 0.4;
@@ -117,12 +153,21 @@ function wedge(widthM: number, lengthM: number, backHeightM: number): THREE.Buff
 
 /**
  * Merged unit geometry: photovoltaic panel plus its mounting arrangement.
+ *
+ * Coordinate frame (one panel, no instance transform): the panel is built
+ * flat in its OWN frame (+X = width, +Y = length, centred on the origin),
+ * rotated about X by `-tilt` so the +Y edge dips, then lifted so its centre is
+ * at `centerH`. Supports are vertical world-frame prisms: each one is placed
+ * at the world position of the panel point it carries and sized to reach that
+ * point's underside, so the assembly stays connected at every tilt and
+ * mounting height (see the flat branch for the mapping).
+ *
  * `mountHeightM` is the support height above the roof plane - it lifts the
  * whole assembly and stretches every leg/support accordingly, so the rendered
  * geometry matches the configured value rather than a fixed stand-off.
  * `legRows`/`legCols` select the visual support pattern for flat mounting
- * (legs spread along the row/column directions); other mounting types
- * ignore them.
+ * (legs spread along the row/length and column/width directions, matching
+ * the rows x columns lattice); other mounting types ignore them.
  * Returned geometry must be disposed by the caller when the layout changes.
  */
 export function createPanelUnitGeometry(
@@ -176,16 +221,21 @@ export function createPanelUnitGeometry(
 
   // --- Mounting arrangement (world-vertical frame, z = 0 is the roof) ---
   const sin = Math.sin(tilt);
+  const cos = Math.cos(tilt);
   const lowEdgeCenter = t / 2 + (l / 2) * sin; // centre height with low edge at roof
 
   if (mounting === "flat") {
     // Raised on thin legs: an open, clearly elevated arrangement. The
-    // leg length and the panel centre both derive from mountHeight, so
-    // changing the control raises the array and stretches the supports.
+    // plate height and every leg length derive from `mountHeight` through the
+    // SAME underside plane, so changing the control raises the array and
+    // stretches the supports together - the panel and its legs can never
+    // drift apart.
     const centerH = ROOF_STANDOFF_M + mountHeight + (l / 2) * sin;
     // Legs spread evenly across the footprint: legRows positions along the
-    // row (width) direction, legCols along the column (length) direction.
-    // 2 x 2 lands exactly on the four corners; a count of 1 centres.
+    // panel LENGTH axis (the set's row direction, +Y) and legCols along the
+    // panel WIDTH axis (the set's column direction, +X) - the same axes the
+    // rows x columns lattice uses. 2 x 2 lands exactly on the four corners;
+    // a count of 1 centres.
     const spanX = (n: number): number[] => {
       const count = Math.max(1, Math.floor(n));
       if (count <= 1) return [0];
@@ -196,15 +246,27 @@ export function createPanelUnitGeometry(
       if (count <= 1) return [0];
       return Array.from({ length: count }, (_, i) => -(l / 2 - 0.18) + (i * (l - 0.36)) / (count - 1));
     };
-    const legXs = spanX(legRows);
-    const legYs = spanY(legCols);
+    const legXs = spanX(legCols);
+    const legYs = spanY(legRows);
     for (const sx of legXs) {
       for (const sy of legYs) {
-        // Each leg runs from the roof up to the panel underside at its own
-        // position, so a tilted array keeps standing on every support point.
-        const under = centerH - sy * sin - t / 2 - ROOF_STANDOFF_M;
-        const h = Math.max(0.04, under);
-        parts.push(box(0.05, 0.05, h, sx, sy, ROOF_STANDOFF_M + h / 2, SUPPORT_COLOR));
+        // The support grid is laid out in the panel's OWN frame, and the tilt
+        // rotates that frame about X, so a support at local (sx, sy) stands
+        // at world (sx, cos*sy - sin*t/2) - directly under the point of the
+        // panel it carries. Placing it at the raw local y instead throws the
+        // outer legs outside the (foreshortened) tilted footprint, where they
+        // hold nothing and read as detached struts: at 15 deg the panel still
+        // covers them, at 45 deg they stand ~16 cm beyond its edge.
+        const legY = cos * sy - sin * (t / 2);
+        // Height of the panel underside above that support point. The plate is
+        // a plane, so every leg is a different length; the overlap keeps the
+        // joint welded (no gap, and no coplanar z-fighting where they meet).
+        const underside = centerH - sin * sy - cos * (t / 2);
+        const height = Math.max(
+          MIN_SUPPORT_LENGTH_M,
+          underside + SUPPORT_OVERLAP_M - ROOF_STANDOFF_M,
+        );
+        parts.push(box(0.05, 0.05, height, sx, legY, ROOF_STANDOFF_M + height / 2, SUPPORT_COLOR));
       }
     }
     // Lift the panel assembly to its elevated centre height.
@@ -213,19 +275,31 @@ export function createPanelUnitGeometry(
   } else if (mounting === "tilted") {
     // Lying flush on the roof plane, held by one rail under the high edge.
     const centerH = ROOF_STANDOFF_M + mountHeight + lowEdgeCenter;
-    const backHeight = l * sin; // rail under the −Y (high) edge
-    if (backHeight > 0.02) {
-      parts.push(box(w, 0.07, backHeight, 0, -(l / 2 - 0.035), ROOF_STANDOFF_M + mountHeight + backHeight / 2, SUPPORT_COLOR));
+    // The rail faces are vertical, so its top must reach the HIGHEST
+    // underside point over the rail's own footprint: anything less leaves a
+    // daylight gap under the raised edge of the panel.
+    const railY = -(l / 2 - 0.035);
+    const railTop = centerH - sin * (railY - 0.035) - cos * (t / 2) + SUPPORT_OVERLAP_M;
+    const railWorldY = cos * railY - sin * (t / 2);
+    const railBase = ROOF_STANDOFF_M + mountHeight;
+    const railHeight = railTop - railBase;
+    if (railHeight > 0.02) {
+      parts.push(box(w, 0.07, railHeight, 0, railWorldY, railBase + railHeight / 2, SUPPORT_COLOR));
     }
     const lift = new THREE.Matrix4().makeTranslation(0, 0, centerH);
     for (const part of panelParts) part.applyMatrix4(lift);
   } else {
-    // Shed: single-slope solid wedge under the panel.
+    // Shed: single-slope solid wedge under the panel. The wedge is a prism,
+    // so its height comes from the underside at its own back edge and its
+    // hypotenuse then runs parallel to the plate.
     const centerH = ROOF_STANDOFF_M + mountHeight + lowEdgeCenter;
-    const backHeight = l * sin + t / 2;
+    const wedgeBase = ROOF_STANDOFF_M + mountHeight;
+    const wedgeLength = l * 0.98;
+    const wedgeTop = centerH - sin * (-wedgeLength / 2) - cos * (t / 2) + SUPPORT_OVERLAP_M;
+    const backHeight = wedgeTop - wedgeBase;
     if (backHeight > 0.03) {
-      const support = wedge(w, l * 0.98, backHeight - 0.01);
-      support.translate(0, 0, ROOF_STANDOFF_M + mountHeight);
+      const support = wedge(w, wedgeLength, backHeight);
+      support.translate(0, 0, wedgeBase);
       parts.push(support);
     }
     const lift = new THREE.Matrix4().makeTranslation(0, 0, centerH);

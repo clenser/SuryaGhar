@@ -82,6 +82,82 @@ describe("SolarPanelSection", () => {
     expect(alert.textContent).toMatch(/Roof is too small/);
     expect(screen.getByRole("output").textContent).toMatch(/0 × 550 W|0.00 kWp/);
   });
+
+  it("switches manual placement between one panel and the whole set", () => {
+    const props = baseProps({
+      manualPlaceActive: true,
+      manualPlaceMode: "single",
+      onManualPlaceModeChange: vi.fn(),
+    });
+    render(<SolarPanelSection {...props} />);
+    expect(screen.getByRole("button", { name: /Manual placement: on/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Whole set" }));
+    expect(props.onManualPlaceModeChange).toHaveBeenCalledWith("set");
+    fireEvent.click(screen.getByRole("button", { name: "One panel" }));
+    expect(props.onManualPlaceModeChange).toHaveBeenCalledWith("single");
+  });
+
+  it("rotates the group in quarter turns and shows the angle", () => {
+    const props = baseProps({
+      manualPlaceActive: true,
+      manualPlaceMode: "set",
+      setRotationDeg: 90,
+      onRotateSet: vi.fn(),
+    });
+    render(<SolarPanelSection {...props} />);
+    expect(screen.getByText(/Group rotation: 90/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Rotate group right/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Rotate group left/ }));
+    expect(props.onRotateSet).toHaveBeenNthCalledWith(1, 90);
+    expect(props.onRotateSet).toHaveBeenNthCalledWith(2, -90);
+  });
+
+  it("undoes the last whole set only when one was committed", () => {
+    const props = baseProps({ onUndoLastSet: vi.fn(), canUndoLastSet: true });
+    render(<SolarPanelSection {...props} />);
+    const button = screen.getByRole("button", { name: "Undo last set" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+    expect(props.onUndoLastSet).toHaveBeenCalledTimes(1);
+  });
+
+  it("clamps the set rows/columns to what the usable roof can hold", () => {
+    const props = baseProps({ manualPlaceMode: "set", maxSetRows: 3, maxSetCols: 7 });
+    render(<SolarPanelSection {...props} />);
+    const rows = document.getElementById("panel-set-rows") as HTMLInputElement;
+    const cols = document.getElementById("panel-set-cols") as HTMLInputElement;
+    expect(rows).not.toBeNull();
+    expect(cols).not.toBeNull();
+    expect(rows).toHaveAttribute("max", "3");
+    expect(cols).toHaveAttribute("max", "7");
+    expect(screen.getByText("Max 3 on this roof")).toBeTruthy();
+    expect(screen.getByText("Max 7 on this roof")).toBeTruthy();
+  });
+
+  it("hides the Panels in set section in One panel mode and shows it in Whole set mode", () => {
+    const single = baseProps({ manualPlaceMode: "single", maxSetRows: 3, maxSetCols: 7 });
+    const { unmount } = render(<SolarPanelSection {...single} />);
+    expect(document.getElementById("panel-set-rows")).toBeNull();
+    expect(document.getElementById("panel-set-cols")).toBeNull();
+    expect(document.getElementById("panel-set-label")).toBeNull();
+    unmount();
+    // Same configured values survive the mode switch: the section only
+    // unmounts, the config lives in the parent.
+    const set = baseProps({ manualPlaceMode: "set", maxSetRows: 3, maxSetCols: 7 });
+    render(<SolarPanelSection {...set} />);
+    expect((document.getElementById("panel-set-rows") as HTMLInputElement).value).toBe(
+      String(set.config.setRows),
+    );
+    expect((document.getElementById("panel-set-cols") as HTMLInputElement).value).toBe(
+      String(set.config.setCols),
+    );
+    expect(screen.getByText(/Panels in set:/)).toBeTruthy();
+  });
+
+  it("reports a set that no longer fits instead of moving it", () => {
+    render(<SolarPanelSection {...baseProps({ setWarning: "1 panel of Set A no longer fits" })} />);
+    expect(screen.getByRole("alert").textContent).toMatch(/no longer fits/);
+  });
 });
 
 
