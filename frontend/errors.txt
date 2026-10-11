@@ -1,0 +1,16 @@
+src/components/analysis/ModelPanel.tsx(1691,15): error TS17002: Expected corresponding JSX closing tag for 'div'.
+src/components/analysis/ModelPanel.tsx(1926,30): error TS1127: Invalid character.
+src/components/analysis/ModelPanel.tsx(1926,117): error TS1381: Unexpected token. Did you mean `{'}'}` or `&rbrace;`?
+src/components/analysis/ModelPanel.tsx(1929,17): error TS1382: Unexpected token. Did you mean `{'>'}` or `&gt;`?
+src/components/analysis/ModelPanel.tsx(1929,25): error TS17002: Expected corresponding JSX closing tag for 'div'.
+src/components/analysis/ModelPanel.tsx(1932,30): error TS1127: Invalid character.
+src/components/analysis/ModelPanel.tsx(1932,118): error TS1381: Unexpected token. Did you mean `{'}'}` or `&rbrace;`?
+src/components/analysis/ModelPanel.tsx(1935,17): error TS1382: Unexpected token. Did you mean `{'>'}` or `&gt;`?
+src/components/analysis/ModelPanel.tsx(1935,26): error TS17002: Expected corresponding JSX closing tag for 'div'.
+src/components/analysis/ModelPanel.tsx(1938,30): error TS1127: Invalid character.
+src/components/analysis/ModelPanel.tsx(1938,117): error TS1381: Unexpected token. Did you mean `{'}'}` or `&rbrace;`?
+src/components/analysis/ModelPanel.tsx(1941,17): error TS1382: Unexpected token. Did you mean `{'>'}` or `&gt;`?
+src/components/analysis/ModelPanel.tsx(1941,25): error TS17002: Expected corresponding JSX closing tag for 'CollapsibleSection'.
+src/components/analysis/ModelPanel.tsx(1944,13): error TS17002: Expected corresponding JSX closing tag for 'div'.
+src/components/analysis/ModelPanel.tsx(1979,5): error TS1005: ')' expected.
+src/components/analysis/ModelPanel.tsx(1980,3): error TS1109: Expression expected.
