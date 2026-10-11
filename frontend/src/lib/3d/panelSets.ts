@@ -67,12 +67,33 @@ export interface PlacementValidation {
 }
 
 export interface PlacementContext {
-  /** Terrace ring in local metres (roof boundary). */
+  /**
+   * Roof boundary ring in local metres. This is the RAW terrace
+   * ring — the OUTER edge of the parapet wall (createParapetMeshes
+   * builds the wall on this ring and insets the inner face by the
+   * wall thickness). Both the setback containment rule and the
+   * parapet clearance rule measure from this same ring, so the two
+   * rules can never contradict or double-count each other.
+   */
   terrace: Point2[];
   /** Obstacles on the roof. */
   obstacles: Obstacle[];
-  /** Required clearance inside the parapet (parapet + clearance), metres. */
+  /**
+   * Required inset from the roof boundary, metres: parapet wall
+   * thickness + the configured panel-to-parapet clearance. Every
+   * panel corner must keep at least this distance from the terrace
+   * ring, which is exactly "clearance clear of the parapet inner
+   * face". 0 disables the rule.
+   */
   parapetInsetM: number;
+  /**
+   * The user-configured clear gap from the parapet inner face, in
+   * metres. Carried separately so a rejection can name the value
+   * the user actually configured (the inset above also contains the
+   * wall thickness). Optional: callers that have no separate
+   * setting fall back to `parapetInsetM` in the message.
+   */
+  parapetClearanceM?: number;
   /** Other panels already placed — for panel-to-panel collision. */
   peers: PlacedPanelPeer[];
   /** Clearance from obstacle footprints, metres. */
@@ -134,6 +155,9 @@ export function validatePanelPlacement(
   }
 
   // Parapet inner edge: the footprint must keep the required clearance.
+  // `parapetInsetM` is measured from the RAW roof boundary, so this
+  // enforces "parapetClearanceM clear of the parapet inner face"
+  // (the inner face sits wall-thickness inside the boundary).
   if (context.parapetInsetM > 0) {
     let closest = Number.POSITIVE_INFINITY;
     for (const c of rectangleCorners(x, y, dims.widthM, dims.lengthM, rotationDeg)) {
@@ -142,9 +166,16 @@ export function validatePanelPlacement(
       }
     }
     if (closest < context.parapetInsetM) {
+      // Name the constraint that actually fired, with the value the
+      // user configured (not the wall-adjusted inset).
+      const gap = context.parapetClearanceM ?? context.parapetInsetM;
+      const label =
+        context.parapetClearanceM !== undefined
+          ? "clear of the parapet inner face"
+          : "clear of the parapet edge";
       return {
         valid: false,
-        error: `Panel must stay at least ${context.parapetInsetM.toFixed(1)} m clear of the parapet edge`,
+        error: `Panel must stay at least ${gap.toFixed(1)} m ${label}`,
       };
     }
   }

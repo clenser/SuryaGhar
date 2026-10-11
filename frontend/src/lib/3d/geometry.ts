@@ -281,11 +281,17 @@ export const MAX_PARAPET_HEIGHT_M = 3.0;
 /** Default parapet wall thickness (m). */
 export const DEFAULT_PARAPET_THICKNESS_M = 0.3;
 /**
- * Required clear zone inside the parapet inner edge (m). Rooftop objects
- * must keep every footprint corner at least thickness + clearance from the
- * outer boundary - validated explicitly, never silently clamped.
+ * DEFAULT required clear gap between the parapet's INNER face and a
+ * solar panel (m). This is the default of the user-configurable
+ * "Parapet clearance" field in Stage 2 (3D Building Model): the wall
+ * thickness above stays separate, and the panel boundary from the
+ * roof edge is thickness + clearance.
  */
-export const PARAPET_CLEARANCE_M = 0.3;
+export const PARAPET_CLEARANCE_M = 0.2;
+/** Lowest panel-to-parapet clearance the UI accepts (m). 0 lets a panel sit flush against the inner face. */
+export const MIN_PARAPET_CLEARANCE_M = 0;
+/** Highest panel-to-parapet clearance the UI accepts (m). */
+export const MAX_PARAPET_CLEARANCE_M = 1;
 
 /**
  * Validate a user-entered parapet height.

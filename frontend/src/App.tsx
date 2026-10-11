@@ -55,6 +55,8 @@ export default function App() {
    * rendering a parapet instead of breaking.
    */
   const [parapetHeight, setParapetHeight] = useState<number | null>(null);
+  /** Configurable panel-to-parapet clear gap (m); null = default. */
+  const [parapetClearance, setParapetClearance] = useState<number | null>(null);
   /**
    * 3D design workspace (correction milestone): when true, the side panel
    * becomes the primary surface and the satellite map docks as a context
@@ -363,6 +365,8 @@ export default function App() {
                 onSetHeight={handleModelHeight}
                 parapetHeight={parapetHeight}
                 onSetParapetHeight={setParapetHeight}
+                parapetClearance={parapetClearance}
+                onSetParapetClearance={setParapetClearance}
                 onContinue={() => setStage("validate")}
                 backendReady={backendReady}
                 siteCountry={place?.country}

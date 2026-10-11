@@ -23,7 +23,9 @@ import { createBuildingModel } from "../../lib/3d/building";
 import {
   DEFAULT_PARAPET_HEIGHT_M,
   DEFAULT_PARAPET_THICKNESS_M,
+  MAX_PARAPET_CLEARANCE_M,
   MAX_PARAPET_HEIGHT_M,
+  MIN_PARAPET_CLEARANCE_M,
   MIN_PARAPET_HEIGHT_M,
   PARAPET_CLEARANCE_M,
   offsetPolygonInward,
@@ -101,6 +103,13 @@ interface ModelPanelProps {
   /** Parapet height above the roof (m); null falls back to the default. */
   parapetHeight?: number | null;
   onSetParapetHeight?: (height: number) => void;
+  /**
+   * Required clear gap between the parapet inner face and a solar
+   * panel (m); null falls back to the default. Separate from the
+   * parapet wall thickness and from the panel edge setback.
+   */
+  parapetClearance?: number | null;
+  onSetParapetClearance?: (clearance: number) => void;
   /** 3D design workspace visible (panel is the primary surface) */
   designMode?: boolean;
   /** Deliberate transition into the design workspace (no auto-entry) */
@@ -123,6 +132,8 @@ export function ModelPanel({
   onRemoveObstacle,
   parapetHeight = null,
   onSetParapetHeight,
+  parapetClearance = null,
+  onSetParapetClearance,
   designMode = false,
   onEnterDesign,
   onExitDesign,
@@ -259,19 +270,38 @@ export function ModelPanel({
     [model],
   );
 
-  // Parapet: resolved height (explicit value or safe default), local draft
-  // for the input, and the usability inset it imposes on the roof. The roof
-  // elevation itself never moves: parapet adds upward from the roof surface.
+  // Parapet: resolved height (explicit value or safe default), local
+  // draft for the input, and the usability inset it imposes on the roof.
+  // The roof elevation itself never moves: parapet adds upward from the roof surface.
   const parapetHeightM = parapetHeight ?? DEFAULT_PARAPET_HEIGHT_M;
   const [parapetDraft, setParapetDraft] = useState<string | null>(null);
   const parapetError = useMemo(() => {
     if (parapetDraft === null) return null;
     return validateParapetHeight(Number(parapetDraft));
   }, [parapetDraft]);
-  // Panel edge setback: clearance from the roof edge kept by panel placement.
-  // Edits the active set's shared configuration (the same value the panel
-  // section, preview, commit and auto-place paths all read), so there is one
-  // source of truth and stored manual panels are never moved by the edit.
+  const [parapetClearanceDraft, setParapetClearanceDraft] = useState<string | null>(null);
+  const parapetClearanceError = useMemo(() => {
+    if (parapetClearanceDraft === null) return null;
+    const parsed = Number(parapetClearanceDraft);
+    if (!Number.isFinite(parsed)) return "Parapet clearance must be a valid number";
+    if (parsed < MIN_PARAPET_CLEARANCE_M || parsed > MAX_PARAPET_CLEARANCE_M) {
+      return `Parapet clearance must be between ${MIN_PARAPET_CLEARANCE_M} and ${MAX_PARAPET_CLEARANCE_M} m`;
+    }
+    return null;
+  }, [parapetClearanceDraft]);
+  /**
+   * Resolved panel-to-parapet clearance (m): the user-configured
+   * gap kept between the parapet's INNER face and a panel. The
+   * wall thickness is a separate physical fact and never folded
+   * into this value.
+   */
+  const parapetClearanceM = parapetClearance ?? PARAPET_CLEARANCE_M;
+  /**
+   * Panel edge setback: clearance from the roof edge kept by panel placement.
+   * Edits the active set's shared configuration (the same value the panel
+   * section, preview, commit and auto-place paths all read), so there is one
+   * source of truth and stored manual panels are never moved by the edit.
+   */
   const [setbackDraft, setSetbackDraft] = useState<string | null>(null);
   const setbackError = useMemo(() => {
     if (setbackDraft === null) return null;
@@ -283,22 +313,28 @@ export function ModelPanel({
     return null;
   }, [setbackDraft]);
   /**
-   * Maintenance clearance from the roof edge (parapet wall + service gap).
-   * Used by PANEL placement and the shading model, where standing clear of
-   * the wall is a real requirement.
+   * Total panel boundary from the RAW roof edge: the physical
+   * parapet wall (its inner face sits `DEFAULT_PARAPET_THICKNESS_M`
+   * inside the terrace ring — createParapetMeshes builds the wall
+   * on that ring) plus the configured clear gap beyond it. Panel
+   * placement validates against the RAW terrace ring with this
+   * inset, so a panel corner exactly `parapetClearanceM` clear of
+   * the inner face is accepted — the wall and the gap never
+   * double-count.
    */
-  const parapetInsetM = DEFAULT_PARAPET_THICKNESS_M + PARAPET_CLEARANCE_M;
+  const parapetInsetM = DEFAULT_PARAPET_THICKNESS_M + parapetClearanceM;
 
   /**
    * Contact boundary for OBSTACLES: the inner face of the parapet wall.
-   * Obstacles may sit flush against this (fused to the parapet); the stricter
-   * `parapetInsetM` above stays reserved for panels, so loosening obstacle
-   * contact does not silently let panels sit against the wall.
+   * Obstacles may sit flush against this (fused to the parapet); the
+   * panel clearance above stays reserved for panels, so loosening the
+   * panel gap does not silently let obstacles eat into the wall.
    */
   const parapetContactM = DEFAULT_PARAPET_THICKNESS_M;
 
-  // Inner usable roof ring for panel placement: footprint inset by the
-  // parapet boundary. Falls back to the raw terrace when the offset
+  // Inner usable roof ring for the auto-placement lattice and the
+  // roof-derived set limits: the raw footprint inset by wall + panel
+  // clearance. Falls back to the raw terrace when the offset
   // degenerates (narrow sections), so placement never crashes.
   const usableRing = useMemo(() => {
     if (terraceRing.length < 3) return terraceRing;
@@ -307,23 +343,29 @@ export function ModelPanel({
 
   /**
    * Live re-validation of the active set's stored panels. A relevant change
-   * (spacing, tilt, an obstacle, a reshaped terrace) can invalidate a set that
-   * was placed by hand; nothing is moved automatically - the reason is
-   * reported and the user repositions or recalculates deliberately
-   * (AGENTS.md 37, 51).
+   * (spacing, tilt, an obstacle, a reshaped terrace, the parapet
+   * clearance) can invalidate a set that was placed by hand; nothing is
+   * moved automatically - the reason is reported and the user repositions
+   * or recalculates deliberately (AGENTS.md 37, 51).
+   *
+   * Validation runs against the RAW terrace ring: the setback rule
+   * measures from the roof edge and the parapet rule measures the
+   * configured gap from the parapet inner face — two independent
+   * rules over the same boundary.
    */
   const activeSetProblems = useMemo(() => {
     if (!activeSet || activeSet.panels.length === 0) return null;
     const invalid = findInvalidPanels(activeSet, {
-      terrace: usableRing,
+      terrace: terraceRing,
       obstacles,
       parapetInsetM,
+      parapetClearanceM,
     });
     if (invalid.length === 0) return null;
     return `${invalid.length} panel${invalid.length === 1 ? "" : "s"} of ${activeSet.name} no longer ${
       invalid.length === 1 ? "fits" : "fit"
-    } the roof, an obstacle, or the parapet edge. Reposition or recalculate.`;
-  }, [activeSet, usableRing, obstacles, parapetInsetM]);
+    } the roof, an obstacle, or the parapet clearance. Reposition or recalculate.`;
+  }, [activeSet, terraceRing, obstacles, parapetInsetM, parapetClearanceM]);
 
   /**
    * Roof-derived upper bounds for the set rows/columns.
@@ -453,8 +495,8 @@ export function ModelPanel({
     const weather = clearSkyFallbackWeather(
       hourlySun.map((s) => ({ hour: s.hour, solarAzimuthDeg: s.azimuthDeg, solarElevationDeg: s.elevationDeg })),
     );
-    return computePanelEnergy(simulated, weather, obstacles, parapetInsetM, usableRing);
-  }, [panelsEnabled, activeSet, allPanels.panels, hourlySun, obstacles, parapetInsetM, usableRing]);
+    return computePanelEnergy(simulated, weather, obstacles, DEFAULT_PARAPET_THICKNESS_M, terraceRing);
+  }, [panelsEnabled, activeSet, allPanels.panels, hourlySun, obstacles, terraceRing]);
 
   // Mounting is Flat Roof only for now: any non-flat patch (stale state,
   // future callers) is normalised back to flat; the engine keeps supporting
@@ -603,14 +645,15 @@ export function ModelPanel({
       return;
     }
     const invalid = findInvalidPanels(activeSet, {
-      terrace: usableRing,
+      terrace: terraceRing,
       obstacles,
       parapetInsetM,
+      parapetClearanceM,
     });
     setPlaceWarning(
       invalid.length === 0
         ? null
-        : `${invalid.length} panel${invalid.length === 1 ? "" : "s"} in ${activeSet.name} no longer ${invalid.length === 1 ? "fits" : "fit"} the roof, an obstacle, or the parapet edge.`,
+        : `${invalid.length} panel${invalid.length === 1 ? "" : "s"} in ${activeSet.name} no longer ${invalid.length === 1 ? "fits" : "fit"} the roof, an obstacle, or the parapet clearance.`,
     );
   };
 
@@ -648,9 +691,9 @@ export function ModelPanel({
       }));
     });
     const result = validatePanelPlacement(x, y, rotationDeg, activeSet.config, {
-      terrace: usableRing, obstacles, parapetInsetM, peers,
+      terrace: terraceRing, obstacles, parapetInsetM, parapetClearanceM, peers,
     });
-    if (!result.valid) return "blocked";
+    if (!result.valid) return result.error ?? "blocked";
     setPanelSets((sets) => sets.map((s) => s.id !== activeSetId ? s : {
       ...s,
       mode: "manual",
@@ -671,12 +714,10 @@ export function ModelPanel({
     // Place the panel at the set's configured azimuth, matching the auto layout.
     const rotation = ((((-activeSet.config.azimuthDeg) % 360) + 360) % 360);
     const refusal = handleManualPlace(x, y, rotation);
-    // An invalid preview refuses the commit; say why instead of staying silent.
-    setManualStatus(
-      refusal === null
-        ? null
-        : "Cannot place here - the panel would cross the roof edge, an obstacle, or another panel.",
-    );
+    // An invalid preview refuses the commit; the validator's own
+    // message names the constraint that actually fired and its
+    // configured value, so the refusal is never generic.
+    setManualStatus(refusal);
     return refusal === null;
   };
 
@@ -697,7 +738,7 @@ export function ModelPanel({
       }));
     });
     const result = validateSetPlacement(x, y, rotationDeg, activeSet.config, {
-      terrace: usableRing, obstacles, parapetInsetM, peers,
+      terrace: terraceRing, obstacles, parapetInsetM, parapetClearanceM, peers,
     });
     if (!result.valid) return result.error;
     const startIndex = activeSet.panels.length;
@@ -1159,6 +1200,46 @@ export function ModelPanel({
             {setbackError && (
               <span id="setback-error" className="stage-card__warning" role="alert">
                 {setbackError}
+              </span>
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt>
+            <label htmlFor="parapet-clearance">Parapet clearance</label>
+          </dt>
+          <dd>
+            <span className="height-inline">
+              <input
+                id="parapet-clearance"
+                type="number"
+                step="0.1"
+                min={MIN_PARAPET_CLEARANCE_M}
+                max={MAX_PARAPET_CLEARANCE_M}
+                value={parapetClearanceDraft ?? parapetClearanceM.toFixed(1)}
+                onChange={(event) => {
+                  const raw = event.target.value;
+                  setParapetClearanceDraft(raw);
+                  const parsed = Number(raw);
+                  if (Number.isFinite(parsed) && parsed >= MIN_PARAPET_CLEARANCE_M && parsed <= MAX_PARAPET_CLEARANCE_M) {
+                    // A refusal message describes the previous
+                    // configuration; the next click revalidates live
+                    // against the new clearance, so the obsolete text
+                    // must not linger as if it still applied.
+                    setManualStatus(null);
+                    onSetParapetClearance?.(parsed);
+                  }
+                }}
+                onBlur={() => setParapetClearanceDraft(null)}
+                aria-describedby={parapetClearanceError ? "parapet-clearance-error" : undefined}
+                aria-invalid={parapetClearanceError !== null}
+                title="Clear gap kept between the parapet's inner face and a panel. Separate from the panel edge setback, which measures from the roof edge."
+              />{" "}
+              m
+            </span>
+            {parapetClearanceError && (
+              <span id="parapet-clearance-error" className="stage-card__warning" role="alert">
+                {parapetClearanceError}
               </span>
             )}
           </dd>

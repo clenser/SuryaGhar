@@ -21,6 +21,7 @@ import {
   validatePanelPlacement,
 } from "../lib/3d/panelSets";
 import { DEFAULT_PANEL_CONFIG, effectivePanelDims } from "../lib/3d/panels";
+import { DEFAULT_PARAPET_THICKNESS_M } from "../lib/3d/geometry";
 import { rectangleCorners } from "../lib/3d/panelPlacement";
 import { footprintsOverlap } from "../lib/3d/obstacles";
 import type { Obstacle, Point2 } from "../lib/3d/obstacles";
@@ -273,6 +274,68 @@ describe("shared placement validator", () => {
         9.2, 0, 0, { ...DEFAULT_PANEL_CONFIG, setbackM: 0.1 }, context(),
       ).valid,
     ).toBe(true);
+  });
+
+  it("accepts a panel exactly at the configurable parapet clearance from the inner face", () => {
+    // ModelPanel wiring: the validation context carries the RAW roof
+    // ring plus parapetInsetM = wall thickness + clearance. The
+    // parapet inner face sits 0.3 m inside the roof edge, so a
+    // 0.2 m clearance lets the panel edge reach 0.5 m from the
+    // edge — 0.2 m clear of the inner face.
+    const innerFaceInset = DEFAULT_PARAPET_THICKNESS_M; // 0.3 m wall
+    const clearance = 0.2;
+    const halfWidth = effectivePanelDims(DEFAULT_PANEL_CONFIG).widthM / 2;
+    const centre = 10 - innerFaceInset - clearance - halfWidth;
+    const ok = validatePanelPlacement(
+      centre, 0, 0, DEFAULT_PANEL_CONFIG,
+      context({ parapetInsetM: innerFaceInset + clearance }),
+    );
+    expect(ok.valid).toBe(true);
+
+    // 0.1 m closer to the wall: only 0.1 m clear of the inner
+    // face — refused, naming the configured 0.2 m gap.
+    const refused = validatePanelPlacement(
+      centre + 0.1, 0, 0, DEFAULT_PANEL_CONFIG,
+      context({
+        parapetInsetM: innerFaceInset + clearance,
+        parapetClearanceM: clearance,
+      }),
+    );
+    expect(refused.valid).toBe(false);
+    expect(refused.error).toMatch(/0\.2 m clear of the parapet inner face/);
+  });
+
+  it("moves the real acceptance boundary with the configured parapet clearance", () => {
+    // One fixed spot: 0.35 m clear of the parapet inner face
+    // (0.65 m from the raw roof edge).
+    const halfWidth = effectivePanelDims(DEFAULT_PANEL_CONFIG).widthM / 2;
+    const centre = 10 - 0.3 - 0.35 - halfWidth;
+    const spot = { x: centre, y: 0, rotationDeg: 0 };
+    // Clearance 0.2: the 0.35 m gap fits.
+    const loose = validatePanelPlacement(
+      spot.x, spot.y, spot.rotationDeg, DEFAULT_PANEL_CONFIG,
+      context({ parapetInsetM: 0.3 + 0.2 }),
+    );
+    expect(loose.valid).toBe(true);
+    // Clearance 0.4: the same spot no longer fits — the boundary
+    // itself moved, not just the message.
+    const tight = validatePanelPlacement(
+      spot.x, spot.y, spot.rotationDeg, DEFAULT_PANEL_CONFIG,
+      context({ parapetInsetM: 0.3 + 0.4, parapetClearanceM: 0.4 }),
+    );
+    expect(tight.valid).toBe(false);
+    expect(tight.error).toMatch(/0\.4 m clear of the parapet inner face/);
+  });
+
+  it("keeps the roof-edge setback independently enforced alongside the parapet rule", () => {
+    // A panel far from the parapet but past the setback still
+    // names the setback, with its own configured value.
+    const refused = validatePanelPlacement(
+      9.5, 0, 0, { ...DEFAULT_PANEL_CONFIG, setbackM: 0.8 },
+      context({ parapetInsetM: 0.5, parapetClearanceM: 0.2 }),
+    );
+    expect(refused.valid).toBe(false);
+    expect(refused.error).toMatch(/at least 0\.8 m inside the rooftop edge/);
   });
 
   it("rejects degenerate positions instead of placing them", () => {
