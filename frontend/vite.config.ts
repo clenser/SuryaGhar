@@ -11,6 +11,11 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Bind the IPv4 loopback explicitly. The default host resolves
+    // `localhost` to ::1 first on Windows, which binds IPv6 ONLY and leaves
+    // http://127.0.0.1:5173 refusing connections (the Vite proxy target and
+    // most local tooling use the IPv4 literal).
+    host: "127.0.0.1",
     proxy: {
       "/api": {
         target: "http://127.0.0.1:8000",

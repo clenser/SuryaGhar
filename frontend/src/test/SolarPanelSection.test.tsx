@@ -61,8 +61,8 @@ describe("SolarPanelSection", () => {
     expect(props.onConfigChange).toHaveBeenCalledWith({ tiltDeg: 25 });
     fireEvent.change(screen.getByLabelText("Azimuth (from N)"), { target: { value: "90" } });
     expect(props.onConfigChange).toHaveBeenCalledWith({ azimuthDeg: 90 });
-    fireEvent.change(screen.getByLabelText("Edge setback"), { target: { value: "0.8" } });
-    expect(props.onConfigChange).toHaveBeenCalledWith({ setbackM: 0.8 });
+    // Edge setback moved to the 3D Building Model section (ModelPanel owns
+    // the shared config); it is covered by the ModelPanel setback tests.
   });
 
   it("calls the recalculate action", () => {

@@ -248,6 +248,20 @@ describe("validateSetPlacement", () => {
     expect(validateSetPlacement(0, 0, 0, cfg, ctx({ terrace: roof })).valid).toBe(false);
     expect(validateSetPlacement(0, 0, 90, cfg, ctx({ terrace: roof })).valid).toBe(true);
   });
+
+  it("reports a near-edge set refusal with the configured setback, never a stale value", () => {
+    // 1 x 1 set centred at x = 9.9 on a 20 m roof with a 0.1 m setback: the
+    // footprint reaches 10.565 m, so the setback rule — and only it — fires.
+    // The message must carry the configured 0.1 m, never a 0.6 m from an
+    // unrelated rule or an earlier configuration.
+    const cfg = config({ setRows: 1, setCols: 1, setbackM: 0.1 });
+    const result = validateSetPlacement(9.9, 0, 0, cfg, ctx({ terrace: rect(20, 14) }));
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.error).toMatch(/at least 0\.1 m inside the rooftop edge/);
+      expect(result.error).not.toMatch(/0\.6/);
+    }
+  });
 });
 
 describe("maxSetGrid", () => {
@@ -257,8 +271,15 @@ describe("maxSetGrid", () => {
     const pitchX = dims.widthM + effectiveColSpacingM(cfg);
     const pitchY = dims.lengthM + effectiveRowSpacingM(cfg);
     const limits = maxSetGrid(cfg, 20, 14);
-    expect(limits.maxCols).toBe(Math.floor((20 + 0.2) / pitchX));
-    expect(limits.maxRows).toBe(Math.floor((14 + 0.2) / pitchY));
+    expect(limits.maxCols).toBe(Math.floor((20 - 2 * cfg.setbackM + effectiveColSpacingM(cfg)) / pitchX));
+    expect(limits.maxRows).toBe(Math.floor((14 - 2 * cfg.setbackM + effectiveRowSpacingM(cfg)) / pitchY));
+  });
+
+  it("shrinks the ceilings when the setback grows", () => {
+    const small = maxSetGrid(config({ setbackM: 0.2 }), 20, 14);
+    const large = maxSetGrid(config({ setbackM: 1 }), 20, 14);
+    expect(large.maxCols).toBeLessThan(small.maxCols);
+    expect(large.maxRows).toBeLessThan(small.maxRows);
   });
 
   it("responds to per-axis spacing and to a shrinking roof", () => {

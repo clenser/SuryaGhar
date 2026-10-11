@@ -68,6 +68,10 @@ describe("validatePanelConfig", () => {
     expect(validatePanelConfig(DEFAULT_PANEL_CONFIG)).toBeNull();
   });
 
+  it("defaults the panel edge setback to 0.2 m", () => {
+    expect(DEFAULT_PANEL_CONFIG.setbackM).toBe(0.2);
+  });
+
   it("rejects out-of-range or non-numeric values", () => {
     expect(validatePanelConfig({ ...DEFAULT_PANEL_CONFIG, tiltDeg: 90 })).toMatch(/Tilt/);
     expect(validatePanelConfig({ ...DEFAULT_PANEL_CONFIG, tiltDeg: -5 })).toMatch(/Tilt/);

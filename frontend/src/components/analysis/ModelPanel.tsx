@@ -75,6 +75,8 @@ import {
 } from "../../lib/3d/panelEnergy";
 import {
   DEFAULT_PANEL_CONFIG,
+  PANEL_SETBACK_MAX_M,
+  PANEL_SETBACK_MIN_M,
   validatePanelConfig,
   type PanelLayoutConfig,
 } from "../../lib/3d/panels";
@@ -266,6 +268,20 @@ export function ModelPanel({
     if (parapetDraft === null) return null;
     return validateParapetHeight(Number(parapetDraft));
   }, [parapetDraft]);
+  // Panel edge setback: clearance from the roof edge kept by panel placement.
+  // Edits the active set's shared configuration (the same value the panel
+  // section, preview, commit and auto-place paths all read), so there is one
+  // source of truth and stored manual panels are never moved by the edit.
+  const [setbackDraft, setSetbackDraft] = useState<string | null>(null);
+  const setbackError = useMemo(() => {
+    if (setbackDraft === null) return null;
+    const parsed = Number(setbackDraft);
+    if (!Number.isFinite(parsed)) return "Setback must be a valid number";
+    if (parsed < PANEL_SETBACK_MIN_M || parsed > PANEL_SETBACK_MAX_M) {
+      return `Setback must be between ${PANEL_SETBACK_MIN_M} and ${PANEL_SETBACK_MAX_M} m`;
+    }
+    return null;
+  }, [setbackDraft]);
   /**
    * Maintenance clearance from the roof edge (parapet wall + service gap).
    * Used by PANEL placement and the shading model, where standing clear of
@@ -446,6 +462,12 @@ export function ModelPanel({
   const handlePanelConfigChange = (patch: Partial<PanelLayoutConfig>) => {
     if (!activeSet) return;
     const { mounting, ...rest } = patch;
+    if (rest.setbackM !== undefined) {
+      // A refusal message describes the previous configuration; the next
+      // hover/click revalidates live against the new one, so the obsolete
+      // text must not linger as if it still applied.
+      setManualStatus(null);
+    }
     const nextConfig = {
       ...activeSet.config,
       ...rest,
@@ -1097,6 +1119,46 @@ export function ModelPanel({
             {parapetError && (
               <span id="parapet-error" className="stage-card__warning" role="alert">
                 {parapetError}
+              </span>
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt>
+            <label htmlFor="panel-edge-setback">Panel edge setback</label>
+          </dt>
+          <dd>
+            <span className="height-inline">
+              <input
+                id="panel-edge-setback"
+                type="number"
+                step="0.1"
+                min={PANEL_SETBACK_MIN_M}
+                max={PANEL_SETBACK_MAX_M}
+                value={setbackDraft ?? (activeSet?.config.setbackM ?? DEFAULT_PANEL_CONFIG.setbackM).toFixed(1)}
+                onChange={(event) => {
+                  const raw = event.target.value;
+                  setSetbackDraft(raw);
+                  const parsed = Number(raw);
+                  if (
+                    activeSet &&
+                    Number.isFinite(parsed) &&
+                    parsed >= PANEL_SETBACK_MIN_M &&
+                    parsed <= PANEL_SETBACK_MAX_M
+                  ) {
+                    handlePanelConfigChange({ setbackM: parsed });
+                  }
+                }}
+                onBlur={() => setSetbackDraft(null)}
+                aria-describedby={setbackError ? "setback-error" : undefined}
+                aria-invalid={setbackError !== null}
+                disabled={!activeSet}
+              />{" "}
+              m
+            </span>
+            {setbackError && (
+              <span id="setback-error" className="stage-card__warning" role="alert">
+                {setbackError}
               </span>
             )}
           </dd>

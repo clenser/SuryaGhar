@@ -196,7 +196,7 @@ describe("shared placement validator", () => {
       9.8, 0, 0, DEFAULT_PANEL_CONFIG, context(),
     );
     expect(result.valid).toBe(false);
-    expect(result.error).toMatch(/usable rooftop/);
+    expect(result.error).toMatch(/at least 0\.2 m inside the rooftop edge/);
   });
 
   it("rejects a panel overlapping an obstacle", () => {
@@ -233,7 +233,46 @@ describe("shared placement validator", () => {
       8.8, 0, 0, DEFAULT_PANEL_CONFIG, context({ parapetInsetM: 1.3 }),
     );
     expect(refused.valid).toBe(false);
-    expect(refused.error).toMatch(/inside the rooftop edge/);
+    expect(refused.error).toMatch(/clear of the parapet edge/);
+  });
+
+  it("moves the roof-edge boundary with the configured setback and reports it", () => {
+    // Roof spans x in [-10, 10]; the 550 W module is 1.13 m wide, so at
+    // x = 9 the footprint reaches 9.565 m with a 0.2 m setback (fits) but
+    // 10.165 m with a 0.6 m setback (refused, naming the configured value).
+    const fits = validatePanelPlacement(
+      9, 0, 0, { ...DEFAULT_PANEL_CONFIG, setbackM: 0.2 }, context(),
+    );
+    expect(fits.valid).toBe(true);
+    const refused = validatePanelPlacement(
+      9, 0, 0, { ...DEFAULT_PANEL_CONFIG, setbackM: 0.6 }, context(),
+    );
+    expect(refused.valid).toBe(false);
+    expect(refused.error).toMatch(/at least 0\.6 m inside the rooftop edge/);
+  });
+
+  it("seeds new sets with the 0.2 m default setback", () => {
+    expect(defaultPanelSet(createPanelSetId()).config.setbackM).toBe(0.2);
+  });
+
+  it("attributes a near-edge refusal to the parapet rule, not the setback", () => {
+    // Roof spans x in [-10, 10]; the 550 W module is 1.13 m wide. At x = 9.2
+    // with a 0.1 m setback the setback rectangle ends at 9.865 (inside), yet
+    // the nearest corner is only 0.235 m from the edge — inside the 0.6 m
+    // parapet clear zone. The refusal must name the parapet rule and its
+    // 0.6 m, never the configured 0.1 m setback.
+    const refused = validatePanelPlacement(
+      9.2, 0, 0, { ...DEFAULT_PANEL_CONFIG, setbackM: 0.1 },
+      context({ parapetInsetM: 0.6 }),
+    );
+    expect(refused.valid).toBe(false);
+    expect(refused.error).toMatch(/0\.6 m clear of the parapet edge/);
+    // Same spot, no parapet rule: the 0.1 m setback accepts it.
+    expect(
+      validatePanelPlacement(
+        9.2, 0, 0, { ...DEFAULT_PANEL_CONFIG, setbackM: 0.1 }, context(),
+      ).valid,
+    ).toBe(true);
   });
 
   it("rejects degenerate positions instead of placing them", () => {

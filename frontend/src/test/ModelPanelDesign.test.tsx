@@ -4,9 +4,12 @@
  * transition buttons fire their callbacks.
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import * as THREE from "three";
 import { ModelPanel } from "../components/analysis/ModelPanel";
 import type { LngLat, PolygonMetrics } from "../lib/geo";
+import { createBuildingModel } from "../lib/3d/building";
+import { buildingBounds, frameCamera, framingFromBox } from "../lib/3d/scene";
 
 vi.mock("three", async () => {
   const actual = await vi.importActual<typeof import("three")>("three");
@@ -178,5 +181,119 @@ describe("ModelPanel design correction", () => {
     fireEvent.change(screen.getByLabelText("Panel spacing"), { target: { value: "2.5" } });
     const after = countOf();
     expect(after).toBeLessThan(before);
+  });
+
+  it("exposes the panel edge setback in the Building Model section with a 0.2 m default", () => {
+    renderPanel();
+    const input = screen.getByLabelText("Panel edge setback") as HTMLInputElement;
+    expect(input.value).toBe("0.2");
+  });
+
+  it("recalculates the auto layout live when the setback changes", () => {
+    // Same shared config as the other geometry controls: a wider keep-off
+    // strip fits fewer panels, with no manual remove/re-add involved.
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Enable solar panels" }));
+    fireEvent.click(screen.getByRole("button", { name: /Auto-place set/ }));
+    const countOf = (): number => {
+    const placed = Array.from(document.querySelectorAll(".obstacle-count")).find((el) =>
+      /^\d+ panels/.test(el.textContent ?? ""),
+    );
+    return parseInt(placed?.textContent ?? "", 10);
+    };
+    const before = countOf();
+    expect(before).toBeGreaterThan(5);
+    fireEvent.change(screen.getByLabelText("Panel edge setback"), { target: { value: "2" } });
+    expect(countOf()).toBeLessThan(before);
+  });
+
+  it("keeps a hand-placed panel when the setback changes", () => {
+    // Widening the setback only revalidates: the stored manual position —
+    // and therefore the count — must survive even a 5 m strip.
+    const RECT = { left: 0, top: 0, width: 900, height: 500 };
+    const originalRect = HTMLCanvasElement.prototype.getBoundingClientRect;
+    HTMLCanvasElement.prototype.getBoundingClientRect = (() => ({
+      ...RECT,
+      right: RECT.width,
+      bottom: RECT.height,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    })) as typeof HTMLCanvasElement.prototype.getBoundingClientRect;
+    try {
+      renderPanel();
+      fireEvent.click(screen.getByRole("button", { name: "Enable solar panels" }));
+      fireEvent.click(screen.getByRole("button", { name: "Manual placement" }));
+      const coords = createBuildingModel(TERRACE, 12).coords;
+      const camera = new THREE.PerspectiveCamera(45, 16 / 9, 0.1, 10000);
+      frameCamera(camera, framingFromBox(buildingBounds(coords)));
+      camera.updateMatrixWorld(true);
+      camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
+      const ndc = new THREE.Vector3(0, 0, 12).project(camera);
+      const point = {
+        clientX: RECT.left + ((ndc.x + 1) / 2) * RECT.width,
+        clientY: RECT.top + ((1 - ndc.y) / 2) * RECT.height,
+      };
+      const canvas = document.querySelector("canvas")!;
+      act(() => {
+        canvas.dispatchEvent(new MouseEvent("pointerdown", { ...point, button: 0 }));
+        window.dispatchEvent(new MouseEvent("pointerup", { ...point, button: 0 }));
+      });
+      const placedCount = (): string | null => {
+        const el = Array.from(document.querySelectorAll(".obstacle-count")).find((node) =>
+          /^1 panel/.test(node.textContent ?? ""),
+        );
+        return el?.textContent ?? null;
+      };
+      expect(placedCount()).toMatch(/^1 panel/);
+      fireEvent.change(screen.getByLabelText("Panel edge setback"), { target: { value: "5" } });
+      expect(placedCount()).toMatch(/^1 panel/);
+    } finally {
+      HTMLCanvasElement.prototype.getBoundingClientRect = originalRect;
+    }
+  });
+
+  it("refreshes an obsolete refusal when the setback changes", () => {
+    // The refusal shown for a click near the roof edge is a statement about
+    // the configuration at that moment. Editing the setback must clear it
+    // rather than leave a stale "0.6 m" message contradicting the field.
+    const RECT = { left: 0, top: 0, width: 900, height: 500 };
+    const originalRect = HTMLCanvasElement.prototype.getBoundingClientRect;
+    HTMLCanvasElement.prototype.getBoundingClientRect = (() => ({
+      ...RECT, right: RECT.width, bottom: RECT.height, x: 0, y: 0, toJSON: () => ({}),
+    })) as typeof HTMLCanvasElement.prototype.getBoundingClientRect;
+    try {
+      renderPanel();
+      fireEvent.click(screen.getByRole("button", { name: "Enable solar panels" }));
+      fireEvent.click(screen.getByRole("button", { name: "Manual placement" }));
+      // Whole-set mode: one click commits the whole block, so a bad spot is
+      // refused with a reason instead of being partially placed.
+      fireEvent.click(screen.getByRole("button", { name: "Whole set" }));
+      const coords = createBuildingModel(TERRACE, 12).coords;
+      const camera = new THREE.PerspectiveCamera(45, 16 / 9, 0.1, 10000);
+      frameCamera(camera, framingFromBox(buildingBounds(coords)));
+      camera.updateMatrixWorld(true);
+      camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
+      const ndc = new THREE.Vector3(29, 0, 12).project(camera);
+      const point = {
+        clientX: RECT.left + ((ndc.x + 1) / 2) * RECT.width,
+        clientY: RECT.top + ((1 - ndc.y) / 2) * RECT.height,
+      };
+      const canvas = document.querySelector("canvas")!;
+      act(() => {
+        canvas.dispatchEvent(new MouseEvent("pointerdown", { ...point, button: 0 }));
+        window.dispatchEvent(new MouseEvent("pointerup", { ...point, button: 0 }));
+      });
+      // The obstruction is the roof edge, and the message names the rule that
+      // actually fired — never a value the user did not configure.
+      const refusal = screen.queryByRole("alert");
+      if (refusal) {
+        expect(refusal.textContent).not.toMatch(/0\.6 m inside the rooftop edge/);
+      }
+      fireEvent.change(screen.getByLabelText("Panel edge setback"), { target: { value: "0.1" } });
+      expect(screen.queryByRole("alert")).toBeNull();
+    } finally {
+      HTMLCanvasElement.prototype.getBoundingClientRect = originalRect;
+    }
   });
 });

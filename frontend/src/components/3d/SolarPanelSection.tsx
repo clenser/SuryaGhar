@@ -641,16 +641,6 @@ export function SolarPanelSection({
           unit="m"
           onChange={(value) => onConfigChange({ spacingM: value })}
         />
-        <SliderNumberField
-          id="panel-setback"
-          label="Edge setback"
-          value={config.setbackM}
-          min={0}
-          max={5}
-          step={0.1}
-          unit="m"
-          onChange={(value) => onConfigChange({ setbackM: value })}
-        />
       </div>
 
       {/* Mounting height — support stand-off above the roof plane. Applied to

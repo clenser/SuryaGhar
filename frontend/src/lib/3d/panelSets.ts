@@ -127,7 +127,10 @@ export function validatePanelPlacement(
     rotationDeg,
   );
   if (!footprintInsidePolygon(insetRect, terrace)) {
-    return { valid: false, error: "Panel extends beyond the usable rooftop" };
+    return {
+      valid: false,
+      error: `Panel must stay at least ${config.setbackM.toFixed(1)} m inside the rooftop edge`,
+    };
   }
 
   // Parapet inner edge: the footprint must keep the required clearance.
@@ -141,7 +144,7 @@ export function validatePanelPlacement(
     if (closest < context.parapetInsetM) {
       return {
         valid: false,
-        error: `Panel must stay at least ${context.parapetInsetM.toFixed(1)} m inside the rooftop edge`,
+        error: `Panel must stay at least ${context.parapetInsetM.toFixed(1)} m clear of the parapet edge`,
       };
     }
   }
@@ -346,7 +349,7 @@ export function defaultPanelSet(
       spacingM: 0.2,
       rowSpacingM: null,
       colSpacingM: null,
-      setbackM: 0.3,
+      setbackM: 0.2,
       mountHeightM: 0.4,
       orientation: "portrait",
       customWidthM: null,
@@ -498,12 +501,15 @@ export function maxSetGrid(
   const dims = effectivePanelDims(config);
   const rowSpacing = effectiveRowSpacingM(config);
   const colSpacing = effectiveColSpacingM(config);
+  // The setback keeps every panel off the roof edge, so the lattice cannot
+  // use the outer strip of the usable area on either side.
+  const setback = Number.isFinite(config.setbackM) ? Math.max(0, config.setbackM) : 0;
   const fit = (extent: number, size: number, gap: number): number => {
     if (!(extent > 0) || !(size > 0)) return 0;
     return Math.max(0, Math.floor((extent + gap) / (size + gap)));
   };
   return {
-    maxRows: fit(usableH, dims.lengthM, rowSpacing),
-    maxCols: fit(usableW, dims.widthM, colSpacing),
+    maxRows: fit(usableH - 2 * setback, dims.lengthM, rowSpacing),
+    maxCols: fit(usableW - 2 * setback, dims.widthM, colSpacing),
   };
 }
