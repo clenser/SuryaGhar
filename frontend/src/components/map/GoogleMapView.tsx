@@ -175,7 +175,7 @@ export const GoogleMapView = forwardRef<GoogleMapViewHandle, MapViewProps>(funct
   // Update map cursor based on selectionMode
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !loaded || typeof window === "undefined" || !window.google?.maps) return;
+    if (!map || typeof map.setOptions !== "function") return;
     map.setOptions({
       draggableCursor: selectionMode === "drawing" ? "crosshair" : null,
     });

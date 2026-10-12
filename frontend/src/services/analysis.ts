@@ -183,7 +183,49 @@ async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promi
   return response.json() as Promise<T>;
 }
 
+async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
+  let response: Response;
+  try {
+    response = await requestBackend(`${API_BASE_URL}${path}`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+      signal,
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") throw err;
+    console.error(`[API] network failure calling ${API_BASE_URL}${path}`, err);
+    throw new ApiError("Could not reach the analysis service.", "network");
+  }
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null);
+    console.error(`[API] ${path} HTTP ${response.status}`, detail);
+    throw new ApiError(`The analysis service returned an error (HTTP ${response.status}).`, "server");
+  }
+  return response.json() as Promise<T>;
+}
+
 export type SegmentationModel = "hotosm_buildings" | "sam2_tiny" | "sam2_base_plus" | "sam2_large";
+
+export interface ModelStatusItem {
+  id: SegmentationModel;
+  display_name: string;
+  tagline?: string;
+  available: boolean;
+  unavailable_reason?: string | null;
+  default?: boolean;
+}
+
+export interface BackendPublicConfig {
+  geocoder_provider?: string;
+  imagery_provider?: string;
+  terrain_provider?: string;
+  available_segmentation_models?: ModelStatusItem[];
+}
+
+export async function fetchSegmentationModelStatus(signal?: AbortSignal): Promise<ModelStatusItem[]> {
+  const config = await get<BackendPublicConfig>("/config", signal);
+  return config.available_segmentation_models ?? [];
+}
 
 export const SEGMENTATION_MODELS: Array<{ id: SegmentationModel; label: string; hint: string }> = [
   { id: "sam2_tiny", label: "Tiny model", hint: "Fastest · Lightweight" },

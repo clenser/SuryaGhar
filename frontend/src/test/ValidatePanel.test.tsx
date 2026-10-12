@@ -35,10 +35,26 @@ function resultBody() {
 }
 
 function renderPanel(snapshot: ValidationSnapshot, props?: Partial<Parameters<typeof ValidatePanel>[0]>) {
-  const fetchMock = vi.fn(async () => new Response(JSON.stringify(resultBody()), { status: 200 }));
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("/config")) {
+      return new Response(
+        JSON.stringify({
+          available_segmentation_models: [
+            { id: "sam2_tiny", display_name: "SAM 2.1 Tiny", available: true },
+            { id: "sam2_base_plus", display_name: "SAM 2.1 Base+", available: true },
+            { id: "sam2_large", display_name: "SAM 2.1 Large", available: true },
+          ],
+        }),
+        { status: 200 },
+      );
+    }
+    return new Response(JSON.stringify(resultBody()), { status: 200 });
+  });
   vi.stubGlobal("fetch", fetchMock);
   const onProceed = vi.fn();
   const onSegmentationModelChange = vi.fn();
+  const onBackToModel = vi.fn();
   render(
     <ValidatePanel
       snapshot={snapshot}
@@ -48,11 +64,17 @@ function renderPanel(snapshot: ValidationSnapshot, props?: Partial<Parameters<ty
       onProceed={onProceed}
       onContinue={() => {}}
       onRedraw={() => {}}
+      onBackToModel={onBackToModel}
+      initialModelStatuses={{
+        sam2_tiny: { id: "sam2_tiny", display_name: "SAM 2.1 Tiny", available: true },
+        sam2_base_plus: { id: "sam2_base_plus", display_name: "SAM 2.1 Base+", available: true },
+        sam2_large: { id: "sam2_large", display_name: "SAM 2.1 Large", available: true },
+      }}
       backendReady
       {...props}
     />,
   );
-  return { fetchMock, onProceed, onSegmentationModelChange };
+  return { fetchMock, onProceed, onSegmentationModelChange, onBackToModel };
 }
 
 afterEach(() => {
@@ -143,10 +165,24 @@ describe("ValidatePanel surface assessment", () => {
     expect(screen.getAllByText(REASON)).toHaveLength(1);
   });
 
-  it("keeps both actions reachable", () => {
-    renderPanel({ kind: "ok", result: resultBody() as never, model: "sam2_base_plus" as SegmentationModel });
+  it("keeps actions reachable and provides Back to Step 2", async () => {
+    const { onBackToModel } = renderPanel({ kind: "ok", result: resultBody() as never, model: "sam2_base_plus" as SegmentationModel });
 
     expect(screen.getByRole("button", { name: "Review selection" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Continue to design" })).toBeInTheDocument();
+    const backBtns = screen.getAllByRole("button", { name: /Back to Step 2/i });
+    expect(backBtns.length).toBeGreaterThanOrEqual(1);
+
+    await userEvent.click(backBtns[0]);
+    expect(onBackToModel).toHaveBeenCalledTimes(1);
+  });
+
+  it("provides Back to Step 2 at the top of the card when idle", async () => {
+    const { onBackToModel } = renderPanel({ kind: "idle" });
+    const topBackBtn = screen.getByRole("button", { name: /Back to Step 2/i });
+    expect(topBackBtn).toBeInTheDocument();
+
+    await userEvent.click(topBackBtn);
+    expect(onBackToModel).toHaveBeenCalledTimes(1);
   });
 });

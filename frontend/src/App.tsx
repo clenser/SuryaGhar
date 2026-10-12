@@ -394,6 +394,7 @@ export default function App() {
               onProceed={(model) => validation.proceed(selection.vertices, model)}
               onContinue={() => setStage("design")}
               onRedraw={() => setStage("select")}
+              onBackToModel={() => setStage("model")}
               backendReady={backendReady}
             />
           )}

@@ -1,8 +1,10 @@
-import { useState } from "react";
-import { Check, Play } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ArrowLeft, Check, Play } from "lucide-react";
 import { BACKEND_WAITING_LABEL } from "../../hooks/useBackendStatus";
 import {
   SEGMENTATION_MODELS,
+  fetchSegmentationModelStatus,
+  type ModelStatusItem,
   type SegmentationModel,
   type ValidationResult,
 } from "../../services/analysis";
@@ -18,12 +20,16 @@ interface ValidatePanelProps {
   onProceed: (model: SegmentationModel) => void;
   onContinue: () => void;
   onRedraw: () => void;
+  /** Navigate back to Step 2 (3D building model). */
+  onBackToModel?: () => void;
   /** Backend readiness: model browsing stays usable while false, but the
    * analysis request itself is locked until the server is ready. */
   backendReady: boolean;
+  /** Optional initial model status map (tests or preloaded config). */
+  initialModelStatuses?: Record<string, ModelStatusItem>;
 }
 
-/** Stage 2: surface assessment. Pure view over persisted validation state:
+/** Stage 3: surface assessment. Pure view over persisted validation state:
  *  the user picks a model, then explicitly clicks "Proceed with analysis".
  *  Changing the selection alone never triggers a request, and unmounting
  *  (tab switch) never loses the result. */
@@ -35,45 +41,115 @@ export function ValidatePanel({
   onProceed,
   onContinue,
   onRedraw,
+  onBackToModel,
   backendReady,
+  initialModelStatuses,
 }: ValidatePanelProps) {
   // Draft selection only; committed to App on Proceed so it survives remounts.
   const [draft, setDraft] = useState<SegmentationModel>(segmentationModel);
   const [view, setView] = useState<"original" | "overlay" | "mask">("overlay");
+  const [modelStatuses, setModelStatuses] = useState<Record<string, ModelStatusItem>>(initialModelStatuses ?? {});
+
+  // Sync draft if parent segmentationModel prop changes externally
+  useEffect(() => {
+    setDraft(segmentationModel);
+  }, [segmentationModel]);
+
+  // Load readiness status of all selectable models from backend /config
+  useEffect(() => {
+    let active = true;
+    if (!backendReady || initialModelStatuses) return;
+    fetchSegmentationModelStatus()
+      .then((items) => {
+        if (!active) return;
+        const map: Record<string, ModelStatusItem> = {};
+        for (const item of items) {
+          map[item.id] = item;
+        }
+        setModelStatuses(map);
+      })
+      .catch(() => {
+        // Non-blocking; UI displays graceful fallback
+      });
+    return () => {
+      active = false;
+    };
+  }, [backendReady]);
 
   const proceed = () => {
     onSegmentationModelChange(draft);
     onProceed(draft);
   };
 
+  const handleSelectModel = (modelId: SegmentationModel) => {
+    setDraft(modelId);
+    onSegmentationModelChange(modelId);
+  };
+
   const loadingLabel =
     state.kind === "loading" ? modelLabel(state.model) : modelLabel(draft);
   const showTimer = state.kind === "loading";
 
+  const selectedModelStatus = modelStatuses[draft];
+
   return (
     <div className="stage-card">
-      <p className="stage-card__eyebrow">Stage 3 of 6</p>
+      <div className="stage-card__header-row">
+        <p className="stage-card__eyebrow" style={{ margin: 0 }}>Stage 3 of 6</p>
+        {onBackToModel && (
+          <button
+            type="button"
+            className="btn btn--subtle"
+            onClick={onBackToModel}
+            title="Return to Step 2 (3D Building Model)"
+          >
+            <ArrowLeft size={14} strokeWidth={2} aria-hidden="true" />
+            Back to Step 2
+          </button>
+        )}
+      </div>
       <h2 className="stage-card__title">Surface assessment</h2>
 
       <div className="seg-switch" role="group" aria-label="Segmentation model">
         <span className="seg-switch__label">Segmentation model</span>
         <div className="seg-options" role="radiogroup" aria-label="Segmentation model options">
-          {SEGMENTATION_MODELS.map((m) => (
-            <button
-              key={m.id}
-              type="button"
-              role="radio"
-              aria-checked={draft === m.id}
-              className={`seg-option${draft === m.id ? " is-active" : ""}`}
-              onClick={() => setDraft(m.id)}
-              disabled={state.kind === "loading"}
-            >
-              <span className="seg-option__label">{m.label}</span>
-              <span className="seg-option__hint">{m.hint}</span>
-            </button>
-          ))}
+          {SEGMENTATION_MODELS.map((m) => {
+            const st = modelStatuses[m.id];
+            const isAvailable = st ? st.available : true;
+            return (
+              <button
+                key={m.id}
+                type="button"
+                role="radio"
+                aria-checked={draft === m.id}
+                className={`seg-option${draft === m.id ? " is-active" : ""}`}
+                onClick={() => handleSelectModel(m.id)}
+                disabled={state.kind === "loading"}
+                title={st?.unavailable_reason ?? undefined}
+              >
+                <span className="seg-option__label">{m.label}</span>
+                <span className="seg-option__hint">{m.hint}</span>
+                {st && (
+                  <span
+                    className={`seg-option__badge ${
+                      isAvailable ? "seg-option__badge--ready" : "seg-option__badge--warn"
+                    }`}
+                  >
+                    {isAvailable ? "Ready" : "Unavailable"}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
       </div>
+
+      {selectedModelStatus && !selectedModelStatus.available && (
+        <p className="stage-card__warning" role="status">
+          <strong>{modelLabel(draft)} is currently unavailable:</strong>{" "}
+          {selectedModelStatus.unavailable_reason ?? "Dependencies or weights are missing."}
+        </p>
+      )}
 
       <div className="stage-card__actions">
         <button
@@ -244,6 +320,17 @@ export function ValidatePanel({
           ))}
 
           <div className="stage-card__actions">
+            {onBackToModel && (
+              <button
+                type="button"
+                className="btn btn--secondary"
+                onClick={onBackToModel}
+                title="Return to Step 2 (3D Building Model)"
+              >
+                <ArrowLeft size={14} strokeWidth={2} aria-hidden="true" />
+                Back to Step 2
+              </button>
+            )}
             <button type="button" className="btn" onClick={onRedraw}>Review selection</button>
             <button
               type="button"
