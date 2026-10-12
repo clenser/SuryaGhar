@@ -99,6 +99,11 @@ interface SolarPanelSectionProps {
   electricityFlowActive?: boolean;
   /** Toggle the animated 3D electricity flow visualization. */
   onToggleElectricityFlow?: () => void;
+  /** Target capacity status / message from placement engine */
+  targetStatus?: string | null;
+  /** Site-optimal orientation recommended by solar resource engine */
+  optimalOrientation?: { tiltDeg: number; azimuthDeg: number } | null;
+  onApplyOptimalOrientation?: () => void;
 }
 
 /**
@@ -288,6 +293,9 @@ export function SolarPanelSection({
   displayMode = "all",
   electricityFlowActive = false,
   onToggleElectricityFlow,
+  targetStatus = null,
+  optimalOrientation = null,
+  onApplyOptimalOrientation,
 }: SolarPanelSectionProps) {
   const selected = panelTypeDefinition(config.panelTypeId);
   const tiltLabel = config.mounting === "tilted" ? "Roof slope" : "Tilt";
@@ -678,6 +686,84 @@ export function SolarPanelSection({
         </p>
       </div>
 
+      {/* Capacity target — bounds placement without violating geometry or setbacks */}
+      <div className="panel-group">
+        <span className="panel-group__label" id="panel-target-capacity-label">
+          Capacity target
+        </span>
+        <div className="segmented" role="group" aria-labelledby="panel-target-capacity-label">
+          {[
+            { id: "auto", label: "Auto / Max fit", kwp: null },
+            { id: "1kw", label: "1 kWp", kwp: 1 },
+            { id: "2kw", label: "2 kWp", kwp: 2 },
+            { id: "3kw", label: "3 kWp", kwp: 3 },
+            { id: "5kw", label: "5 kWp", kwp: 5 },
+            { id: "10kw", label: "10 kWp", kwp: 10 },
+            { id: "custom", label: "Custom", kwp: -1 },
+          ].map((preset) => {
+            const isActive =
+              preset.kwp === null
+                ? config.targetCapacityKwp === null || config.targetCapacityKwp === undefined
+                : preset.kwp === -1
+                  ? config.targetCapacityKwp !== null &&
+                    config.targetCapacityKwp !== undefined &&
+                    ![1, 2, 3, 5, 10].includes(config.targetCapacityKwp)
+                  : config.targetCapacityKwp === preset.kwp;
+            return (
+              <button
+                key={preset.id}
+                type="button"
+                className={`segmented__btn${isActive ? " is-active" : ""}`}
+                aria-pressed={isActive}
+                onClick={() =>
+                  onConfigChange({
+                    targetCapacityKwp:
+                      preset.kwp === -1
+                        ? config.targetCapacityKwp && config.targetCapacityKwp > 0
+                          ? config.targetCapacityKwp
+                          : 4
+                        : preset.kwp,
+                  })
+                }
+              >
+                {preset.label}
+              </button>
+            );
+          })}
+        </div>
+        {config.targetCapacityKwp !== null &&
+          config.targetCapacityKwp !== undefined &&
+          ![1, 2, 3, 5, 10].includes(config.targetCapacityKwp) && (
+            <div style={{ marginTop: "var(--space-2)" }}>
+              <SliderNumberField
+                id="panel-custom-target-capacity"
+                label="Custom target capacity"
+                value={config.targetCapacityKwp}
+                min={0.5}
+                max={100}
+                step={0.5}
+                unit="kWp"
+                onChange={(value) => onConfigChange({ targetCapacityKwp: value > 0 ? value : null })}
+              />
+            </div>
+          )}
+        {targetStatus && (
+          <p
+            className="panel-group__hint"
+            role="status"
+            style={{
+              color:
+                targetStatus.includes("bounded") || targetStatus.includes("limited")
+                  ? "var(--color-warning, #f59e0b)"
+                  : "var(--color-primary, #38bdf8)",
+              marginTop: "4px",
+            }}
+          >
+            {targetStatus}
+          </p>
+        )}
+      </div>
+
       {/* Geometry controls */}
       <div className="panel-group">
         <span className="panel-group__label">Module orientation</span>
@@ -731,6 +817,40 @@ export function SolarPanelSection({
           onChange={(value) => onConfigChange({ spacingM: value })}
         />
       </div>
+
+      {optimalOrientation && (
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginTop: "4px",
+            fontSize: "0.75rem",
+            background: "rgba(56, 189, 248, 0.08)",
+            border: "1px solid rgba(56, 189, 248, 0.2)",
+            borderRadius: "6px",
+            padding: "6px 10px",
+          }}
+        >
+          <span>
+            Optimal orientation for site:{" "}
+            <b>
+              {optimalOrientation.azimuthDeg}° (from N) · {optimalOrientation.tiltDeg}° tilt
+            </b>
+          </span>
+          {onApplyOptimalOrientation && (
+            <button
+              type="button"
+              className="btn btn--subtle"
+              style={{ fontSize: "0.72rem", padding: "2px 8px", minHeight: "24px" }}
+              onClick={onApplyOptimalOrientation}
+              title="Apply recommended solar orientation to this panel set"
+            >
+              Apply
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Mounting height — support stand-off above the roof plane. Applied to
           both the panel lift and the support/leg geometry, so the rendered

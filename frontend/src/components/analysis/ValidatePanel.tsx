@@ -95,7 +95,7 @@ export function ValidatePanel({
   return (
     <div className="stage-card">
       <div className="stage-card__header-row">
-        <p className="stage-card__eyebrow" style={{ margin: 0 }}>Stage 3 of 6</p>
+        <p className="stage-card__eyebrow" style={{ margin: 0 }}>Stage 3 of 3</p>
         {onBackToModel && (
           <button
             type="button"
@@ -337,7 +337,7 @@ export function ValidatePanel({
               className="btn btn--primary"
               onClick={onContinue}
               disabled={!backendReady}
-              title={backendReady ? "Continue to solar design" : BACKEND_WAITING_LABEL}
+              title={backendReady ? "Proceed to 3D solar design workspace" : BACKEND_WAITING_LABEL}
             >
               Continue to design
             </button>

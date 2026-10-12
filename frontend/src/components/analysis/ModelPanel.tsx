@@ -14,7 +14,7 @@
  * viewport only renders them.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RotateCcw, ArrowRight, Plus, Pencil, Trash2, AlertTriangle, Sun, TreePine, Eye, Moon, Grid3x3, X, Sparkles } from "lucide-react";
 import { BACKEND_WAITING_LABEL } from "../../hooks/useBackendStatus";
 import type { LngLat, PolygonMetrics } from "../../lib/geo";
@@ -102,6 +102,7 @@ import {
 import { ShadingAnalysisSection, type HeatmapMode } from "../3d/ShadingAnalysisSection";
 import { runAnnualShadingAnalysis, computeInstantaneousShade, type AnnualShadingResult } from "../../lib/3d/shadingAnalysis";
 import { optimizeSolarLayout, type OptimizationCandidate, type OptimizationResult } from "../../lib/3d/layoutOptimization";
+import { analyzeSolar, type SolarResult } from "../../services/analysis";
 
 interface ModelPanelProps {
   vertices: LngLat[];
@@ -252,6 +253,13 @@ export function ModelPanel({
   const [previewCandidate, setPreviewCandidate] = useState<OptimizationCandidate | null>(null);
   const [shadingSectionOpen, setShadingSectionOpen] = useState(false);
   const activeOptimizationJobRef = useRef(0);
+
+  // Consolidated Weather-Resource and Orientation Analysis (pvlib / PVGIS)
+  const [targetPlacementStatus, setTargetPlacementStatus] = useState<string | null>(null);
+  const [solarResourceResult, setSolarResourceResult] = useState<SolarResult | null>(null);
+  const [loadingSolarResource, setLoadingSolarResource] = useState(false);
+  const [solarResourceError, setSolarResourceError] = useState<string | null>(null);
+  const lastAnalyzedCapacityRef = useRef<number | null>(null);
 
   // Active viewport tool (for contextual toolbar)
   const [activeTool, setActiveTool] = useState<ViewportTool | null>("select");
@@ -814,6 +822,71 @@ export function ModelPanel({
     );
     setPreviewCandidate(null);
   };
+
+  const handleFetchSolarResource = useCallback(() => {
+    if (!metrics?.centroid || capacityKw <= 0) return;
+    setLoadingSolarResource(true);
+    setSolarResourceError(null);
+    analyzeSolar(metrics.centroid.lat, metrics.centroid.lng, capacityKw)
+      .then((res) => {
+        setSolarResourceResult(res);
+        lastAnalyzedCapacityRef.current = capacityKw;
+      })
+      .catch((err) => {
+        setSolarResourceError(err instanceof Error ? err.message : "Solar resource analysis failed");
+      })
+      .finally(() => {
+        setLoadingSolarResource(false);
+      });
+  }, [metrics?.centroid, capacityKw]);
+
+  // Invalidate stale weather resource results when installed capacity changes significantly
+  useEffect(() => {
+    if (
+      lastAnalyzedCapacityRef.current !== null &&
+      Math.abs(lastAnalyzedCapacityRef.current - capacityKw) > 0.05
+    ) {
+      setSolarResourceResult(null);
+      lastAnalyzedCapacityRef.current = null;
+    }
+  }, [capacityKw]);
+
+  const optimalOrientation = useMemo<{ tiltDeg: number; azimuthDeg: number } | null>(() => {
+    if (
+      solarResourceResult?.selected &&
+      solarResourceResult.selected.tilt_deg !== undefined &&
+      solarResourceResult.selected.azimuth_deg !== undefined
+    ) {
+      return {
+        tiltDeg: solarResourceResult.selected.tilt_deg,
+        azimuthDeg: solarResourceResult.selected.azimuth_deg,
+      };
+    }
+    if (metrics?.centroid) {
+      const lat = metrics.centroid.lat;
+      const optTilt = Math.round(Math.min(Math.max(lat * 0.9, 10), 35));
+      const optAz = lat >= 0 ? 180 : 0;
+      return { tiltDeg: optTilt, azimuthDeg: optAz };
+    }
+    return null;
+  }, [solarResourceResult, metrics?.centroid]);
+
+  const handleApplyRecommendedOrientation = useCallback(
+    (tiltDeg: number, azimuthDeg: number) => {
+      setPanelSets((sets) =>
+        sets.map((set) => ({
+          ...set,
+          config: {
+            ...set.config,
+            tiltDeg,
+            azimuthDeg,
+          },
+        })),
+      );
+    },
+    [],
+  );
+
   // future callers) is normalised back to flat; the engine keeps supporting
   // other types internally for later milestones.
   const handlePanelConfigChange = (patch: Partial<PanelLayoutConfig>) => {
@@ -892,6 +965,7 @@ export function ModelPanel({
           return updated;
         }
         const result = placePanels({ terrace: usableRing, obstacles, config: nextConfig });
+        setTargetPlacementStatus(result.targetStatus ?? null);
         return { ...updated, panels: result.panels };
       }),
     );
@@ -970,6 +1044,7 @@ export function ModelPanel({
         return s.panels.map((x) => ({ x: x.x, y: x.y, rotationDeg: x.rotationDeg, width: d.widthM, length: d.lengthM }));
       });
     const result = placePanels({ terrace: usableRing, obstacles, config: activeSet.config });
+    setTargetPlacementStatus(result.targetStatus ?? null);
     const kept: Array<{ index: number; x: number; y: number; rotationDeg: number }> = [];
     const seen = [...reserved];
     for (const x of result.panels) {
@@ -1628,7 +1703,7 @@ export function ModelPanel({
 
         </div>
         <div className="design-side">
-      <p className="stage-card__eyebrow">Stage 2 of 6</p>
+      <p className="stage-card__eyebrow">Stage 2 of 3</p>
       <h2 className="stage-card__title">3D Building Model</h2>
       <p className="stage-card__body">
         The terrace outline has been extruded to {model.heightM.toFixed(1)} m.
@@ -2204,6 +2279,17 @@ export function ModelPanel({
                   energy={energy}
                   electricityFlowActive={layerVisibility.electricityFlow}
                   onToggleElectricityFlow={() => handleToggleLayer("electricityFlow")}
+                  targetStatus={targetPlacementStatus}
+                  optimalOrientation={optimalOrientation}
+                  onApplyOptimalOrientation={
+                    optimalOrientation
+                      ? () =>
+                          handleApplyRecommendedOrientation(
+                            optimalOrientation.tiltDeg,
+                            optimalOrientation.azimuthDeg,
+                          )
+                      : undefined
+                  }
                 />
               </>
             ) : (
@@ -2248,6 +2334,11 @@ export function ModelPanel({
               previewCandidate={previewCandidate}
               onPreviewCandidate={setPreviewCandidate}
               onApplyCandidate={handleApplyCandidate}
+              solarResourceResult={solarResourceResult}
+              isLoadingSolarResource={loadingSolarResource}
+              solarResourceError={solarResourceError}
+              onFetchSolarResource={handleFetchSolarResource}
+              onApplyRecommendedOrientation={handleApplyRecommendedOrientation}
             />
           </CollapsibleSection>
 

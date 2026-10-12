@@ -118,6 +118,12 @@ export interface PanelLayoutConfig {
    */
   legRows: number;
   legCols: number;
+  /**
+   * Target installed capacity (kWp). Null means "Auto / Maximum fit".
+   * Bounds automatic placement without violating roof geometry, setbacks,
+   * or obstacle exclusions.
+   */
+  targetCapacityKwp?: number | null;
 }
 
 /** How the module's short/long sides map to the roof's X/Y axes. */
@@ -190,6 +196,7 @@ export const DEFAULT_PANEL_CONFIG: PanelLayoutConfig = {
   setCols: 5,
   legRows: 2,
   legCols: 2,
+  targetCapacityKwp: null,
 };
 
 /** Row gap actually used: explicit value, else the shared spacing. */

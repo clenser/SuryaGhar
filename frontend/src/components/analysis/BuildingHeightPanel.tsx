@@ -81,7 +81,7 @@ export function BuildingHeightPanel({
       {/* noValidate: the range is enforced by our own messages so the user
           always sees an in-design explanation instead of a native bubble. */}
       <form onSubmit={handleSubmit} noValidate>
-        <p className="stage-card__eyebrow">Stage 2 of 6</p>
+        <p className="stage-card__eyebrow">Stage 2 of 3</p>
         <h2 className="stage-card__title">Building height</h2>
         <p className="stage-card__body">
           Enter the building height to generate the 3D model. The terrace outline will be

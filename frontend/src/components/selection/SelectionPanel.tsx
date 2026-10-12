@@ -18,7 +18,7 @@ export function SelectionPanel({ selection, onStartValidate, backendReady }: Sel
   if (mode === "idle") {
     return (
       <div className="stage-card">
-        <p className="stage-card__eyebrow">Stage 1 of 6</p>
+        <p className="stage-card__eyebrow">Stage 1 of 3</p>
         <h2 className="stage-card__title">Select a rooftop to begin</h2>
         <p className="stage-card__body">
           Zoom to a rooftop or usable open ground, then trace its boundary.
@@ -35,7 +35,7 @@ export function SelectionPanel({ selection, onStartValidate, backendReady }: Sel
   if (mode === "drawing") {
     return (
       <div className="stage-card">
-        <p className="stage-card__eyebrow">Stage 1 of 6</p>
+        <p className="stage-card__eyebrow">Stage 1 of 3</p>
         <h2 className="stage-card__title">Draw the boundary</h2>
         <p className="stage-card__body">
           Click to place points. Click the first point again, double-click, or press “Finish polygon” to end (minimum 3 points).
@@ -63,7 +63,7 @@ export function SelectionPanel({ selection, onStartValidate, backendReady }: Sel
 
   return (
     <div className="stage-card">
-      <p className="stage-card__eyebrow">Stage 1 of 6</p>
+      <p className="stage-card__eyebrow">Stage 1 of 3</p>
       <h2 className="stage-card__title">
         {mode === "confirmed" ? "Area confirmed" : "Review the area"}
       </h2>

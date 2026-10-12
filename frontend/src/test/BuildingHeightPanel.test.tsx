@@ -39,7 +39,7 @@ describe("BuildingHeightPanel", () => {
   it("renders stage header and terrace metrics", () => {
     render(<BuildingHeightPanel {...PROPS} />);
 
-    expect(screen.getByText("Stage 2 of 6")).toBeInTheDocument();
+    expect(screen.getByText("Stage 2 of 3")).toBeInTheDocument();
     expect(screen.getByText("Building height")).toBeInTheDocument();
     expect(screen.getByText("84.5 m²")).toBeInTheDocument(); // area
     expect(screen.getByText("44.2 m")).toBeInTheDocument(); // perimeter

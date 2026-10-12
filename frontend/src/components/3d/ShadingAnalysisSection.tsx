@@ -18,9 +18,12 @@ import {
   Eye,
   Sparkles,
   Info,
+  Compass,
+  Zap,
 } from "lucide-react";
 import type { AnnualShadingResult, AnalyzedPanel } from "../../lib/3d/shadingAnalysis";
 import type { OptimizationCandidate, OptimizationResult } from "../../lib/3d/layoutOptimization";
+import { compassDirection, type SolarResult } from "../../services/analysis";
 
 export type HeatmapMode = "annual" | "instantaneous";
 
@@ -38,6 +41,13 @@ interface ShadingAnalysisSectionProps {
   previewCandidate: OptimizationCandidate | null;
   onPreviewCandidate: (cand: OptimizationCandidate | null) => void;
   onApplyCandidate: (cand: OptimizationCandidate) => void;
+
+  /** Consolidated Weather-Resource and Orientation Analysis (pvlib / PVGIS) */
+  solarResourceResult?: SolarResult | null;
+  isLoadingSolarResource?: boolean;
+  solarResourceError?: string | null;
+  onFetchSolarResource?: () => void;
+  onApplyRecommendedOrientation?: (tilt: number, azimuth: number) => void;
 }
 
 export const ShadingAnalysisSection: React.FC<ShadingAnalysisSectionProps> = ({
@@ -54,6 +64,11 @@ export const ShadingAnalysisSection: React.FC<ShadingAnalysisSectionProps> = ({
   previewCandidate,
   onPreviewCandidate,
   onApplyCandidate,
+  solarResourceResult,
+  isLoadingSolarResource = false,
+  solarResourceError = null,
+  onFetchSolarResource,
+  onApplyRecommendedOrientation,
 }) => {
   if (!shadingResult) {
     return (
@@ -251,6 +266,175 @@ export const ShadingAnalysisSection: React.FC<ShadingAnalysisSectionProps> = ({
             <Info size={13} style={{ flexShrink: 0, marginTop: "2px" }} />
             <span>{shadingResult.uncertainty.notes.join(" ")}</span>
           </div>
+        )}
+      </div>
+
+      {/* 2b. Meteorological Weather Resource & Orientation Benchmark (pvlib / PVGIS) */}
+      <div
+        className="weather-resource-card"
+        style={{
+          background: "var(--color-surface-sunken, rgba(0, 0, 0, 0.15))",
+          padding: "var(--space-3)",
+          borderRadius: "var(--radius-md, 8px)",
+          border: "1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.08))",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--space-2)" }}>
+          <span style={{ fontWeight: 600, fontSize: "0.85rem", display: "flex", alignItems: "center", gap: "6px" }}>
+            <Compass size={15} style={{ color: "var(--color-primary, #38bdf8)" }} />
+            Weather-Resource & Orientation (pvlib / PVGIS)
+          </span>
+          {onFetchSolarResource && (
+            <button
+              type="button"
+              className="btn btn--secondary"
+              style={{ fontSize: "0.72rem", padding: "3px 8px", minHeight: "26px" }}
+              onClick={onFetchSolarResource}
+              disabled={isLoadingSolarResource}
+              title="Estimate meteorological yield and optimal orientation via pvlib + PVGIS"
+            >
+              <Zap size={12} style={{ marginRight: "4px" }} />
+              {isLoadingSolarResource ? "Analysing…" : solarResourceResult ? "Refresh Benchmark" : "Analyse Weather Resource"}
+            </button>
+          )}
+        </div>
+
+        {isLoadingSolarResource && (
+          <div style={{ padding: "var(--space-2) 0", fontSize: "0.75rem", color: "var(--color-text-subtle)" }}>
+            <div className="progress-indeterminate" aria-hidden="true" style={{ marginBottom: "6px" }}><span /></div>
+            Simulating regional meteorological yield with PVGIS TMY / pvlib for {shadingResult.installedCapacityKwp.toFixed(2)} kWp…
+          </div>
+        )}
+
+        {solarResourceError && (
+          <p className="stage-card__warning" role="alert" style={{ margin: "var(--space-1) 0", fontSize: "0.75rem" }}>
+            {solarResourceError}
+          </p>
+        )}
+
+        {!isLoadingSolarResource && !solarResourceResult && !solarResourceError && (
+          <p style={{ margin: 0, fontSize: "0.73rem", color: "var(--color-text-subtle)" }}>
+            Compare your 3D layout against regional meteorological TMY resource benchmarks and test alternative tilt/azimuth angles.
+          </p>
+        )}
+
+        {solarResourceResult && (
+          <>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "var(--space-2)" }}>
+              <span style={{ fontSize: "0.78rem", color: "var(--color-text-subtle)", fontWeight: 500 }}>
+                Unshaded Weather Baseline
+              </span>
+              <span style={{ fontSize: "1.05rem", fontWeight: 700, color: "var(--color-text, #f1f5f9)" }}>
+                {solarResourceResult.annual_kwh !== null
+                  ? `≈ ${Math.round(solarResourceResult.annual_kwh).toLocaleString()} kWh/yr`
+                  : "Unavailable"}
+              </span>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--space-2)", fontSize: "0.75rem", paddingTop: "var(--space-2)", borderTop: "1px solid rgba(255, 255, 255, 0.06)" }}>
+              <div>
+                <span style={{ color: "var(--color-text-subtle)", display: "block" }}>Specific Yield:</span>
+                <span style={{ fontWeight: 600 }}>
+                  {solarResourceResult.specific_yield_kwh_kwp ? `${Math.round(solarResourceResult.specific_yield_kwh_kwp)} kWh/kWp` : "—"}
+                </span>
+              </div>
+              <div>
+                <span style={{ color: "var(--color-text-subtle)", display: "block" }}>POA Insolation:</span>
+                <span style={{ fontWeight: 600 }}>
+                  {solarResourceResult.poa_kwh_m2 ? `${Math.round(solarResourceResult.poa_kwh_m2)} kWh/m²` : "—"}
+                </span>
+              </div>
+            </div>
+
+            {/* Recommended Orientation Box */}
+            {solarResourceResult.selected.azimuth_deg !== undefined &&
+              solarResourceResult.selected.tilt_deg !== undefined && (
+                <div
+                  style={{
+                    marginTop: "var(--space-2)",
+                    padding: "8px 10px",
+                    borderRadius: "6px",
+                    background: "rgba(56, 189, 248, 0.08)",
+                    border: "1px solid rgba(56, 189, 248, 0.2)",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    fontSize: "0.75rem",
+                  }}
+                >
+                  <div>
+                    <span style={{ color: "var(--color-text-subtle)", display: "block", fontSize: "0.7rem" }}>
+                      Optimal Solar Orientation:
+                    </span>
+                    <b>
+                      {compassDirection(solarResourceResult.selected.azimuth_deg)} {solarResourceResult.selected.azimuth_deg}° · Tilt {solarResourceResult.selected.tilt_deg}°
+                    </b>
+                  </div>
+                  {onApplyRecommendedOrientation && (
+                    <button
+                      type="button"
+                      className="btn btn--subtle"
+                      style={{ fontSize: "0.72rem", padding: "3px 8px", minHeight: "24px" }}
+                      onClick={() =>
+                        onApplyRecommendedOrientation(
+                          solarResourceResult.selected.tilt_deg!,
+                          solarResourceResult.selected.azimuth_deg!,
+                        )
+                      }
+                      title="Apply recommended optimal tilt and azimuth to the active 3D array"
+                    >
+                      Apply to 3D Layout
+                    </button>
+                  )}
+                </div>
+              )}
+
+            {/* Candidate Tilt / Azimuth comparison bars */}
+            {solarResourceResult.candidates.length > 0 && (
+              <div style={{ marginTop: "var(--space-2)", paddingTop: "var(--space-2)", borderTop: "1px solid rgba(255, 255, 255, 0.06)" }}>
+                <div style={{ fontSize: "0.72rem", color: "var(--color-text-subtle)", marginBottom: "6px" }}>
+                  Orientation Sweep ({solarResourceResult.candidates.length} angles tested):
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                  {[...solarResourceResult.candidates]
+                    .filter((c) => typeof c.annual_kwh === "number")
+                    .sort((a, b) => (b.annual_kwh as number) - (a.annual_kwh as number))
+                    .slice(0, 6)
+                    .map((c, i) => {
+                      const maxVal = Math.max(
+                        ...solarResourceResult.candidates.map((x) => (typeof x.annual_kwh === "number" ? x.annual_kwh : 0)),
+                      );
+                      const pct = maxVal > 0 ? Math.round(((c.annual_kwh as number) / maxVal) * 100) : 0;
+                      return (
+                        <div
+                          key={i}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "6px",
+                            fontSize: "0.7rem",
+                          }}
+                        >
+                          <span style={{ width: "70px", flexShrink: 0, color: "var(--color-text-subtle)" }}>
+                            {c.tilt_deg}° / {c.azimuth_deg}°
+                          </span>
+                          <div style={{ flex: 1, background: "rgba(255, 255, 255, 0.06)", height: 6, borderRadius: 3, overflow: "hidden" }}>
+                            <div style={{ width: `${pct}%`, background: "var(--color-primary, #38bdf8)", height: "100%" }} />
+                          </div>
+                          <span style={{ width: "45px", textAlign: "right", fontWeight: 500 }}>
+                            {Math.round((c.annual_kwh as number) / 1000)}k
+                          </span>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            )}
+
+            <p style={{ margin: "var(--space-2) 0 0 0", fontSize: "0.68rem", color: "var(--color-text-subtle)" }}>
+              Data: {solarResourceResult.resource_provider} · Confidence: {solarResourceResult.confidence}. Accounts for regional solar irradiance, cell temperature derating, and inverter clipping without double-counting rooftop obstacle shading.
+            </p>
+          </>
         )}
       </div>
 

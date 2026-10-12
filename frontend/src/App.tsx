@@ -21,14 +21,11 @@ import { activeImageryProvider } from "./providers/imagery";
 import { KOLKATA_PLACE } from "./config/locations";
 import { SelectionPanel } from "./components/selection/SelectionPanel";
 import { ValidatePanel } from "./components/analysis/ValidatePanel";
-import { DesignPanel } from "./components/analysis/DesignPanel";
-import { SolarPanel } from "./components/analysis/SolarPanel";
-import { SitePanel } from "./components/analysis/SitePanel";
 import type { LocationResult } from "./types";
 import type { SegmentationModel } from "./services/analysis";
 import { ensureBackendAwake } from "./services/backendStatus";
 
-type Stage = "select" | "model" | "validate" | "design" | "solar" | "site";
+type Stage = "select" | "model" | "validate";
 
 // The 3D workspace (Three.js + local coordinate conversion) is only needed once
 // the user opens the Model stage, so it is code-split out of the first load
@@ -69,19 +66,15 @@ export default function App() {
   // Rooftop obstacles: application state, cleared with the selection so a new
   // site never inherits another rooftop's objects (AGENTS.md §40).
   const obstacleStore = useObstacles();
-  const [panelFootprints, setPanelFootprints] = useState<GeoJSON.FeatureCollection | null>(null);
-  const [shadowFC, setShadowFC] = useState<GeoJSON.FeatureCollection | null>(null);
-  const [capacityKwp, setCapacityKwp] = useState(0);
   // Segmentation model persists across stages; validation only runs when the
   // user clicks "Proceed with analysis". Default: Tiny (sam2_tiny).
   const [segmentationModel, setSegmentationModel] = useState<SegmentationModel>("sam2_tiny");
-  const [designOrientation, setDesignOrientation] = useState<{ tilt_deg: number; azimuth_deg: number } | null>(null);
   // Validation state lives here so tab switches (which unmount ValidatePanel)
   // never lose the result. Reset is the explicit way to clear it.
   const validation = useValidation();
   // Mobile bottom-sheet state. Desktop ignores it (CSS-gated below 600px).
   const sheetCtl = useBottomSheet("partial");
-  // Readiness gate: backend-dependent controls (Validate/Design/Solar/Site,
+  // Readiness gate: backend-dependent controls (Validate,
   // compute/analyse actions, stage transitions past Select) stay disabled
   // until GET /api/ready reports 200. Map browsing, search, selection,
   // editing and measurements are map-local and never lock. Unlocking is
@@ -103,7 +96,7 @@ export default function App() {
     });
   }, []);
 
-  // Selection cleared -> reset overlays, capacity, and the current stage so the UI never
+  // Selection cleared -> reset overlays and the current stage so the UI never
   // shows a dead-end stage panel.
   useEffect(() => {
     if (selection.mode === "idle") {
@@ -112,10 +105,6 @@ export default function App() {
       setBuildingHeight(null);
       setParapetHeight(null);
       obstacleStore.clear();
-      setPanelFootprints(null);
-      setShadowFC(null);
-      setCapacityKwp(0);
-      setDesignOrientation(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selection.mode, obstacleStore.clear]);
@@ -129,10 +118,6 @@ export default function App() {
     setBuildingHeight(null);
     setParapetHeight(null);
     obstacleStore.clear();
-    setPanelFootprints(null);
-    setShadowFC(null);
-    setCapacityKwp(0);
-    setDesignOrientation(null);
     setSegmentationModel("sam2_tiny");
     setStage("select");
     setPlace(KOLKATA_PLACE);
@@ -153,10 +138,7 @@ export default function App() {
     selection.vertices.length > 0 ||
     validation.snapshot.kind !== "idle" ||
     obstacleStore.obstacles.length > 0 ||
-    panelFootprints !== null ||
-    shadowFC !== null ||
-    capacityKwp > 0 ||
-    designOrientation !== null ||
+    buildingHeight !== null ||
     stage !== "select";
 
   // Location search only updates the selected place + camera. SEARCHING is not a
@@ -169,14 +151,6 @@ export default function App() {
       mapRef.current?.flyToPlace(next.longitude, next.latitude, next.locality ? 15.5 : 15);
     }
   }, []);
-
-  const handleLayoutResult = useCallback(
-    (footprints: GeoJSON.FeatureCollection | null, orientation?: { tilt_deg: number; azimuth_deg: number } | null) => {
-      setPanelFootprints(footprints);
-      setDesignOrientation(orientation ?? null);
-    },
-    [],
-  );
 
   const handleModelHeight = useCallback(
     (height: number) => {
@@ -232,7 +206,7 @@ export default function App() {
 
   // Sidebar stage navigation. The map stays clean: progress is communicated
   // through the current stage panel, section headings and primary actions.
-  const stageOrder: Stage[] = ["select", "model", "validate", "design", "solar", "site"];
+  const stageOrder: Stage[] = ["select", "model", "validate"];
 
   return (
     <div className="app" data-sheet={sheetCtl.sheet}>
@@ -257,14 +231,11 @@ export default function App() {
           }}
           selectionMode={selection.mode}
           vertices={selection.vertices}
-          panelFootprints={panelFootprints}
-          orientation={designOrientation}
           selectionCentroid={
             selection.metrics
               ? { lng: selection.metrics.centroid.lng, lat: selection.metrics.centroid.lat }
               : null
           }
-          shadowFC={shadowFC}
           showMeasurements={measureOn}
           onAddVertex={selection.addVertex}
           onFinishDrawing={selection.finishDrawing}
@@ -281,21 +252,13 @@ export default function App() {
               stage === "select"
                 ? "Select area"
                 : stage === "model"
-                  ? "3D building"
-                  : stage === "validate"
-                    ? "Surface assessment"
-                    : stage === "design"
-                      ? "Solar design"
-                      : stage === "solar"
-                        ? "Solar potential"
-                        : "Site context"
+                  ? "3D building & solar"
+                  : "Surface assessment"
             }
             summary={
-              capacityKwp > 0
-                ? `${panelFootprints?.features.length ?? 0} panels · ${capacityKwp.toFixed(2)} kWp`
-                : validation.snapshot.kind === "ok"
-                  ? "Assessment ready"
-                  : null
+              validation.snapshot.kind === "ok"
+                ? "Assessment ready"
+                : null
             }
             onCycle={sheetCtl.cycle}
             onDragEnd={sheetCtl.applyDrag}
@@ -322,22 +285,12 @@ export default function App() {
                 s === "select"
                   ? "Select"
                   : s === "model"
-                    ? "Model"
-                    : s === "validate"
-                      ? "Validate"
-                      : s === "design"
-                        ? "Design"
-                        : s === "solar"
-                          ? "Solar"
-                          : "Site",
+                    ? "Model & 3D"
+                    : "Validate",
               disabled:
                 s === "select"
                   ? false
-                  : s === "model"
-                    ? selection.mode !== "confirmed"
-                    : s === "solar"
-                      ? selection.mode !== "confirmed" || capacityKwp <= 0
-                      : selection.mode !== "confirmed",
+                  : selection.mode !== "confirmed",
             }))}
             currentId={stage}
             onSelect={(id) => {
@@ -358,7 +311,7 @@ export default function App() {
             <Suspense
               fallback={
                 <div className="stage-card">
-                  <p className="stage-card__eyebrow">Stage 2 of 6</p>
+                  <p className="stage-card__eyebrow">Stage 2 of 3</p>
                   <h2 className="stage-card__title">Loading 3D workspace…</h2>
                 </div>
               }
@@ -392,36 +345,16 @@ export default function App() {
               segmentationModel={segmentationModel}
               onSegmentationModelChange={setSegmentationModel}
               onProceed={(model) => validation.proceed(selection.vertices, model)}
-              onContinue={() => setStage("design")}
+              onContinue={() => {
+                setStage("model");
+                setDesignMode(true);
+              }}
               onRedraw={() => setStage("select")}
               onBackToModel={() => setStage("model")}
               backendReady={backendReady}
             />
           )}
-          {stage === "design" && selection.vertices.length >= 3 && (
-            <DesignPanel
-              vertices={selection.vertices}
-              onResult={handleLayoutResult}
-              onContinue={(kwp) => {
-                setCapacityKwp(kwp);
-                setStage("solar");
-              }}
-              backendReady={backendReady}
-            />
-          )}
-          {stage === "solar" && selection.metrics && capacityKwp > 0 && (
-            <SolarPanel
-              latitude={selection.metrics.centroid.lat}
-              longitude={selection.metrics.centroid.lng}
-              capacityKwp={capacityKwp}
-              onContinue={() => setStage("site")}
-              backendReady={backendReady}
-            />
-          )}
-          {stage === "site" && selection.vertices.length >= 3 && (
-            <SitePanel vertices={selection.vertices} onShadows={setShadowFC} backendReady={backendReady} />
-          )}
-          {selection.mode === "confirmed" && stage !== "select" && stage !== "site" && selection.vertices.length < 3 && (
+          {selection.mode === "confirmed" && stage !== "select" && selection.vertices.length < 3 && (
             <div className="stage-card">
               <h2 className="stage-card__title">No valid selection</h2>
               <p className="stage-card__body">Draw and confirm an area before continuing.</p>

@@ -26,7 +26,13 @@ import {
   type Obstacle,
   type Point2,
 } from "./obstacles";
-import { effectiveColSpacingM, effectivePanelDims, effectiveRowSpacingM, type PanelLayoutConfig } from "./panels";
+import {
+  effectiveColSpacingM,
+  effectivePanelDims,
+  effectiveRowSpacingM,
+  panelTypeDefinition,
+  type PanelLayoutConfig,
+} from "./panels";
 
 /** Fixed clearance kept between panels and obstacle footprints, metres. */
 export const PANEL_OBSTACLE_CLEARANCE_M = 0.1;
@@ -49,12 +55,17 @@ export interface PlacementRequest {
   config: PanelLayoutConfig;
   /** Clearance from obstacle footprints (defaults to a small constant). */
   obstacleClearanceM?: number;
+  /** Target capacity in kWp to bound placed panel count. */
+  targetCapacityKwp?: number | null;
 }
 
 export interface PlacementResult {
   panels: PlacedPanel[];
   /** Why nothing was placed — null whenever `panels.length > 0`. */
   reason: string | null;
+  /** Status or constraint explanation regarding requested target capacity vs roof geometric limit. */
+  targetStatus?: string | null;
+  targetAchieved?: boolean | null;
 }
 
 /** Rotation (CCW degrees) that points the panel's long side at `azimuth`. */
@@ -233,7 +244,8 @@ export function placementCacheKey(request: PlacementRequest): string {
         .join(";")
     : "";
   const c = config;
-  const cStr = `${c.panelTypeId}:${c.mounting}:${c.tiltDeg}:${c.azimuthDeg}:${c.spacingM}:${c.rowSpacingM ?? ""}:${c.colSpacingM ?? ""}:${c.setbackM}:${c.setRows}:${c.setCols}:${c.orientation ?? "portrait"}:${c.customWidthM ?? ""}:${c.customLengthM ?? ""}`;
+  const targetCap = request.targetCapacityKwp ?? c.targetCapacityKwp ?? "";
+  const cStr = `${c.panelTypeId}:${c.mounting}:${c.tiltDeg}:${c.azimuthDeg}:${c.spacingM}:${c.rowSpacingM ?? ""}:${c.colSpacingM ?? ""}:${c.setbackM}:${c.setRows}:${c.setCols}:${c.orientation ?? "portrait"}:${c.customWidthM ?? ""}:${c.customLengthM ?? ""}:${targetCap}`;
   return `${tStr}|${oStr}|${cStr}|${formatCoord(obstacleClearanceM)}`;
 }
 
@@ -252,6 +264,8 @@ export function placePanels(request: PlacementRequest): PlacementResult {
     return {
       panels: cached.panels.map((p) => ({ ...p })),
       reason: cached.reason,
+      targetStatus: cached.targetStatus,
+      targetAchieved: cached.targetAchieved,
     };
   }
 
@@ -265,6 +279,8 @@ export function placePanels(request: PlacementRequest): PlacementResult {
   placementCache.set(key, {
     panels: result.panels.map((p) => ({ ...p })),
     reason: result.reason,
+    targetStatus: result.targetStatus,
+    targetAchieved: result.targetAchieved,
   });
 
   return result;
@@ -389,7 +405,32 @@ function computePlacePanels(request: PlacementRequest): PlacementResult {
           : `No room for one ${rows}x${cols} set with a ${config.setbackM} m setback - try a smaller set or setback`,
     };
   }
-  return { panels: best, reason: null };
+
+  // Handle capacity-target bounding if requested
+  const targetKwp = request.targetCapacityKwp ?? config.targetCapacityKwp ?? null;
+  let targetStatus: string | null = null;
+  let targetAchieved: boolean | null = null;
+
+  if (targetKwp !== null && Number.isFinite(targetKwp) && targetKwp > 0) {
+    const ratedWatts = panelTypeDefinition(config.panelTypeId).watts;
+    const targetCount = Math.max(1, Math.ceil((targetKwp * 1000) / ratedWatts));
+    const setSize = rows * cols;
+    // Bounded target count aligned with set size when sets are enabled
+    const effectiveTargetCount = setSize > 1 ? Math.max(setSize, Math.ceil(targetCount / setSize) * setSize) : targetCount;
+
+    if (best.length >= effectiveTargetCount) {
+      best = best.slice(0, effectiveTargetCount).map((p, idx) => ({ ...p, index: idx }));
+      const achievedKwp = (best.length * ratedWatts) / 1000;
+      targetStatus = `Target capacity of ${targetKwp} kWp met (${best.length} panels · ${achievedKwp.toFixed(2)} kWp).`;
+      targetAchieved = true;
+    } else {
+      const achievedKwp = (best.length * ratedWatts) / 1000;
+      targetStatus = `Roof capacity bounded to ${achievedKwp.toFixed(2)} kWp (${best.length} panels) with current setbacks and obstacles; target of ${targetKwp} kWp cannot be fully placed.`;
+      targetAchieved = false;
+    }
+  }
+
+  return { panels: best, reason: null, targetStatus, targetAchieved };
 
   /**
    * Derive candidate grid origins aligned with the actual terrace boundary segments.
