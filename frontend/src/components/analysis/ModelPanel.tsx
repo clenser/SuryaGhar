@@ -578,6 +578,13 @@ export function ModelPanel({
     if (!panelsEnabled) return null;
 
     if (previewCandidate) {
+      const metrics = shadingVisualizationActive
+        ? previewCandidate.shadingSummary.panels.map((p) => ({
+            annualLossPercent: p.annualLossPercent,
+            severity: p.severity,
+          }))
+        : undefined;
+
       return [
         {
           config: previewCandidate.config,
@@ -587,16 +594,25 @@ export function ModelPanel({
           shadingSeverities: shadingVisualizationActive
             ? previewCandidate.shadingSummary.panels.map((p) => p.severity)
             : undefined,
+          shadingMetrics: metrics,
         },
       ];
     }
 
     return panelSets.map((set) => {
       let severities: Array<"none" | "moderate" | "severe"> | undefined = undefined;
+      let metrics: Array<{ annualLossPercent: number; severity?: "none" | "moderate" | "severe" }> | undefined = undefined;
       if (shadingVisualizationActive && annualShading) {
         severities = set.panels.map((_, idx) => {
           const match = annualShading.panels[idx];
           return match ? match.severity : "none";
+        });
+        metrics = set.panels.map((_, idx) => {
+          const match = annualShading.panels[idx];
+          return {
+            annualLossPercent: match ? match.annualLossPercent : 0,
+            severity: match ? match.severity : "none",
+          };
         });
       }
       return {
@@ -605,6 +621,7 @@ export function ModelPanel({
           (p) => ({ index: 0, x: p.x, y: p.y, rotationDeg: p.rotationDeg }) as PlacedPanel,
         ),
         shadingSeverities: severities,
+        shadingMetrics: metrics,
       };
     });
   }, [panelsEnabled, panelSets, previewCandidate, shadingVisualizationActive, annualShading]);
@@ -692,14 +709,46 @@ export function ModelPanel({
           config: nextConfig,
         };
         if (!valid) return updated;
-        if (set.mode !== "auto" || set.userModified) {
-          // Hand-placed panels keep their positions, but azimuth is a
-          // set-level facing: rotate the stored panels in place so the
-          // slider visibly turns them without moving or deleting any.
-          if (rest.azimuthDeg !== undefined && updated.panels.length > 0) {
-            const rotation = panelRotationForAzimuth(nextConfig.azimuthDeg);
-            return { ...updated, panels: updated.panels.map((x, i) => ({ ...x, index: i, rotationDeg: rotation })) };
+
+        // When azimuthDeg changes: rotate existing placed panels around their collective centroid
+        // in-place without triggering repacking, regenerating, adding or deleting panels!
+        // Repacking must only occur on explicit Auto Place.
+        if (rest.azimuthDeg !== undefined && updated.panels.length > 0) {
+          const rotation = panelRotationForAzimuth(nextConfig.azimuthDeg);
+          const oldRotation = updated.panels[0].rotationDeg;
+          const deltaDeg = rotation - oldRotation;
+          const deltaRad = (deltaDeg * Math.PI) / 180;
+          const cos = Math.cos(deltaRad);
+          const sin = Math.sin(deltaRad);
+
+          // Calculate centroid of current panels
+          let sumX = 0;
+          let sumY = 0;
+          for (const p of updated.panels) {
+            sumX += p.x;
+            sumY += p.y;
           }
+          const cx = sumX / updated.panels.length;
+          const cy = sumY / updated.panels.length;
+
+          // Rotate panel centers around centroid and update panel rotation angle
+          const rotatedPanels = updated.panels.map((p, i) => {
+            const dx = p.x - cx;
+            const dy = p.y - cy;
+            const nx = cx + dx * cos - dy * sin;
+            const ny = cy + dx * sin + dy * cos;
+            return {
+              ...p,
+              index: i,
+              x: nx,
+              y: ny,
+              rotationDeg: rotation,
+            };
+          });
+          return { ...updated, panels: rotatedPanels };
+        }
+
+        if (set.mode !== "auto" || set.userModified) {
           return updated;
         }
         const result = placePanels({ terrace: usableRing, obstacles, config: nextConfig });
@@ -1336,19 +1385,17 @@ export function ModelPanel({
         )}
       </div>
 
-      {/* Viewport hint + camera/design-mode actions: the help text keeps its
-          own flexible lane while the buttons stack vertically in a fixed
-          action group, so the two never compete for horizontal space. */}
-      <div className={`viewer-footer${designMode ? " viewer-footer--expanded" : ""}`} style={{ marginBottom: "var(--space-3)" }}>
-        <p className="viewer-help">
-          <RotateCcw size={14} strokeWidth={1.75} aria-hidden="true" />
-          <span>
-            {obstacleMode !== "idle"
-              ? "Click the roof to position the footprint. Drag to rotate. Scroll or pinch to zoom."
-              : "Drag to rotate. Scroll or pinch to zoom. Click an obstacle to select it."}
-          </span>
-        </p>
-        {!designMode && (
+      {/* Viewport hint + camera/design-mode actions */}
+      {!designMode && (
+        <div className="viewer-footer" style={{ marginBottom: "var(--space-3)" }}>
+          <p className="viewer-help">
+            <RotateCcw size={14} strokeWidth={1.75} aria-hidden="true" />
+            <span>
+              {obstacleMode !== "idle"
+                ? "Click the roof to position the footprint. Drag to rotate. Scroll or pinch to zoom."
+                : "Drag to rotate. Scroll or pinch to zoom. Click an obstacle to select it."}
+            </span>
+          </p>
           <div className="viewer-actions">
             <button
               type="button"
@@ -1376,8 +1423,8 @@ export function ModelPanel({
               {xray ? "Solid view" : "X-ray"}
             </button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
         </div>
         <div className="design-side">

@@ -90,28 +90,57 @@ export const ShadingAnalysisSection: React.FC<ShadingAnalysisSectionProps> = ({
           </button>
         </div>
 
-        {/* Legend */}
-        <div
-          className="shading-legend"
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(3, 1fr)",
-            gap: "var(--space-1)",
-            fontSize: "0.72rem",
-            marginTop: "6px",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
-            <span style={{ width: 10, height: 10, borderRadius: 2, background: "#28a745", flexShrink: 0 }} />
-            <span>&lt;3.5% Loss ({shadingResult.severityCounts.none})</span>
+        {/* Continuous Heatmap Legend */}
+        <div style={{ marginTop: "10px" }}>
+          <div
+            style={{
+              height: 10,
+              borderRadius: 5,
+              background: "linear-gradient(to right, #1d4ed8 0%, #06b6d4 25%, #eab308 50%, #f97316 75%, #ef4444 100%)",
+              boxShadow: "inset 0 1px 2px rgba(0,0,0,0.3)",
+              marginBottom: 4,
+            }}
+            title="Continuous annual loss heatmap: 0% (deep blue) to >=20% (crimson red)"
+          />
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              fontSize: "0.68rem",
+              color: "var(--color-text-subtle, #94a3b8)",
+              marginBottom: 8,
+            }}
+          >
+            <span>0% loss</span>
+            <span>5% (cyan)</span>
+            <span>10% (yellow)</span>
+            <span>15% (orange)</span>
+            <span>&ge;20% (red)</span>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
-            <span style={{ width: 10, height: 10, borderRadius: 2, background: "#e5a93c", flexShrink: 0 }} />
-            <span>3.5–12% ({shadingResult.severityCounts.moderate})</span>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
-            <span style={{ width: 10, height: 10, borderRadius: 2, background: "#d94b4b", flexShrink: 0 }} />
-            <span>&gt;12% Loss ({shadingResult.severityCounts.severe})</span>
+
+          <div
+            className="shading-legend"
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(3, 1fr)",
+              gap: "var(--space-1)",
+              fontSize: "0.72rem",
+              paddingTop: 6,
+              borderTop: "1px solid rgba(255, 255, 255, 0.06)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "5px" }} title="Low shading (<3.5%)">
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#1d4ed8", flexShrink: 0, display: "inline-block" }} />
+              <span>&lt;3.5% ({shadingResult.severityCounts.none})</span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: "5px" }} title="Moderate shading (3.5%–12%)">
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: "#06b6d4", flexShrink: 0, display: "inline-block" }} />
+              <span>3.5–12% ({shadingResult.severityCounts.moderate})</span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: "5px" }} title="Severe loss (>12%)">
+              <span style={{ width: 8, height: 8, transform: "rotate(45deg)", background: "#ef4444", flexShrink: 0, display: "inline-block" }} />
+              <span>&gt;12% ({shadingResult.severityCounts.severe})</span>
+            </div>
           </div>
         </div>
       </div>
@@ -325,6 +354,10 @@ export const ShadingAnalysisSection: React.FC<ShadingAnalysisSectionProps> = ({
                       <span style={{ fontWeight: 700, color: cand.annualImprovementKwh > 0 ? "#28a745" : "inherit" }}>
                         {cand.annualImprovementKwh > 0 ? `+${cand.annualImprovementKwh} kWh/yr` : "Equivalent yield"}
                       </span>
+                    </div>
+                    <div style={{ display: "flex", gap: "10px", fontSize: "0.72rem", color: "var(--color-primary, #38bdf8)", fontWeight: 500, marginBottom: "4px" }}>
+                      <span>Capacity: {cand.installedCapacityKwp} kWp {cand.additionalCapacityKwp > 0 ? `(+${cand.additionalCapacityKwp} kW)` : `(${cand.panels.length} panels)`}</span>
+                      <span>Output: {cand.annualProductionKwh.toLocaleString()} kWh/yr</span>
                     </div>
                     <p style={{ margin: "0 0 6px 0", color: "var(--color-text-subtle)", fontSize: "0.72rem" }}>
                       {cand.description}

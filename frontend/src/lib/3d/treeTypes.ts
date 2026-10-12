@@ -268,7 +268,28 @@ export function polygonsOverlap(a: Point2[], b: Point2[]): boolean {
 }
 
 /**
+ * Estimated collision radius of the tree trunk/base in metres.
+ * Trunks are slender (0.15m to 0.35m radius depending on species).
+ */
+export function treeTrunkRadius(type: TreeType): number {
+  switch (type) {
+    case "broadleaf":
+      return 0.28;
+    case "conifer":
+      return 0.22;
+    case "small-ornamental":
+      return 0.16;
+    default:
+      return 0.22;
+  }
+}
+
+/**
  * Validate a tree footprint against the terrace and existing trees.
+ * Requirements:
+ * - Trees may be placed immediately beside exterior building walls (zero clearance contact).
+ * - The trunk/base must never penetrate the interior of the building footprint.
+ * - The canopy may touch or overhang the exterior wall, but trunk position must remain outside.
  * Returns { valid: true } or { valid: false; error: string }.
  */
 export function validateTree(
@@ -288,13 +309,24 @@ export function validateTree(
     return { valid: false, error: `Canopy width must be between ${MIN_TREE_CANOPY_WIDTH_M} m and ${MAX_TREE_CANOPY_WIDTH_M} m` };
   }
 
-  // 3. Tree must be placed on the ground outside the building footprint
-  const footprint = treeFootprint(tree);
-  if (pointInPolygon(tree.position, terrace) || polygonsOverlap(footprint, terrace)) {
-    return { valid: false, error: "Tree must be placed on the ground outside the building footprint" };
+  // 3. Tree trunk/base must be placed on the ground outside the building footprint.
+  // The trunk base may touch the exterior wall boundary (zero clearance), but its center
+  // and trunk radius must not penetrate into the building interior.
+  const distToWall = distanceToRing(tree.position, terrace);
+  const isInsideBuilding = pointInPolygon(tree.position, terrace) && distToWall > 1e-4;
+
+  const trunkR = treeTrunkRadius(tree.type);
+  // Ensure the trunk center remains outside the building footprint
+  if (isInsideBuilding) {
+    return { valid: false, error: "Tree trunk must be placed on the ground outside the building footprint" };
+  }
+  // If the tree center is outside, verify trunk center distance to wall permits zero clearance (distToWall >= 0)
+  if (distToWall < 0 && trunkR > 0) {
+    return { valid: false, error: "Tree trunk intersects building interior" };
   }
 
-  // 4. No overlap with other trees
+  // 4. Overlap with other trees (canopy spacing check between trees)
+  const footprint = treeFootprint(tree);
   for (const other of others) {
     if (other.id === tree.id) continue;
     const otherFootprint = treeFootprint(other);

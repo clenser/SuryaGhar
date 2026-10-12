@@ -4270,10 +4270,10 @@
   .workspace.design-mode .stage-3d-viewport,
   .workspace.design-mode .design-view .stage-3d-viewport {
     flex: 1 1 0;
-    height: auto;
+    height: 100%;
     min-height: 0;
     aspect-ratio: auto;
-    margin-bottom: var(--space-2);
+    margin-bottom: 0;
     position: relative;
     overflow: hidden;
   }

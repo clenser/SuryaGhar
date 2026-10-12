@@ -80,6 +80,73 @@ const FRAME_W_M = 0.03;
 const CELLS_ACROSS = 6;
 const CELLS_ALONG = 12;
 
+/**
+ * Shading heatmap metrics per panel.
+ * Driven by the analytical annual loss percent (0 to 100).
+ */
+export interface PanelShadingMetric {
+  annualLossPercent: number;
+  severity?: "none" | "moderate" | "severe";
+}
+
+/**
+ * Continuous shading heatmap color function.
+ * 
+ * Maps annual shading loss percent to a continuous perceptually ordered dark/high-contrast gradient:
+ * - Low shading / minimal loss: deep blue (#1d4ed8)
+ * - Moderate shading: cyan / blue-green (#06b6d4)
+ * - Intermediate shading: yellow (#eab308)
+ * - High shading: orange (#f97316)
+ * - Very high / severe hotspot: crimson red (#ef4444)
+ * - undefined or negative: neutral muted slate (#64748b)
+ */
+export function getShadingHeatmapColor(lossPercent: number | undefined): THREE.Color {
+  if (lossPercent === undefined || lossPercent === null || !Number.isFinite(lossPercent) || lossPercent < 0) {
+    return new THREE.Color(0x64748b);
+  }
+  // Clamp between 0% and 20% for the visual scale
+  const clamped = Math.max(0, Math.min(lossPercent, 20));
+  const t = clamped / 20; // 0 to 1
+
+  // Color stops in sRGB:
+  // t = 0.00: #1d4ed8 (29, 78, 216)   - deep blue (low shading)
+  // t = 0.25: #06b6d4 (6, 182, 212)   - cyan / blue-green (moderate)
+  // t = 0.50: #eab308 (234, 179, 8)   - yellow (intermediate)
+  // t = 0.75: #f97316 (249, 115, 22)  - orange (high)
+  // t = 1.00: #ef4444 (239, 68, 68)   - crimson red (severe hotspot)
+  const c = new THREE.Color();
+  if (t <= 0.25) {
+    const factor = t / 0.25;
+    c.setRGB(
+      (29 + (6 - 29) * factor) / 255,
+      (78 + (182 - 78) * factor) / 255,
+      (216 + (212 - 216) * factor) / 255,
+    );
+  } else if (t <= 0.50) {
+    const factor = (t - 0.25) / 0.25;
+    c.setRGB(
+      (6 + (234 - 6) * factor) / 255,
+      (182 + (179 - 182) * factor) / 255,
+      (212 + (8 - 212) * factor) / 255,
+    );
+  } else if (t <= 0.75) {
+    const factor = (t - 0.50) / 0.25;
+    c.setRGB(
+      (234 + (249 - 234) * factor) / 255,
+      (179 + (115 - 179) * factor) / 255,
+      (8 + (22 - 8) * factor) / 255,
+    );
+  } else {
+    const factor = Math.min(1, (t - 0.75) / 0.25);
+    c.setRGB(
+      (249 + (239 - 249) * factor) / 255,
+      (115 + (68 - 115) * factor) / 255,
+      (22 + (68 - 22) * factor) / 255,
+    );
+  }
+  return c;
+}
+
 function paint(geometry: THREE.BufferGeometry, color: number): THREE.BufferGeometry {
   const c = new THREE.Color(color);
   const count = geometry.attributes.position.count;
@@ -334,8 +401,61 @@ export function createPanelUnitGeometry(
 }
 
 /**
+ * Build a thin coplanar face geometry that covers the active photovoltaic
+ * module face (recessed inside the frame) and tracks the exact panel tilt and lift.
+ *
+ * This geometry is used for the edge-to-edge heatmap overlay mesh.
+ * It is positioned +0.003m above the glass face in the tilted frame so that
+ * the continuous heatmap completely fills the PV cell area without z-fighting,
+ * while leaving the aluminium frame and support legs clearly visible.
+ */
+export function createPanelHeatmapFaceGeometry(
+  panelTypeId: PanelTypeId,
+  mounting: MountingType,
+  tiltDeg: number,
+  mountHeightM: number = DEFAULT_MOUNT_HEIGHT_M,
+): THREE.BufferGeometry {
+  const type = panelTypeDefinition(panelTypeId);
+  const w = type.widthM;
+  const l = type.lengthM;
+  const t = type.thicknessM;
+  const tilt = (tiltDeg * Math.PI) / 180;
+  const mountHeight = Number.isFinite(mountHeightM) && mountHeightM > 0
+    ? mountHeightM
+    : DEFAULT_MOUNT_HEIGHT_M;
+
+  // Active module face rectangle (inside the frame borders)
+  const faceW = Math.max(w - 2 * FRAME_W_M, 0.01);
+  const faceL = Math.max(l - 2 * FRAME_W_M, 0.01);
+
+  // Box for the face overlay with tiny thickness (0.003m), placed slightly above glass
+  const faceBox = new THREE.BoxGeometry(faceW, faceL, 0.003);
+  faceBox.translate(0, 0, t * 0.35 + 0.002);
+
+  // Tilt about X to match the panel assembly tilt
+  const tiltMatrix = new THREE.Matrix4().makeRotationX(-tilt);
+  faceBox.applyMatrix4(tiltMatrix);
+
+  // World-vertical elevation matching the panel mount
+  const sin = Math.sin(tilt);
+  const lowEdgeCenter = t / 2 + (l / 2) * sin;
+
+  let centerH = ROOF_STANDOFF_M + mountHeight + (l / 2) * sin;
+  if (mounting === "tilted" || mounting === "shed") {
+    centerH = ROOF_STANDOFF_M + mountHeight + lowEdgeCenter;
+  }
+  const lift = new THREE.Matrix4().makeTranslation(0, 0, centerH);
+  faceBox.applyMatrix4(lift);
+
+  faceBox.computeVertexNormals();
+  faceBox.computeBoundingSphere();
+  return faceBox;
+}
+
+/**
  * Build the panel layer for the current application state: one group holding
- * a single InstancedMesh (empty layouts return an empty group).
+ * the base InstancedMesh (panels + frame + mounting) and, when shading visualization
+ * is enabled, a dedicated InstancedMesh full-face heatmap overlay covering the PV surface.
  */
 export function createPanelGroup(
   panels: PlacedPanel[],
@@ -347,6 +467,7 @@ export function createPanelGroup(
   legRows = 2,
   legCols = 2,
   shadingSeverities?: Array<"none" | "moderate" | "severe">,
+  shadingMetrics?: Array<PanelShadingMetric | null | undefined>,
 ): THREE.Group {
   const group = new THREE.Group();
   group.name = "SolarPanels";
@@ -367,7 +488,6 @@ export function createPanelGroup(
   const matrix = new THREE.Matrix4();
   const quaternion = new THREE.Quaternion();
   const scale = new THREE.Vector3(1, 1, 1);
-  const color = new THREE.Color();
 
   for (let i = 0; i < panels.length; i++) {
     const panel = panels[i];
@@ -377,24 +497,67 @@ export function createPanelGroup(
     );
     matrix.compose(new THREE.Vector3(panel.x, panel.y, roofZ), quaternion, scale);
     mesh.setMatrixAt(i, matrix);
-
-    if (shadingSeverities && shadingSeverities[i]) {
-      const sev = shadingSeverities[i];
-      if (sev === "severe") {
-        color.setHex(0xd94b4b); // Red: severe shading
-      } else if (sev === "moderate") {
-        color.setHex(0xe5a93c); // Amber: moderate shading
-      } else {
-        color.setHex(0x28a745); // Green: little or no shading
-      }
-      mesh.setColorAt(i, color);
-    }
   }
   mesh.instanceMatrix.needsUpdate = true;
-  if (shadingSeverities && mesh.instanceColor) {
-    mesh.instanceColor.needsUpdate = true;
-  }
   group.add(mesh);
+
+  // When shading visualization is active (either via shadingMetrics or legacy shadingSeverities),
+  // render a dedicated instanced overlay that completely covers the PV module face edge-to-edge
+  // with the continuous heatmap gradient.
+  const hasShadingData = Boolean(
+    (shadingMetrics && shadingMetrics.length > 0) ||
+    (shadingSeverities && shadingSeverities.length > 0)
+  );
+
+  if (hasShadingData) {
+    const heatmapGeom = createPanelHeatmapFaceGeometry(panelTypeId, mounting, tiltDeg, mountHeightM);
+    const heatmapMat = new THREE.MeshStandardMaterial({
+      roughness: 0.70,
+      metalness: 0.0,
+      transparent: true,
+      opacity: 0.90,
+      depthWrite: true,
+    });
+    const heatmapMesh = new THREE.InstancedMesh(heatmapGeom, heatmapMat, panels.length);
+    heatmapMesh.name = "SolarPanelHeatmapInstances";
+    heatmapMesh.castShadow = false;
+    heatmapMesh.receiveShadow = true;
+    heatmapMesh.frustumCulled = false;
+
+    for (let i = 0; i < panels.length; i++) {
+      const panel = panels[i];
+      quaternion.setFromAxisAngle(
+        new THREE.Vector3(0, 0, 1),
+        (panel.rotationDeg * Math.PI) / 180,
+      );
+      matrix.compose(new THREE.Vector3(panel.x, panel.y, roofZ), quaternion, scale);
+      heatmapMesh.setMatrixAt(i, matrix);
+
+      let color: THREE.Color;
+      const metric = shadingMetrics ? shadingMetrics[i] : undefined;
+      if (metric && Number.isFinite(metric.annualLossPercent)) {
+        color = getShadingHeatmapColor(metric.annualLossPercent);
+      } else if (shadingSeverities && shadingSeverities[i]) {
+        const sev = shadingSeverities[i];
+        if (sev === "severe") {
+          color = getShadingHeatmapColor(15);
+        } else if (sev === "moderate") {
+          color = getShadingHeatmapColor(7.5);
+        } else {
+          color = getShadingHeatmapColor(1.0);
+        }
+      } else {
+        color = new THREE.Color(0x64748b);
+      }
+      heatmapMesh.setColorAt(i, color);
+    }
+    heatmapMesh.instanceMatrix.needsUpdate = true;
+    if (heatmapMesh.instanceColor) {
+      heatmapMesh.instanceColor.needsUpdate = true;
+    }
+    group.add(heatmapMesh);
+  }
+
   return group;
 }
 

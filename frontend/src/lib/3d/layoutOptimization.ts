@@ -22,7 +22,7 @@
 import type { Obstacle, Point2 } from "./obstacles";
 import type { Tree } from "./treeTypes";
 import type { PanelLayoutConfig } from "./panels";
-import { effectiveRowSpacingM } from "./panels";
+import { effectiveRowSpacingM, panelTypeDefinition } from "./panels";
 import { validatePanelPlacement, type PlacementContext, type PlacedPanelPeer, type PlacedSetPanel } from "./panelSets";
 import { placePanels } from "./panelPlacement";
 import { runAnnualShadingAnalysis, type AnnualShadingResult } from "./shadingAnalysis";
@@ -33,6 +33,8 @@ export interface OptimizationCandidate {
   description: string;
   panels: PlacedSetPanel[];
   config: PanelLayoutConfig;
+  installedCapacityKwp: number;
+  additionalCapacityKwp: number;
   annualProductionKwh: number;
   annualImprovementKwh: number;
   annualImprovementPercent: number;
@@ -46,6 +48,7 @@ export interface OptimizationResult {
   currentBaseline: {
     panels: PlacedSetPanel[];
     config: PanelLayoutConfig;
+    installedCapacityKwp: number;
     annualProductionKwh: number;
     severeHotspotsCount: number;
     shadingSummary: AnnualShadingResult;
@@ -140,12 +143,15 @@ export function optimizeSolarLayout(params: {
 
   const baselineKwh = baselineShading.annualShadedKwh;
   const baselineSevere = baselineShading.severityCounts.severe;
+  const baselineWatts = panelTypeDefinition(currentConfig.panelTypeId).watts;
+  const baselineKwp = Math.round(((targetCount * baselineWatts) / 1000) * 100) / 100;
 
   if (targetCount === 0) {
     return {
       currentBaseline: {
         panels: currentPanels,
         config: currentConfig,
+        installedCapacityKwp: 0,
         annualProductionKwh: 0,
         severeHotspotsCount: 0,
         shadingSummary: baselineShading,
@@ -309,12 +315,18 @@ export function optimizeSolarLayout(params: {
     const diffPct = baselineKwh > 0 ? (diffKwh / baselineKwh) * 100 : 0;
     const severeCount = shading.severityCounts.severe;
 
+    const candWatts = panelTypeDefinition(cand.config.panelTypeId).watts;
+    const candKwp = Math.round(((cand.panels.length * candWatts) / 1000) * 100) / 100;
+    const addKwp = Math.round((candKwp - baselineKwp) * 100) / 100;
+
     evaluatedCandidates.push({
       id: `candidate-${i + 1}`,
       title: cand.title,
       description: cand.description,
       panels: cand.panels,
       config: cand.config,
+      installedCapacityKwp: candKwp,
+      additionalCapacityKwp: addKwp,
       annualProductionKwh: prodKwh,
       annualImprovementKwh: Math.round(diffKwh),
       annualImprovementPercent: Math.round(diffPct * 10) / 10,
@@ -355,6 +367,7 @@ export function optimizeSolarLayout(params: {
     currentBaseline: {
       panels: currentPanels,
       config: currentConfig,
+      installedCapacityKwp: baselineKwp,
       annualProductionKwh: baselineKwh,
       severeHotspotsCount: baselineSevere,
       shadingSummary: baselineShading,

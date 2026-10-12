@@ -100,7 +100,7 @@ describe("createPanelGroup", () => {
   it("renders every panel as one InstancedMesh with record-derived transforms", () => {
     const items = panels(7);
     const group = createPanelGroup(items, "panel-550w", "flat", 15, 10.5);
-    expect(group.children).toHaveLength(1); // one draw call for the whole layout
+    expect(group.children).toHaveLength(1); // one draw call for the base layout
 
     const mesh = group.children[0] as THREE.InstancedMesh;
     expect(mesh.isInstancedMesh).toBe(true);
@@ -120,6 +120,47 @@ describe("createPanelGroup", () => {
     const lengthAxis = new THREE.Vector3(0, 1, 0).applyQuaternion(quaternion);
     expect(lengthAxis.x).toBeCloseTo(0, 6);
     expect(lengthAxis.y).toBeCloseTo(-1, 6);
+    disposePanelGroup(group);
+  });
+
+  it("renders a full-face heatmap overlay when shading metrics are supplied", () => {
+    const items = panels(4);
+    const metrics = [
+      { annualLossPercent: 1.2, severity: "none" as const },
+      { annualLossPercent: 6.5, severity: "moderate" as const },
+      { annualLossPercent: 14.8, severity: "severe" as const },
+      { annualLossPercent: 22.0, severity: "severe" as const },
+    ];
+    const group = createPanelGroup(items, "panel-550w", "flat", 15, 10.5, 0.4, 2, 2, undefined, metrics);
+    // Base mesh + Heatmap overlay mesh
+    expect(group.children).toHaveLength(2);
+
+    const baseMesh = group.children[0] as THREE.InstancedMesh;
+    const heatmapMesh = group.children[1] as THREE.InstancedMesh;
+    expect(baseMesh.name).toBe("SolarPanelInstances");
+    expect(heatmapMesh.name).toBe("SolarPanelHeatmapInstances");
+    expect(heatmapMesh.count).toBe(4);
+
+    // Verify per-instance colors reflect the continuous gradient
+    const color0 = new THREE.Color();
+    const color2 = new THREE.Color();
+    heatmapMesh.getColorAt(0, color0);
+    heatmapMesh.getColorAt(2, color2);
+
+    // Low shading (1.2% loss) -> deep blue (#1d4ed8) -> high blue component
+    expect(color0.b).toBeGreaterThan(0.7);
+    // High shading (14.8% loss) -> orange/crimson red -> high red component
+    expect(color2.r).toBeGreaterThan(0.7);
+
+    disposePanelGroup(group);
+  });
+
+  it("omits the heatmap overlay when shading is toggled off", () => {
+    const items = panels(4);
+    const group = createPanelGroup(items, "panel-550w", "flat", 15, 10.5);
+    expect(group.children).toHaveLength(1);
+    expect(group.children[0].name).toBe("SolarPanelInstances");
+    disposePanelGroup(group);
   });
 });
 

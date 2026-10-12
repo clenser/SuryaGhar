@@ -34,7 +34,7 @@ import {
 } from "../../lib/3d/scene";
 import { createBuildingMeshes, disposeBuildingMeshes, createDesignBuildingMaterial, createDesignRoofMaterial, setShellTransparent, type BuildingMeshes } from "../../lib/3d/geometry";
 import { applySunToScene, applyWeatherPreset, shadowCameraExtent } from "../../lib/3d/lighting";
-import type { Obstacle } from "../../lib/3d/obstacles";
+import { pointInPolygon, type Obstacle } from "../../lib/3d/obstacles";
 import type { Tree } from "../../lib/3d/treeTypes";
 import { createPanelGroup, createPanelUnitGeometry, disposePanelGroup } from "../../lib/3d/panelMeshes";
 import { type PlacedPanel } from "../../lib/3d/panelPlacement";
@@ -166,6 +166,7 @@ export interface Site3DViewerProps {
     config: PanelLayoutConfig;
     panels: PlacedPanel[];
     shadingSeverities?: Array<"none" | "moderate" | "severe">;
+    shadingMetrics?: Array<{ annualLossPercent: number; severity?: "none" | "moderate" | "severe" } | null | undefined>;
   }> | null;
   /**
    * Manual panel placement session: while true, a press-and-release click on
@@ -317,6 +318,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       dropCount: number;
       span: number;
     } | null>(null);
+    const cloudShadowPlaneRef = useRef<THREE.Mesh | null>(null);
     const weatherPresetRef = useRef<WeatherPreset>(weatherPreset);
     weatherPresetRef.current = weatherPreset;
 
@@ -617,16 +619,16 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
               const r = data[i] / 255;
               const g = data[i + 1] / 255;
               const b = data[i + 2] / 255;
-              // Lift the lower end of each channel toward white (blacks stay
-              // anchored so contrast is preserved), then separate the channels
-              // slightly for saturation.
-              const lr = 1 - (1 - r) * 0.7;
-              const lg = 1 - (1 - g) * 0.7;
-              const lb = 1 - (1 - b) * 0.7;
-              const mean = (lr + lg + lb) / 3;
-              data[i] = round(mean + (lr - mean) * 1.14);
-              data[i + 1] = round(mean + (lg - mean) * 1.14);
-              data[i + 2] = round(mean + (lb - mean) * 1.14);
+              // Contrast enhancement with S-curve curve preserving deep blacks
+              // and rich asphalt/roads while boosting midtones and foliage saturation cleanly.
+              const contrast = 1.18;
+              const cr = Math.min(1, Math.max(0, (r - 0.5) * contrast + 0.5));
+              const cg = Math.min(1, Math.max(0, (g - 0.5) * contrast + 0.5));
+              const cb = Math.min(1, Math.max(0, (b - 0.5) * contrast + 0.5));
+              const mean = (cr + cg + cb) / 3;
+              data[i] = round(mean + (cr - mean) * 1.22);
+              data[i + 1] = round(mean + (cg - mean) * 1.22);
+              data[i + 2] = round(mean + (cb - mean) * 1.22);
             }
             gctx.putImageData(imageData, 0, 0);
           }
@@ -640,11 +642,8 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           new THREE.PlaneGeometry(ground.sizeM.width, ground.sizeM.height),
           new THREE.MeshStandardMaterial({
             map: texture,
-            // The ground receives no direct sunlight in this scene, only
-            // ambient + hemisphere fill. Keep it near-white so the sunlit
-            // building is not the only bright thing on the plane.
-            color: 0xffffff,
-            roughness: 0.92,
+            color: 0xf0f2f5,
+            roughness: 0.88,
             metalness: 0,
           }),
         );
@@ -728,10 +727,98 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       applyTreeSelection(treeGroupRef.current, selectedTreeId);
     }, [selectedTreeId, trees, isInitialized]);
 
-    // Falling rain streaks visualization in Rainy preset.
+    // Weather effects:
+    // 1. Falling rain streaks & wet surface response in Rainy preset.
+    // 2. Soft drifting cloud shadows across ground and building in Cloudy preset.
     useEffect(() => {
       if (!isInitialized || !sceneRef.current) return;
       const scene = sceneRef.current;
+
+      // Handle wet surface response on building roof & panel materials
+      const isRainy = weatherPreset === "rainy";
+      if (meshesRef.current) {
+        const mat = meshesRef.current.building.material;
+        if (Array.isArray(mat) && mat[0]) {
+          const roofMat = mat[0] as THREE.MeshStandardMaterial;
+          if (roofMat && roofMat.isMeshStandardMaterial) {
+            roofMat.roughness = isRainy ? 0.22 : 0.5;
+            roofMat.metalness = isRainy ? 0.08 : 0.0;
+          }
+        }
+      }
+      for (const group of panelGroupRef.current) {
+        group.traverse((obj) => {
+          if ((obj as THREE.Mesh).isMesh) {
+            const m = (obj as THREE.Mesh).material as THREE.MeshStandardMaterial;
+            if (m && m.isMeshStandardMaterial) {
+              m.roughness = isRainy ? 0.16 : 0.28;
+            }
+          }
+        });
+      }
+
+      // Cloudy mode: moving soft cloud shadow plane hovering above the site
+      if (weatherPreset === "cloudy") {
+        if (!cloudShadowPlaneRef.current) {
+          const maxCoord = localCoords.vertices.reduce((m, v) => Math.max(m, Math.abs(v.x), Math.abs(v.y)), 20);
+          const planeSpan = Math.max(120, maxCoord * 4.5);
+          // Procedural soft cloud noise canvas
+          const cCanvas = document.createElement("canvas");
+          cCanvas.width = 256;
+          cCanvas.height = 256;
+          const cctx = cCanvas.getContext("2d");
+          if (cctx) {
+            cctx.fillStyle = "#ffffff";
+            cctx.fillRect(0, 0, 256, 256);
+            // Draw soft drifting cloud blobs
+            const grad = cctx.createRadialGradient(128, 128, 10, 128, 128, 120);
+            grad.addColorStop(0, "rgba(50, 70, 90, 0.45)");
+            grad.addColorStop(0.5, "rgba(70, 90, 110, 0.28)");
+            grad.addColorStop(1, "rgba(255, 255, 255, 0)");
+            cctx.fillStyle = grad;
+            cctx.beginPath();
+            cctx.arc(128, 128, 120, 0, Math.PI * 2);
+            cctx.fill();
+
+            const grad2 = cctx.createRadialGradient(64, 64, 5, 64, 64, 60);
+            grad2.addColorStop(0, "rgba(40, 60, 80, 0.35)");
+            grad2.addColorStop(1, "rgba(255, 255, 255, 0)");
+            cctx.fillStyle = grad2;
+            cctx.beginPath();
+            cctx.arc(64, 64, 60, 0, Math.PI * 2);
+            cctx.fill();
+          }
+
+          const cTex = new THREE.CanvasTexture(cCanvas);
+          cTex.wrapS = THREE.RepeatWrapping;
+          cTex.wrapT = THREE.RepeatWrapping;
+          cTex.repeat.set(2, 2);
+
+          const cMat = new THREE.MeshBasicMaterial({
+            map: cTex,
+            transparent: true,
+            opacity: 0.38,
+            blending: THREE.MultiplyBlending,
+            depthWrite: false,
+          });
+
+          const cMesh = new THREE.Mesh(new THREE.PlaneGeometry(planeSpan, planeSpan), cMat);
+          cMesh.position.set(0, 0, localCoords.height + 0.15);
+          cMesh.raycast = () => {};
+          cMesh.name = "CloudShadowPlane";
+          scene.add(cMesh);
+          cloudShadowPlaneRef.current = cMesh;
+        }
+      } else {
+        if (cloudShadowPlaneRef.current) {
+          scene.remove(cloudShadowPlaneRef.current);
+          cloudShadowPlaneRef.current.geometry.dispose();
+          const mat = cloudShadowPlaneRef.current.material as THREE.MeshBasicMaterial;
+          mat.map?.dispose();
+          mat.dispose();
+          cloudShadowPlaneRef.current = null;
+        }
+      }
 
       if (weatherPreset !== "rainy") {
         if (rainRef.current) {
@@ -753,10 +840,15 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       const speeds = new Float32Array(dropCount);
       const lengths = new Float32Array(dropCount);
 
+      const buildingRing = localCoords.vertices.map((v) => ({ x: v.x, y: v.y }));
+      const roofZ = localCoords.height;
+
       for (let i = 0; i < dropCount; i++) {
         const x = (Math.random() - 0.5) * span;
         const y = (Math.random() - 0.5) * span;
-        const z = Math.random() * maxHeight;
+        const isOverBuilding = pointInPolygon({ x, y }, buildingRing);
+        const minZ = isOverBuilding ? roofZ : 0;
+        const z = minZ + Math.random() * (maxHeight - minZ);
         const len = 1.2 + Math.random() * 1.2; // 1.2m to 2.4m streak
         lengths[i] = len;
         speeds[i] = 26 + Math.random() * 12; // 26 - 38 m/s speed
@@ -768,7 +860,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         // Bottom vertex of streak (pointing downward along -Z with slight wind tilt)
         positions[i * 6 + 3] = x - 0.12;
         positions[i * 6 + 4] = y - 0.08;
-        positions[i * 6 + 5] = z - len;
+        positions[i * 6 + 5] = Math.max(minZ, z - len);
       }
 
       const geom = new THREE.BufferGeometry();
@@ -797,6 +889,14 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           rainRef.current.mat.dispose();
           rainRef.current = null;
         }
+        if (cloudShadowPlaneRef.current) {
+          scene.remove(cloudShadowPlaneRef.current);
+          cloudShadowPlaneRef.current.geometry.dispose();
+          const m = cloudShadowPlaneRef.current.material as THREE.MeshBasicMaterial;
+          m.map?.dispose();
+          m.dispose();
+          cloudShadowPlaneRef.current = null;
+        }
       };
     }, [weatherPreset, isInitialized, localCoords.height, localCoords.vertices]);
 
@@ -821,6 +921,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
             layer.config.legRows,
             layer.config.legCols,
             layer.shadingSeverities,
+            layer.shadingMetrics,
           );
           groups.push(group);
           scene.add(group);
@@ -1540,6 +1641,8 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           const { geom, positions, speeds, lengths, maxHeight, dropCount, span } = rainRef.current;
           const windX = -2.2;
           const windY = -1.4;
+          const buildingRing = localCoordsRef.current.vertices.map((v) => ({ x: v.x, y: v.y }));
+          const roofZ = localCoordsRef.current.height;
 
           for (let i = 0; i < dropCount; i++) {
             const idx = i * 6;
@@ -1550,7 +1653,10 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
             let topX = positions[idx + 0] + windX * dt;
             let topY = positions[idx + 1] + windY * dt;
 
-            if (topZ < 0) {
+            const isOverBuilding = pointInPolygon({ x: topX, y: topY }, buildingRing);
+            const minZ = isOverBuilding ? roofZ : 0;
+
+            if (topZ < minZ) {
               topZ = maxHeight + Math.random() * 4;
               topX = (Math.random() - 0.5) * span;
               topY = (Math.random() - 0.5) * span;
@@ -1563,11 +1669,20 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
             // Slanted bottom along wind vector
             positions[idx + 3] = topX + windX * (len / speed);
             positions[idx + 4] = topY + windY * (len / speed);
-            positions[idx + 5] = topZ - len;
+            positions[idx + 5] = Math.max(minZ, topZ - len);
           }
           geom.attributes.position.needsUpdate = true;
         } else {
           lastRainTime = null;
+        }
+
+        // Drift cloud shadows softly across site if cloudy
+        if (cloudShadowPlaneRef.current) {
+          const cMat = cloudShadowPlaneRef.current.material as THREE.MeshBasicMaterial;
+          if (cMat && cMat.map) {
+            cMat.map.offset.x = (now * 0.00003) % 1;
+            cMat.map.offset.y = (now * 0.000018) % 1;
+          }
         }
 
         rendererRef.current?.render(sceneRef.current!, cameraRef.current!);

@@ -44,24 +44,22 @@ function makeTree(overrides: Partial<Tree> = {}): Tree {
 }
 
 describe("Ground tree validation", () => {
-  it("accepts a tree placed on the ground outside the building terrace", () => {
-    const tree = makeTree({ position: { x: 16, y: 0 } });
+  it("accepts a tree placed on the ground outside the building terrace with a small gap from wall", () => {
+    const tree = makeTree({ position: { x: 12, y: 0 } });
     const result = validateTree(tree, TERRACE, []);
     expect(result.valid).toBe(true);
   });
 
-  it("rejects a tree whose center is inside the building terrace", () => {
-    const tree = makeTree({ position: { x: 0, y: 0 } });
+  it("accepts a tree whose trunk touches the exterior wall with wide canopy overhang", () => {
+    // Wall is at x = 10. Trunk at x = 10.1 touches the wall with canopy width 6m overhanging the wall
+    const tree = makeTree({ position: { x: 10.1, y: 0 }, canopyWidth: 6 });
     const result = validateTree(tree, TERRACE, []);
-    expect(result.valid).toBe(false);
-    if (!result.valid) {
-      expect(result.error).toContain("outside the building footprint");
-    }
+    expect(result.valid).toBe(true);
   });
 
-  it("rejects a tree whose canopy overlaps the building footprint", () => {
-    // Center at 11m east, but canopy width 5m extends into [8.5m, 13.5m], overlapping the 10m wall
-    const tree = makeTree({ position: { x: 11, y: 0 }, canopyWidth: 5 });
+  it("rejects a tree whose trunk is placed inside the building footprint", () => {
+    // Inside building (x = 5 is inside [-10, 10])
+    const tree = makeTree({ position: { x: 5, y: 0 } });
     const result = validateTree(tree, TERRACE, []);
     expect(result.valid).toBe(false);
     if (!result.valid) {
