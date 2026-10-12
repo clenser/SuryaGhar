@@ -10,7 +10,8 @@
  * viewport only renders the result (AGENTS.md §40, §72).
  */
 
-import { RefreshCw, AlertTriangle, Grid3x3, Plus, Copy, Trash2, Wand2, RotateCw } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { RefreshCw, AlertTriangle, Grid3x3, Plus, Copy, Trash2, Wand2, RotateCw, Zap } from "lucide-react";
 import {
   MOUNTING_TYPES,
   PANEL_LEGS_MAX,
@@ -94,6 +95,10 @@ interface SolarPanelSectionProps {
   energy?: EnergySimulation | null;
   /** Display mode: "all" (default), "sets", or "config". */
   displayMode?: "all" | "sets" | "config";
+  /** Whether the animated 3D electricity flow visualization is enabled. */
+  electricityFlowActive?: boolean;
+  /** Toggle the animated 3D electricity flow visualization. */
+  onToggleElectricityFlow?: () => void;
 }
 
 /**
@@ -124,10 +129,45 @@ function SliderNumberField({
   unit: string;
   onChange: (value: number) => void;
 }) {
+  const [localVal, setLocalVal] = useState<number>(value);
+  const rafRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    setLocalVal(value);
+  }, [value]);
+
+  useEffect(() => {
+    return () => {
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+      }
+    };
+  }, []);
+
+  const handleInput = (val: number) => {
+    setLocalVal(val);
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+    }
+    rafRef.current = requestAnimationFrame(() => {
+      onChange(val);
+      rafRef.current = null;
+    });
+  };
+
+  const handleCommit = (val: number) => {
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    setLocalVal(val);
+    onChange(val);
+  };
+
   // Clamp only for the slider thumb position: the number field keeps showing
   // the true value so an out-of-range entry stays visible (and invalid) rather
   // than silently snapping.
-  const thumb = Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : min;
+  const thumb = Number.isFinite(localVal) ? Math.min(max, Math.max(min, localVal)) : min;
   return (
     <div className="field">
       <label htmlFor={id}>{label}</label>
@@ -136,11 +176,11 @@ function SliderNumberField({
           id={id}
           type="number"
           inputMode="decimal"
-          value={value}
+          value={localVal}
           min={min}
           max={max}
           step={step}
-          onChange={(e) => onChange(Number(e.target.value))}
+          onChange={(e) => handleCommit(Number(e.target.value))}
         />
         <span className="height-unit" aria-hidden="true">
           {unit}
@@ -154,7 +194,8 @@ function SliderNumberField({
         min={min}
         max={max}
         step={step}
-        onChange={(e) => onChange(Number(e.target.value))}
+        onInput={(e) => handleInput(Number((e.target as HTMLInputElement).value))}
+        onChange={(e) => handleCommit(Number(e.target.value))}
       />
     </div>
   );
@@ -245,6 +286,8 @@ export function SolarPanelSection({
   warning,
   energy,
   displayMode = "all",
+  electricityFlowActive = false,
+  onToggleElectricityFlow,
 }: SolarPanelSectionProps) {
   const selected = panelTypeDefinition(config.panelTypeId);
   const tiltLabel = config.mounting === "tilted" ? "Roof slope" : "Tilt";
@@ -356,15 +399,29 @@ export function SolarPanelSection({
               </p>
             </div>
             {displayMode === "all" && (
-              <button
-                type="button"
-                className="btn btn--secondary"
-                onClick={onRecalculate}
-                title="Recalculate panel placement from the current settings"
-              >
-                <RefreshCw size={15} strokeWidth={2} aria-hidden="true" />
-                Recalculate
-              </button>
+              <div style={{ display: "flex", gap: "6px" }}>
+                {onToggleElectricityFlow && (
+                  <button
+                    type="button"
+                    className={`btn ${electricityFlowActive ? "btn--primary" : "btn--secondary"}`}
+                    onClick={onToggleElectricityFlow}
+                    aria-pressed={electricityFlowActive}
+                    title="Toggle animated 3D solar electricity flow"
+                  >
+                    <Zap size={14} strokeWidth={2} aria-hidden="true" />
+                    {electricityFlowActive ? "Flow Active" : "Electricity Flow"}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn btn--secondary"
+                  onClick={onRecalculate}
+                  title="Recalculate panel placement from the current settings"
+                >
+                  <RefreshCw size={15} strokeWidth={2} aria-hidden="true" />
+                  Recalculate
+                </button>
+              </div>
             )}
           </div>
 

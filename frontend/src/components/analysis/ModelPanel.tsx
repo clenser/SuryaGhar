@@ -261,6 +261,7 @@ export function ModelPanel({
     obstacles: true,
     trees: true,
     ground: true,
+    electricityFlow: false,
   });
   const handleToggleLayer = (layer: keyof typeof layerVisibility) => {
     setLayerVisibility((prev) => ({ ...prev, [layer]: !prev[layer] }));
@@ -277,6 +278,11 @@ export function ModelPanel({
     if (tool === "trees") {
       setTreePlaceActive((v) => !v);
       setActiveTool((cur) => (cur === "trees" ? "select" : "trees"));
+      return;
+    }
+    if (tool === "flow") {
+      setLayerVisibility((prev) => ({ ...prev, electricityFlow: !prev.electricityFlow }));
+      setActiveTool((cur) => (cur === "flow" ? "select" : "flow"));
       return;
     }
     setActiveTool(tool);
@@ -2184,6 +2190,8 @@ export function ModelPanel({
                   capacityKw={capacityKw}
                   warning={placeWarning ?? activeSetPlacementWarning}
                   energy={energy}
+                  electricityFlowActive={layerVisibility.electricityFlow}
+                  onToggleElectricityFlow={() => handleToggleLayer("electricityFlow")}
                 />
               </>
             ) : (

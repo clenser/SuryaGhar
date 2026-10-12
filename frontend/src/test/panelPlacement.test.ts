@@ -378,5 +378,44 @@ describe("placePanels", () => {
     expect(northPanels.length).toBeGreaterThan(0);
     expect(southPanels.length).toBeGreaterThan(0);
   });
+
+  it("packs tapered trapezoidal and irregular roofs into narrower margins", () => {
+    // Right trapezoid narrowing along the positive Y axis:
+    // Base width: X from -15 to +15 (30m wide) at Y = -10
+    // Top width: X from -15 to +5 (20m wide) at Y = +10
+    const taperedTerrace: Point2[] = [
+      { x: -15, y: -10 },
+      { x: 15, y: -10 },
+      { x: 5, y: 10 },
+      { x: -15, y: 10 },
+    ];
+    const config = { ...DEFAULT_PANEL_CONFIG, setRows: 1, setCols: 1, setbackM: 0.5 };
+    const { panels, reason } = placePanels({
+      terrace: taperedTerrace,
+      obstacles: [],
+      config,
+    });
+    expect(reason).toBeNull();
+    expect(panels.length).toBeGreaterThan(30);
+
+    // Verify all panels are strictly within setback
+    const type = panelTypeDefinition(config.panelTypeId);
+    for (const p of panels) {
+      const inset = rectangleCorners(
+        p.x,
+        p.y,
+        type.widthM + 2 * config.setbackM,
+        type.lengthM + 2 * config.setbackM,
+        p.rotationDeg,
+      );
+      expect(footprintInsidePolygon(inset, taperedTerrace)).toBe(true);
+    }
+
+    // Verify panels are placed in both the narrow top section and wide bottom section
+    const topSection = panels.filter((p) => p.y > 5);
+    const bottomSection = panels.filter((p) => p.y < -5);
+    expect(topSection.length).toBeGreaterThan(5);
+    expect(bottomSection.length).toBeGreaterThan(10);
+  });
 });
 

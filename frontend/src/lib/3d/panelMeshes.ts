@@ -445,9 +445,9 @@ export function createPanelHeatmapFaceGeometry(
   const faceW = Math.max(w - 2 * FRAME_W_M, 0.01);
   const faceL = Math.max(l - 2 * FRAME_W_M, 0.01);
 
-  // Box for the face overlay with tiny thickness (0.003m), placed slightly above glass
-  const faceBox = new THREE.BoxGeometry(faceW, faceL, 0.003);
-  faceBox.translate(0, 0, t * 0.35 + 0.002);
+  // Thin box for the face overlay (0.002m), placed slightly proud of the glass surface
+  const faceBox = new THREE.BoxGeometry(faceW, faceL, 0.002);
+  faceBox.translate(0, 0, t * 0.5 + 0.003);
 
   // Tilt about X to match the panel assembly tilt
   const tiltMatrix = new THREE.Matrix4().makeRotationX(-tilt);
@@ -534,6 +534,9 @@ export function createPanelGroup(
       transparent: true,
       opacity: 0.90,
       depthWrite: true,
+      polygonOffset: true,
+      polygonOffsetFactor: -1.0,
+      polygonOffsetUnits: -4.0,
     });
     const heatmapMesh = new THREE.InstancedMesh(heatmapGeom, heatmapMat, panels.length);
     heatmapMesh.name = "SolarPanelHeatmapInstances";

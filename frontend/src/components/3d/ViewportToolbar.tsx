@@ -24,6 +24,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ArrowLeft,
+  Zap,
 } from "lucide-react";
 import type { ObstacleType } from "../../lib/3d/obstacles";
 
@@ -36,7 +37,8 @@ export type ViewportTool =
   | "xray"
   | "reset-view"
   | "sun"
-  | "trees";
+  | "trees"
+  | "flow";
 
 export interface LayerVisibility {
   building: boolean;
@@ -44,6 +46,7 @@ export interface LayerVisibility {
   obstacles: boolean;
   trees: boolean;
   ground: boolean;
+  electricityFlow?: boolean;
 }
 
 interface ViewportToolbarProps {
@@ -90,6 +93,7 @@ const TOOL_CONFIG: Record<Exclude<ViewportTool, "draw-obstacle">, { icon: React.
   "reset-view": { icon: <RotateCcw size={16} strokeWidth={2} />, label: "Reset view", title: "Reset camera to default view (R)" },
   sun: { icon: <Sun size={16} strokeWidth={2} />, label: "Sun", title: "Sun & shadows (S)" },
   trees: { icon: <TreePine size={16} strokeWidth={2} />, label: "Trees", title: "Trees & obstacles (T)" },
+  flow: { icon: <Zap size={16} strokeWidth={2} />, label: "Electricity Flow", title: "Toggle animated electricity flow" },
 };
 
 const DRAW_OBSTACLE_CONFIG: Record<ObstacleType, { icon: React.ReactNode; label: string; title: string }> = {
@@ -123,12 +127,13 @@ export function ViewportToolbar({
   // Primary tools: always visible
   const primaryTools: ViewportTool[] = ["select", "move", "delete", "layers"];
 
-  // Mode tools: visible when relevant (weather removed per priority 3)
+  // Mode tools: visible when relevant
   const modeTools: ViewportTool[] = [];
   if (drawing || obstacleType === "custom") modeTools.push("draw-obstacle");
   if (manualPlaceActive) modeTools.push("sun"); // Sun affects panel preview shadows
   if (sunPlaying !== undefined) modeTools.push("sun");
   modeTools.push("trees");
+  modeTools.push("flow");
 
   // View tools: always visible
   const viewTools: ViewportTool[] = ["xray"];
@@ -356,6 +361,14 @@ export function ViewportToolbar({
               onChange={() => onToggleLayer("ground")}
             />
             <span>Satellite ground</span>
+          </label>
+          <label className="viewport-layers-menu__item">
+            <input
+              type="checkbox"
+              checked={layerVisibility.electricityFlow ?? false}
+              onChange={() => onToggleLayer("electricityFlow")}
+            />
+            <span>Electricity Flow</span>
           </label>
         </div>
       )}

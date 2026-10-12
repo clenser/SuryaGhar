@@ -66,6 +66,8 @@ import {
   type SunClock,
 } from "../../lib/solar";
 import type { WeatherPreset } from "../../lib/3d/lighting";
+import { buildElectricalTopology } from "../../lib/3d/electricityFlow";
+import { createElectricityFlowVisualizer, type ElectricityFlowHandle } from "../../lib/3d/electricityFlowMeshes";
 
 /**
  * Attributes used for the capability probe. They mirror what Three.js requests,
@@ -219,13 +221,14 @@ export interface Site3DViewerProps {
    * it the viewer keeps its neutral studio ground.
    */
   siteAnchor?: { ring: LngLat[]; originUtm: { x: number; y: number } } | null;
-  /** Layer visibility toggles (Building, Solar panels, Rooftop obstacles, Ground trees, Satellite ground) */
+  /** Layer visibility toggles (Building, Solar panels, Rooftop obstacles, Ground trees, Satellite ground, Electricity flow) */
   layerVisibility?: {
     building: boolean;
     panels: boolean;
     obstacles: boolean;
     trees: boolean;
     ground: boolean;
+    electricityFlow?: boolean;
   };
   /** Whether dragging trees is enabled */
   treeDragEnabled?: boolean;
@@ -348,6 +351,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
     const cloudShadowPlaneRef = useRef<THREE.Mesh | null>(null);
     const weatherPresetRef = useRef<WeatherPreset>(weatherPreset);
     weatherPresetRef.current = weatherPreset;
+    const electricityFlowRef = useRef<ElectricityFlowHandle | null>(null);
 
     // Latest values for effects that must run exactly once per mount.
     const localCoordsRef = useRef(localCoords);
@@ -503,6 +507,11 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           sceneRef.current?.remove(group);
         }
         panelGroupRef.current = [];
+        if (electricityFlowRef.current) {
+          sceneRef.current?.remove(electricityFlowRef.current.group);
+          electricityFlowRef.current.dispose();
+          electricityFlowRef.current = null;
+        }
         disposeTexturedGround();
         if (rainRef.current) {
           sceneRef.current?.remove(rainRef.current.lines);
@@ -1014,6 +1023,49 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         if (panelGroupRef.current === groups) panelGroupRef.current = [];
       };
     }, [panelLayers, localCoords, isInitialized]);
+
+    // Electricity Flow layer: cable conduits, string combiner junction boxes,
+    // and animated flow particles tracking real panel transforms.
+    // Cleanly mounted and torn down based on layerVisibility.electricityFlow.
+    useEffect(() => {
+      if (!isInitialized || !sceneRef.current) return;
+      const scene = sceneRef.current;
+      const isFlowActive = Boolean(layerVisibility?.electricityFlow);
+
+      // Tear down existing visualizer first
+      if (electricityFlowRef.current) {
+        scene.remove(electricityFlowRef.current.group);
+        electricityFlowRef.current.dispose();
+        electricityFlowRef.current = null;
+      }
+
+      if (!isFlowActive || !panelLayers || panelLayers.length === 0) return;
+
+      const terraceRing = localCoords.vertices.map((v) => ({ x: v.x, y: v.y }));
+      const flowData = panelLayers.map((l) => ({
+        config: l.config,
+        panels: l.panels,
+        shadingMetrics: l.shadingMetrics,
+      }));
+
+      const topology = buildElectricalTopology({
+        panelLayers: flowData,
+        roofZ: localCoords.height,
+        terraceRing,
+      });
+
+      const handle = createElectricityFlowVisualizer(topology);
+      electricityFlowRef.current = handle;
+      scene.add(handle.group);
+
+      return () => {
+        if (electricityFlowRef.current === handle) {
+          scene.remove(handle.group);
+          handle.dispose();
+          electricityFlowRef.current = null;
+        }
+      };
+    }, [layerVisibility?.electricityFlow, panelLayers, localCoords, isInitialized]);
 
     // Manual panel placement preview: a translucent panel follows the pointer
     // on the roof plane, tinted green/red by the SAME validator a commit uses.
@@ -1763,6 +1815,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       };
 
       let lastRainTime: number | null = null;
+      let lastFlowTime: number | null = null;
 
       const animate = (now: number) => {
         animationFrameRef.current = requestAnimationFrame(animate);
@@ -1825,6 +1878,13 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
             cMat.map.offset.y = (now * 0.000018) % 1;
           }
         }
+
+        // Advance animated electricity flow particles along cable routes
+        if (electricityFlowRef.current) {
+          const dt = lastFlowTime === null ? 0.016 : Math.min(Math.max((now - lastFlowTime) / 1000, 0), 0.1);
+          electricityFlowRef.current.update(dt);
+        }
+        lastFlowTime = now;
 
         rendererRef.current?.render(sceneRef.current!, cameraRef.current!);
       };

@@ -284,6 +284,26 @@ export function optimizeSolarLayout(params: {
     }
   }
 
+  // Strategy D: Tilt optimization (+/- 5° or 10° towards site latitude optimum)
+  const optTilt = Math.min(35, Math.max(10, Math.round(Math.abs(latitude))));
+  const candidateTilts = [optTilt, optTilt + 5, Math.max(10, optTilt - 5)].filter(
+    (t) => Math.abs(t - currentConfig.tiltDeg) >= 2,
+  );
+  for (const t of candidateTilts) {
+    const testConfig: PanelLayoutConfig = {
+      ...currentConfig,
+      tiltDeg: t,
+    };
+    if (isCandidateValid(currentPanels, testConfig, placementContext)) {
+      candidatePool.push({
+        title: `Optimized Tilt (${t}°)`,
+        description: `Adjusts module tilt to ${t}° to match site latitude (${latitude.toFixed(1)}°) for maximum annual irradiance capture.`,
+        panels: currentPanels,
+        config: testConfig,
+      });
+    }
+  }
+
   // 2. Evaluate annual shading and energy for each valid candidate
   const evaluatedCandidates: OptimizationCandidate[] = [];
 
@@ -377,7 +397,9 @@ export function optimizeSolarLayout(params: {
     hasFeasibleAlternatives: topRecommendations.length > 0,
     searchMessage:
       topRecommendations.length > 0
-        ? `Found ${topRecommendations.length} valid alternative layout(s) that preserve all ${targetCount} panels with reduced shading.`
-        : `Current layout is already optimal under current setbacks and obstacle clearances; no same-count alternatives with higher production were found.`,
+        ? `Found ${topRecommendations.length} valid alternative layout(s) that preserve all ${targetCount} panels with optimized solar yield.`
+        : obstacles.length === 0 && trees.length === 0
+          ? `No rooftop obstacles or trees present — 0% obstruction shading baseline is active. Current layout is optimal for this configuration.`
+          : `Current layout is already optimal under current setbacks and obstacle clearances; no same-count alternatives with higher production were found.`,
   };
 }

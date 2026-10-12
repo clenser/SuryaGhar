@@ -490,14 +490,17 @@ function computePlacePanels(request: PlacementRequest): PlacementResult {
    * Deterministic residual filling for Single Panel mode.
    * Tests fine candidate positions across the bounding box that don't collide
    * with existing placed panels, obstacles, or setbacks.
+   * Scans half-step and quarter-step sub-offsets to pack narrow corners and
+   * tapered roof wings that miss the primary coarse lattice.
    */
   function fillResidualSlots(current: PlacedPanel[]): PlacedPanel[] {
-    const placed = [...current];
+    let placed = [...current];
     const uLimit = uMax - insetU;
     const vLimit = vMax - insetV;
     const subStepU = stepU / 2;
     const subStepV = stepV / 2;
 
+    // Pass 1: Half-step grid
     for (let pv = vMin + insetV; pv <= vLimit + 1e-9; pv += subStepV) {
       for (let pu = uMin + insetU; pu <= uLimit + 1e-9; pu += subStepU) {
         const block = blockAt(pu, pv, placed);
@@ -505,6 +508,27 @@ function computePlacePanels(request: PlacementRequest): PlacementResult {
         for (const panel of block) placed.push({ ...panel, index: placed.length });
       }
     }
+
+    // Pass 2: Quarter-step offset grid to recover tapered edges and narrow margins
+    const qStepU = stepU / 4;
+    const qStepV = stepV / 4;
+    const offsets = [
+      { du: qStepU, dv: 0 },
+      { du: 0, dv: qStepV },
+      { du: qStepU, dv: qStepV },
+      { du: 3 * qStepU, dv: qStepV },
+    ];
+
+    for (const off of offsets) {
+      for (let pv = vMin + insetV + off.dv; pv <= vLimit + 1e-9; pv += subStepV) {
+        for (let pu = uMin + insetU + off.du; pu <= uLimit + 1e-9; pu += subStepU) {
+          const block = blockAt(pu, pv, placed);
+          if (block === null) continue;
+          for (const panel of block) placed.push({ ...panel, index: placed.length });
+        }
+      }
+    }
+
     return placed;
   }
 }

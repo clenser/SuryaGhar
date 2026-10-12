@@ -1,0 +1,176 @@
+/**
+ * Tests for Electrical Flow Topology, Routing, and Mesh Visualization
+ *
+ * Requirements verified:
+ * 1. Derives panel connection points from actual panel world transforms.
+ * 2. Deterministic string grouping along rows/sets.
+ * 3. Polyline distance table generation and smooth curve sampling.
+ * 4. Production-intensity color mapping.
+ * 5. Topology construction with valid branch, combiner trunk, and inverter routes.
+ * 6. Clean lifecycle and disposal.
+ */
+
+import { describe, expect, it } from "vitest";
+import * as THREE from "three";
+import {
+  getPanelConnectorPosition,
+  groupPanelsIntoStrings,
+  computeCumulativeDistances,
+  samplePointAlongPolyline,
+  buildElectricalTopology,
+  type PanelFlowData,
+} from "../lib/3d/electricityFlow";
+import {
+  createElectricityFlowVisualizer,
+  getFlowParticleColor,
+} from "../lib/3d/electricityFlowMeshes";
+import { DEFAULT_PANEL_CONFIG } from "../lib/3d/panels";
+import type { PlacedPanel } from "../lib/3d/panelPlacement";
+
+describe("Electrical Flow Topology & Routing", () => {
+  const mockConfig = {
+    ...DEFAULT_PANEL_CONFIG,
+    panelTypeId: "panel-550w" as const,
+    tiltDeg: 15,
+    mountHeightM: 0.2,
+  };
+
+  it("calculates underside connector position matching physical panel transform", () => {
+    const panel: PlacedPanel = {
+      index: 0,
+      x: 10,
+      y: 5,
+      rotationDeg: 180,
+    };
+    const roofZ = 12;
+
+    const pos = getPanelConnectorPosition(panel, mockConfig, roofZ);
+
+    // Connector must sit in the vicinity of panel footprint
+    expect(pos.x).toBeCloseTo(panel.x, 0);
+    expect(Math.abs(pos.y - panel.y)).toBeLessThan(1.2);
+    // Elevation must sit above roof level (roofZ = 12)
+    expect(pos.z).toBeGreaterThan(roofZ);
+    // Elevation should be beneath or close to the panel face
+    expect(pos.z).toBeLessThan(roofZ + 2.0);
+  });
+
+  it("deterministically groups panels into strings preserving row ordering", () => {
+    const panels: PlacedPanel[] = Array.from({ length: 25 }, (_, i) => ({
+      index: i,
+      x: (i % 5) * 2,
+      y: Math.floor(i / 5) * 3,
+      rotationDeg: 0,
+    }));
+
+    const strings1 = groupPanelsIntoStrings(panels, 10);
+    const strings2 = groupPanelsIntoStrings(panels, 10);
+
+    expect(strings1.length).toBe(3); // 10, 10, 5
+    expect(strings1).toEqual(strings2); // Deterministic
+
+    const totalGrouped = strings1.reduce((sum, s) => sum + s.length, 0);
+    expect(totalGrouped).toBe(25);
+  });
+
+  it("computes cumulative distances along a 3D polyline accurately", () => {
+    const points = [
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(3, 0, 0),
+      new THREE.Vector3(3, 4, 0),
+    ];
+    const { cumulative, total } = computeCumulativeDistances(points);
+
+    expect(total).toBeCloseTo(7, 4);
+    expect(cumulative).toEqual([0, 3, 7]);
+  });
+
+  it("samples points along polyline smoothly across segment boundaries", () => {
+    const points = [
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(10, 0, 0),
+    ];
+    const { cumulative, total } = computeCumulativeDistances(points);
+
+    const mid = samplePointAlongPolyline(points, cumulative, total, 5);
+    expect(mid.x).toBeCloseTo(5, 4);
+    expect(mid.y).toBeCloseTo(0, 4);
+
+    const wrapped = samplePointAlongPolyline(points, cumulative, total, 15);
+    expect(wrapped.x).toBeCloseTo(5, 4);
+  });
+
+  it("builds complete electrical topology with branch, combiner and main routes", () => {
+    const panels: PlacedPanel[] = [
+      { index: 0, x: 2, y: 2, rotationDeg: 0 },
+      { index: 1, x: 4, y: 2, rotationDeg: 0 },
+      { index: 2, x: 6, y: 2, rotationDeg: 0 },
+    ];
+    const layer: PanelFlowData = {
+      config: mockConfig,
+      panels,
+    };
+    const terraceRing = [
+      { x: -5, y: -5 },
+      { x: 10, y: -5 },
+      { x: 10, y: 10 },
+      { x: -5, y: 10 },
+    ];
+
+    const topo = buildElectricalTopology({
+      panelLayers: [layer],
+      roofZ: 10,
+      terraceRing,
+    });
+
+    expect(topo.combinerPositions.length).toBeGreaterThan(0);
+    expect(topo.routes.length).toBeGreaterThan(0);
+    expect(topo.endpointPosition.z).toBeGreaterThan(10);
+
+    const branch = topo.routes.find((r) => r.type === "string-branch");
+    const trunk = topo.routes.find((r) => r.type === "combiner-trunk");
+    expect(branch).toBeDefined();
+    expect(trunk).toBeDefined();
+    expect(branch!.totalLength).toBeGreaterThan(0);
+  });
+
+  it("maps production intensity to the appropriate color spectrum", () => {
+    const dim = getFlowParticleColor(0.1);
+    const mid = getFlowParticleColor(0.5);
+    const bright = getFlowParticleColor(0.95);
+
+    // Dim has strong blue, low green
+    expect(dim.b).toBeGreaterThan(dim.g);
+    // Mid has balanced cyan-blue
+    expect(mid.b).toBeGreaterThan(0.7);
+    // Bright has high green and blue (cyan/white)
+    expect(bright.g).toBeGreaterThan(0.8);
+    expect(bright.b).toBeGreaterThan(0.9);
+  });
+
+  it("creates visualizer meshes, animates with delta time, and disposes cleanly", () => {
+    const panels: PlacedPanel[] = [
+      { index: 0, x: 0, y: 0, rotationDeg: 0 },
+      { index: 1, x: 2, y: 0, rotationDeg: 0 },
+    ];
+    const layer: PanelFlowData = {
+      config: mockConfig,
+      panels,
+    };
+    const topo = buildElectricalTopology({
+      panelLayers: [layer],
+      roofZ: 10,
+      terraceRing: [{ x: -5, y: -5 }, { x: 5, y: -5 }, { x: 5, y: 5 }, { x: -5, y: 5 }],
+    });
+
+    const visualizer = createElectricityFlowVisualizer(topo);
+    expect(visualizer.group.children.length).toBeGreaterThan(0);
+
+    // Update with delta time
+    expect(() => visualizer.update(0.016)).not.toThrow();
+
+    // Dispose cleanly
+    visualizer.dispose();
+    expect(visualizer.group.children.length).toBe(0);
+  });
+});
