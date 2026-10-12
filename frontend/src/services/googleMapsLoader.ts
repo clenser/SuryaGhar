@@ -58,12 +58,16 @@ export function classifyGoogleMapsError(err: unknown): GoogleMapsLoadError {
 }
 
 export function loadGoogleMaps(): Promise<typeof google> {
-  if (typeof window !== "undefined" && (window as unknown as { google?: typeof google }).google?.maps) {
-    return Promise.resolve((window as unknown as { google: typeof google }).google!);
-  }
-
   if (loadPromise) {
     return loadPromise;
+  }
+
+  const existingGoogle =
+    typeof window !== "undefined"
+      ? (window as unknown as { google?: typeof google }).google
+      : undefined;
+  if (existingGoogle?.maps && typeof existingGoogle.maps.Map === "function") {
+    return Promise.resolve(existingGoogle);
   }
 
   const apiKey = getGoogleMapsApiKey();
@@ -80,15 +84,70 @@ export function loadGoogleMaps(): Promise<typeof google> {
     setOptions({
       key: apiKey,
       v: "weekly",
-      libraries: ["geometry", "places"],
+      libraries: ["maps", "marker", "geometry", "places"],
     });
     configured = true;
   }
 
   const attempt = (async () => {
     try {
-      await importLibrary("maps");
-      return (window as unknown as { google: typeof google }).google!;
+      const mapsLib = (await importLibrary("maps")) as
+        | google.maps.MapsLibrary
+        | { maps?: typeof google.maps }
+        | undefined;
+
+      const win =
+        typeof window !== "undefined"
+          ? (window as unknown as { google?: typeof google })
+          : undefined;
+
+      const libRecord =
+        mapsLib && typeof mapsLib === "object"
+          ? (mapsLib as unknown as Record<string, unknown>)
+          : undefined;
+      const nestedMaps =
+        libRecord?.maps && typeof libRecord.maps === "object"
+          ? (libRecord.maps as Record<string, unknown>)
+          : undefined;
+
+      const MapConstructor =
+        (typeof libRecord?.Map === "function"
+          ? (libRecord.Map as typeof google.maps.Map)
+          : undefined) ??
+        (typeof nestedMaps?.Map === "function"
+          ? (nestedMaps.Map as typeof google.maps.Map)
+          : undefined) ??
+        (typeof win?.google?.maps?.Map === "function"
+          ? win.google.maps.Map
+          : undefined);
+
+      if (typeof MapConstructor !== "function") {
+        throw new GoogleMapsLoadError(
+          "Google Maps library loaded without a valid Map constructor.",
+          "unknown",
+        );
+      }
+
+      const rootGoogle: typeof google =
+        win?.google ??
+        (nestedMaps ? (mapsLib as unknown as typeof google) : ({ maps: {} as typeof google.maps } as typeof google));
+
+      if (!rootGoogle.maps || typeof rootGoogle.maps !== "object") {
+        (rootGoogle as { maps: typeof google.maps }).maps = {} as typeof google.maps;
+      }
+
+      if (libRecord && !nestedMaps) {
+        Object.assign(rootGoogle.maps, libRecord);
+      } else if (nestedMaps) {
+        Object.assign(rootGoogle.maps, nestedMaps);
+      }
+      rootGoogle.maps.Map = MapConstructor;
+
+      if (win) {
+        win.google = rootGoogle;
+      }
+
+      return rootGoogle;
     } catch (rawErr) {
       throw classifyGoogleMapsError(rawErr);
     }

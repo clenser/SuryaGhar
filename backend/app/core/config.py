@@ -9,10 +9,23 @@ ROOT_DIR = Path(__file__).resolve().parents[3]
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=ROOT_DIR / ".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=(ROOT_DIR / ".env", ROOT_DIR / "backend" / ".env", ROOT_DIR / "frontend" / ".env"),
+        extra="ignore",
+    )
 
-    # Provider selection (AGENTS.md section 21)
-    geocoder_provider: str = "nominatim+photon"
+    # Provider selection (AGENTS.md section 21 & 43)
+    geocoder_provider: str = "auto"
+    google_geocoding_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GOOGLE_GEOCODING_API_KEY", "VITE_GOOGLE_GEOCODING_API_KEY"),
+    )
+    google_geocoding_base_url: str = "https://maps.googleapis.com/maps/api/geocode/json"
+    google_static_maps_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GOOGLE_STATIC_MAPS_API_KEY", "VITE_GOOGLE_STATIC_MAPS_API_KEY"),
+    )
+    google_static_maps_base_url: str = "https://maps.googleapis.com/maps/api/staticmap"
     photon_base_url: str = "https://photon.komoot.io"
     imagery_provider: str = "esri"
     terrain_provider: str = "aws-terrarium"

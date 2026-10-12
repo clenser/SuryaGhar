@@ -110,8 +110,77 @@ async def _osm_building_evidence(geometry: dict, metric_geom) -> dict:
         return {"available": False, "overlap_fraction": None, "heights_m": []}
 
 
+_WEB_MERCATOR_WORLD_M = 40075016.68557849
+
+
+def _fetch_google_static_crop(
+    geometry: dict,
+    api_key: str,
+    base_url: str,
+    size: int = 512,
+    timeout: float = 12.0,
+) -> tuple[bytes, tuple[float, float, float, float]]:
+    """Fetch satellite crop via Google Static Maps API with exact EPSG:3857/WGS84 bounds."""
+    minx, miny, maxx, maxy = shape_bounds(geometry)
+    dx = (maxx - minx) * 0.12
+    dy = (maxy - miny) * 0.12
+
+    tf = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
+    minx2, miny2 = tf.transform(minx - dx, miny - dy)
+    maxx2, maxy2 = tf.transform(maxx + dx, maxy + dy)
+
+    cx = (minx2 + maxx2) / 2.0
+    cy = (miny2 + maxy2) / 2.0
+    required_span_m = max(maxx2 - minx2, maxy2 - miny2, 120.0)
+
+    # Google Static Maps max non-scaled size is 640x640; clamp logical size
+    logical_size = min(max(int(size), 256), 640)
+
+    chosen_zoom = 19
+    for z in range(20, 12, -1):
+        m_per_px_3857 = _WEB_MERCATOR_WORLD_M / (256.0 * (2 ** z))
+        span_m = logical_size * m_per_px_3857
+        if span_m >= required_span_m:
+            chosen_zoom = z
+            break
+
+    m_per_px_3857 = _WEB_MERCATOR_WORLD_M / (256.0 * (2 ** chosen_zoom))
+    half_span = (logical_size * m_per_px_3857) / 2.0
+    crop_west, crop_south = tf.transform(cx - half_span, cy - half_span, direction="INVERSE")
+    crop_east, crop_north = tf.transform(cx + half_span, cy + half_span, direction="INVERSE")
+    center_lng, center_lat = tf.transform(cx, cy, direction="INVERSE")
+
+    params = {
+        "center": f"{center_lat:.7f},{center_lng:.7f}",
+        "zoom": str(chosen_zoom),
+        "size": f"{logical_size}x{logical_size}",
+        "maptype": "satellite",
+        "format": "jpg",
+        "key": api_key.strip(),
+    }
+    with httpx.Client(timeout=timeout) as client:
+        response = client.get(base_url, params=params)
+    if response.status_code != 200 or "image" not in response.headers.get("content-type", ""):
+        raise RuntimeError(f"Google Static Maps returned HTTP {response.status_code}")
+    return response.content, (crop_west, crop_south, crop_east, crop_north)
+
+
 def fetch_crop(geometry: dict, size: int = 512, timeout: float = 12.0) -> tuple[bytes, tuple[float, float, float, float]]:
     """Fetch satellite imagery crop; returns (jpeg_bytes, crop_wgs84(W,S,E,N))."""
+    settings = get_settings()
+    google_key = (settings.google_static_maps_api_key or "").strip()
+    if google_key:
+        try:
+            return _fetch_google_static_crop(
+                geometry=geometry,
+                api_key=google_key,
+                base_url=settings.google_static_maps_base_url,
+                size=size,
+                timeout=timeout,
+            )
+        except Exception as exc:
+            logger.warning("Google Static Maps crop failed (%s); falling back to Esri export", exc)
+
     minx, miny, maxx, maxy = shape_bounds(geometry)
     dx = (maxx - minx) * 0.08
     dy = (maxy - miny) * 0.08
@@ -525,7 +594,7 @@ async def validate_surface(geometry: dict, segmentation_model: str | None = None
         "limitations": aggregated.limitations,
         "evidence": evidence,
         "providers": {
-            "imagery": "Esri World Imagery (prototype)",
+            "imagery": "Google Static Maps" if (settings.google_static_maps_api_key or "").strip() else "Esri World Imagery (prototype)",
             "segmentation": seg_result.provider,
             "segmentation_model": seg_result.model,
             "vision": vision_label,

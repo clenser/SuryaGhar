@@ -144,4 +144,47 @@ describe("GoogleMapView initialization & cursor resilience", () => {
       expect.objectContaining({ draggableCursor: null })
     );
   });
+
+  it("reports an error and triggers provider fallback when Map constructor is unusable", async () => {
+    const { resetGoogleMapsLoaderForTests } = await import("../services/googleMapsLoader");
+    const { getMapProviderState, resetMapProviderForTests } = await import("../services/mapProvider");
+    const { MapView } = await import("../components/map/MapView");
+
+    resetGoogleMapsLoaderForTests();
+    resetMapProviderForTests();
+
+    // Stub window.google.maps with a non-constructor Map and importLibrary returning no Map constructor
+    (window as unknown as { google: unknown }).google = {
+      maps: {
+        Map: undefined,
+        importLibrary: vi.fn().mockResolvedValue({}),
+      },
+    };
+
+    const onReady = vi.fn();
+    const onMapError = vi.fn();
+
+    render(
+      <MapView
+        layers={testLayers}
+        selectionMode="idle"
+        vertices={[]}
+        onViewChange={vi.fn()}
+        onReady={onReady}
+        onMapError={onMapError}
+      />
+    );
+
+    await vi.waitFor(() => {
+      expect(onMapError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "imagery",
+          message: expect.stringMatching(/without a valid Map constructor/i),
+        })
+      );
+    });
+
+    expect(onReady).not.toHaveBeenCalled();
+    expect(getMapProviderState()).toBe("fallback-countdown");
+  });
 });

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GeocodeError, searchLocations } from "../services/geocode";
+import { GeocodeError, parseGoogleGeocodeResults, searchLocations } from "../services/geocode";
 
 const okBody = {
   provider: "nominatim",
@@ -51,4 +51,40 @@ describe("searchLocations", () => {
     fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
     await expect(searchLocations("ab-network")).rejects.toMatchObject({ kind: "network" });
   });
+
+  it("parses Google Geocoding API payload into LocationResult items with bounds", () => {
+    const parsed = parseGoogleGeocodeResults({
+      status: "OK",
+      results: [
+        {
+          address_components: [
+            { long_name: "Bidhannagar", short_name: "Bidhannagar", types: ["locality", "political"] },
+            { long_name: "Kolkata", short_name: "Kolkata", types: ["administrative_area_level_3", "political"] },
+            { long_name: "West Bengal", short_name: "WB", types: ["administrative_area_level_1", "political"] },
+            { long_name: "India", short_name: "IN", types: ["country", "political"] },
+          ],
+          formatted_address: "Bidhannagar, West Bengal, India",
+          geometry: {
+            location: { lat: 22.5797, lng: 88.4146 },
+            bounds: {
+              northeast: { lat: 22.6036, lng: 88.4484 },
+              southwest: { lat: 22.5469, lng: 88.3948 },
+            },
+          },
+        },
+      ],
+    });
+    expect(parsed).toEqual([
+      {
+        name: "Bidhannagar",
+        locality: "Kolkata",
+        state: "West Bengal",
+        country: "India",
+        latitude: 22.5797,
+        longitude: 88.4146,
+        bounds: { south: 22.5469, north: 22.6036, west: 88.3948, east: 88.4484 },
+      },
+    ]);
+  });
 });
+

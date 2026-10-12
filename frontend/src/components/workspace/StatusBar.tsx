@@ -19,7 +19,7 @@ export function formatScale(lat: number, zoom: number): { width: number; label: 
   const mpp = metersPerPixel(lat, zoom);
   const targetPx = 96;
   const rawMeters = mpp * targetPx;
-  const steps = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000];
+  const steps = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000];
   const meters = steps.find((s) => s >= rawMeters) ?? steps[steps.length - 1];
   const width = meters / mpp;
   const label = meters >= 1000 ? `${meters / 1000} km` : `${meters} m`;

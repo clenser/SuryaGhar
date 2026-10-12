@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  googleStaticMapUrl,
   groundTileUrl,
   latToTileY,
   lngToTileX,
@@ -58,4 +59,13 @@ describe("satelliteGround tile math", () => {
     expect(url).toContain("/14/7131/12213");
     expect(url).not.toMatch(/[{}]/);
   });
+
+  it("builds Google Static Maps satellite URLs with center, zoom, and key", () => {
+    const url = googleStaticMapUrl(22.5726, 88.3639, 19, "test-static-key");
+    expect(url).toContain("https://maps.googleapis.com/maps/api/staticmap?");
+    expect(url).toContain("maptype=satellite");
+    expect(url).toContain("zoom=19");
+    expect(url).toContain("key=test-static-key");
+  });
 });
+

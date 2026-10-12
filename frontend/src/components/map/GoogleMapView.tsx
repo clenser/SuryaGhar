@@ -119,9 +119,16 @@ export const GoogleMapView = forwardRef<GoogleMapViewHandle, MapViewProps>(funct
       .then((googleInstance) => {
         if (!active || !containerRef.current) return;
 
-        const map = new googleInstance.maps.Map(containerRef.current, {
+        const MapConstructor = googleInstance?.maps?.Map;
+        if (typeof MapConstructor !== "function") {
+          throw new Error("Google Maps library loaded without a valid Map constructor.");
+        }
+
+        const map = new MapConstructor(containerRef.current, {
           center: { lat: KOLKATA_VIEW.center.lat, lng: KOLKATA_VIEW.center.lng },
           zoom: Math.round(KOLKATA_VIEW.zoom),
+          maxZoom: 22,
+          isFractionalZoomEnabled: true,
           mapTypeId: (googleInstance.maps?.MapTypeId?.SATELLITE as string | undefined) ?? "satellite",
           tilt: 0,
           heading: 0,
@@ -132,6 +139,9 @@ export const GoogleMapView = forwardRef<GoogleMapViewHandle, MapViewProps>(funct
         });
 
         mapRef.current = map;
+        if (containerRef.current) {
+          (containerRef.current as unknown as { __googleMap?: google.maps.Map }).__googleMap = map;
+        }
 
         const emitView = () => {
           const center = map.getCenter();
@@ -151,6 +161,39 @@ export const GoogleMapView = forwardRef<GoogleMapViewHandle, MapViewProps>(funct
 
         googleInstance.maps.event.addListenerOnce(map, "idle", () => {
           if (!active) return;
+          try {
+            const mapsApi = googleInstance.maps;
+            if (mapsApi?.ImageMapType && map.mapTypes?.set) {
+              // Deep high-resolution satellite map type supporting zoom up to 22
+              const deepSatellite = new mapsApi.ImageMapType({
+                getTileUrl: (coord: { x: number; y: number }, zoom: number) => {
+                  const normalizedX = ((coord.x % (1 << zoom)) + (1 << zoom)) % (1 << zoom);
+                  return `https://mt1.google.com/vt/lyrs=s&x=${normalizedX}&y=${coord.y}&z=${zoom}`;
+                },
+                tileSize: new mapsApi.Size(256, 256),
+                maxZoom: 22,
+                minZoom: 0,
+                name: "Satellite",
+              });
+
+              // Deep high-resolution hybrid map type supporting zoom up to 22
+              const deepHybrid = new mapsApi.ImageMapType({
+                getTileUrl: (coord: { x: number; y: number }, zoom: number) => {
+                  const normalizedX = ((coord.x % (1 << zoom)) + (1 << zoom)) % (1 << zoom);
+                  return `https://mt1.google.com/vt/lyrs=y&x=${normalizedX}&y=${coord.y}&z=${zoom}`;
+                },
+                tileSize: new mapsApi.Size(256, 256),
+                maxZoom: 22,
+                minZoom: 0,
+                name: "Hybrid",
+              });
+
+              map.mapTypes.set("satellite", deepSatellite);
+              map.mapTypes.set("hybrid", deepHybrid);
+            }
+          } catch {
+            // Non-fatal if mapTypes does not support runtime registration
+          }
           setLoaded(true);
           emitView();
           callbacks.current.onReady?.();
@@ -623,7 +666,8 @@ export const GoogleMapView = forwardRef<GoogleMapViewHandle, MapViewProps>(funct
         const map = mapRef.current;
         if (!map) return;
         const currentZoom = map.getZoom() ?? KOLKATA_VIEW.zoom;
-        map.setZoom(currentZoom + delta);
+        const nextZoom = Math.min(Math.max(currentZoom + delta, 2), 22);
+        map.setZoom(nextZoom);
       },
       resetNorth() {
         const map = mapRef.current;

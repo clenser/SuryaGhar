@@ -1,4 +1,4 @@
-﻿import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import maplibregl, { type Map as MapLibreMap, type MapLayerMouseEvent } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { buildMapStyle, IMAGERY_LAYER_ID, TERRAIN_SOURCE_ID } from "./mapStyle";
@@ -458,6 +458,7 @@ export const MapLibreMapView = forwardRef<MapLibreMapViewHandle, MapViewProps>(f
           ? [initialView.center.lng, initialView.center.lat]
           : [KOLKATA_VIEW.center.lng, KOLKATA_VIEW.center.lat],
         zoom: initialView ? initialView.zoom : KOLKATA_VIEW.zoom,
+        maxZoom: 22,
         bearing: initialView ? initialView.bearing : 0,
         pitch: initialView ? initialView.pitch : 0,
         maxPitch: 70,
@@ -543,7 +544,8 @@ export const MapLibreMapView = forwardRef<MapLibreMapViewHandle, MapViewProps>(f
       zoomBy(delta) {
         const map = mapRef.current;
         if (!map) return;
-        map.easeTo({ zoom: map.getZoom() + delta, duration: 220 });
+        const nextZoom = Math.min(Math.max(map.getZoom() + delta, 2), 22);
+        map.easeTo({ zoom: nextZoom, duration: 220 });
       },
       resetNorth() {
         mapRef.current?.easeTo({ bearing: 0, duration: 300 });

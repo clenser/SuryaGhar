@@ -232,3 +232,83 @@ async def test_fallback_propagates_secondary_failure():
     geocoder = FallbackGeocoder(make_geocoder(primary), make_photon(secondary))
     with pytest.raises(ProviderError, match="HTTP 500"):
         await geocoder.search("Mumbai")
+
+
+GOOGLE_SAMPLE = {
+    "status": "OK",
+    "results": [
+        {
+            "address_components": [
+                {"long_name": "Bidhannagar", "short_name": "Bidhannagar", "types": ["locality", "political"]},
+                {"long_name": "Kolkata", "short_name": "Kolkata", "types": ["administrative_area_level_3", "political"]},
+                {"long_name": "West Bengal", "short_name": "WB", "types": ["administrative_area_level_1", "political"]},
+                {"long_name": "India", "short_name": "IN", "types": ["country", "political"]},
+            ],
+            "formatted_address": "Bidhannagar, West Bengal, India",
+            "geometry": {
+                "bounds": {
+                    "northeast": {"lat": 22.6036, "lng": 88.4484},
+                    "southwest": {"lat": 22.5469, "lng": 88.3948},
+                },
+                "location": {"lat": 22.5797, "lng": 88.4146},
+                "viewport": {
+                    "northeast": {"lat": 22.6036, "lng": 88.4484},
+                    "southwest": {"lat": 22.5469, "lng": 88.3948},
+                },
+            },
+        }
+    ],
+}
+
+
+async def test_google_geocoder_parses_results_and_bounds():
+    from app.providers.google import GoogleGeocoder
+
+    GoogleGeocoder._cache.clear()
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["request"] = request
+        return httpx.Response(200, json=GOOGLE_SAMPLE)
+
+    geocoder = GoogleGeocoder(
+        api_key="test-google-key",
+        base_url="https://maps.googleapis.test/maps/api/geocode/json",
+        timeout=2.0,
+        transport=httpx.MockTransport(handler),
+    )
+    results = await geocoder.search("Salt Lake Kolkata")
+
+    url_str = str(captured["request"].url)
+    assert "key=test-google-key" in url_str
+    assert "components=country%3AIN" in url_str
+    assert len(results) == 1
+    assert results[0].name == "Bidhannagar"
+    assert results[0].locality == "Kolkata"
+    assert results[0].state == "West Bengal"
+    assert results[0].country == "India"
+    assert results[0].bounds is not None
+    assert results[0].bounds.north == 22.6036
+    assert results[0].bounds.south == 22.5469
+
+
+async def test_google_geocoder_zero_results_returns_empty_list():
+    from app.providers.google import GoogleGeocoder
+
+    GoogleGeocoder._cache.clear()
+    geocoder = GoogleGeocoder(
+        api_key="test-google-key",
+        base_url="https://maps.googleapis.test/maps/api/geocode/json",
+        timeout=2.0,
+        transport=httpx.MockTransport(lambda req: httpx.Response(200, json={"status": "ZERO_RESULTS", "results": []})),
+    )
+    assert await geocoder.search("nonexistent-place-xyz") == []
+
+
+def test_build_geocoder_uses_google_when_key_configured():
+    from app.core.config import Settings
+    from app.services.geocoding import build_geocoder
+
+    g = build_geocoder(Settings(geocoder_provider="auto", google_geocoding_api_key="test-key"))
+    assert g.name == "google+nominatim+photon"
+    assert build_geocoder(Settings(geocoder_provider="google", google_geocoding_api_key="test-key")).name == "google"

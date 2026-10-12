@@ -90,7 +90,8 @@ export function groundTileUrl(x: number, y: number, zoom: number): string {
 function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.crossOrigin = "anonymous"; // Esri serves CORS `*`; failure falls back to studio ground
+    img.crossOrigin = "anonymous"; // Esri and Google Static Maps serve CORS `*`
+    img.referrerPolicy = "no-referrer";
     img.onload = () => resolve(img);
     img.onerror = () => reject(new Error(`Satellite tile failed: ${url}`));
     img.src = url;
@@ -108,6 +109,27 @@ export interface GroundRequest {
   originUtm: { x: number; y: number };
   /** Extra context around the footprint in metres (site surroundings). */
   marginM?: number;
+}
+
+const GOOGLE_STATIC_MAP_ENDPOINT = "https://maps.googleapis.com/maps/api/staticmap";
+const GOOGLE_STATIC_LOGICAL_PX = 640;
+
+function getGoogleStaticMapsKey(): string {
+  const env = import.meta.env as Record<string, string | undefined>;
+  return (env.VITE_GOOGLE_STATIC_MAPS_API_KEY ?? env.GOOGLE_STATIC_MAPS_API_KEY ?? "").trim();
+}
+
+export function googleStaticMapUrl(lat: number, lng: number, zoom: number, apiKey: string): string {
+  const params = new URLSearchParams({
+    center: `${lat.toFixed(7)},${lng.toFixed(7)}`,
+    zoom: String(zoom),
+    size: `${GOOGLE_STATIC_LOGICAL_PX}x${GOOGLE_STATIC_LOGICAL_PX}`,
+    scale: "2",
+    maptype: "satellite",
+    format: "jpg",
+    key: apiKey.trim(),
+  });
+  return `${GOOGLE_STATIC_MAP_ENDPOINT}?${params.toString()}`;
 }
 
 /**
@@ -134,6 +156,7 @@ export function fetchSatelliteGround({ ring, originUtm, marginM = 60 }: GroundRe
   // Metre margin via equirectangular approximation (framing only — geometry
   // still goes through projectUtm below, never through this estimate).
   const midLat = (minLat + maxLat) / 2;
+  const midLng = (minLng + maxLng) / 2;
   const mPerDegLat = 111320;
   const mPerDegLng = 111320 * Math.cos((midLat * Math.PI) / 180);
   const padLat = marginM / mPerDegLat;
@@ -145,11 +168,51 @@ export function fetchSatelliteGround({ ring, originUtm, marginM = 60 }: GroundRe
 
   const extentM = Math.max((east - west) * mPerDegLng, (north - south) * mPerDegLat, 1);
   const { zoom } = pickGroundZoom(extentM, midLat);
-  const key = `${west.toFixed(5)},${south.toFixed(5)},${east.toFixed(5)},${north.toFixed(5)},${zoom}`;
+  const staticKey = getGoogleStaticMapsKey();
+  const key = `${staticKey ? "gstatic" : "tiles"}:${west.toFixed(5)},${south.toFixed(5)},${east.toFixed(5)},${north.toFixed(5)},${zoom}`;
   const cached = groundCache.get(key);
   if (cached) return cached;
 
   const task = (async (): Promise<SatelliteGround | null> => {
+    if (staticKey) {
+      try {
+        const img = await loadImage(googleStaticMapUrl(midLat, midLng, zoom, staticKey));
+        const canvas = document.createElement("canvas");
+        canvas.width = img.naturalWidth || GOOGLE_STATIC_LOGICAL_PX;
+        canvas.height = img.naturalHeight || GOOGLE_STATIC_LOGICAL_PX;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          const centerTileX = lngToTileX(midLng, zoom);
+          const centerTileY = latToTileY(midLat, zoom);
+          const halfSpanTiles = (GOOGLE_STATIC_LOGICAL_PX / SATELLITE_TILE_PX) / 2;
+          const topLeft = projectUtm({
+            lng: tileXToLng(centerTileX - halfSpanTiles, zoom),
+            lat: tileYToLat(centerTileY - halfSpanTiles, zoom),
+          });
+          const bottomRight = projectUtm({
+            lng: tileXToLng(centerTileX + halfSpanTiles, zoom),
+            lat: tileYToLat(centerTileY + halfSpanTiles, zoom),
+          });
+          const widthM = bottomRight.x - topLeft.x;
+          const heightM = topLeft.y - bottomRight.y;
+          if (widthM > 0 && heightM > 0) {
+            return {
+              canvas,
+              sizeM: { width: widthM, height: heightM },
+              centerM: {
+                x: (topLeft.x + bottomRight.x) / 2 - originUtm.x,
+                y: (topLeft.y + bottomRight.y) / 2 - originUtm.y,
+              },
+              zoom,
+            };
+          }
+        }
+      } catch {
+        // Fall through to Esri tile stitching if Google Static Maps fails
+      }
+    }
+
     try {
       const x0 = Math.floor(lngToTileX(west, zoom));
       const x1 = Math.floor(lngToTileX(east, zoom));

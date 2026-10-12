@@ -5,6 +5,7 @@ import react from "@vitejs/plugin-react";
 // backend secrets directly and the backend origin is not hard-coded in the app.
 export default defineConfig({
   plugins: [react()],
+  envPrefix: ["VITE_", "GOOGLE_GEOCODING_", "GOOGLE_STATIC_MAPS_"],
   build: {
     chunkSizeWarningLimit: 1100,
     rollupOptions: {},
