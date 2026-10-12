@@ -1014,9 +1014,9 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       const currentFingerprint = JSON.stringify(
         panelLayers.map((l) => ({
           config: l.config,
+          isPanelSet: l.isPanelSet,
           count: l.panels.length,
-          first: l.panels[0],
-          last: l.panels[l.panels.length - 1],
+          panels: l.panels,
           roofZ: localCoords.height,
         })),
       );

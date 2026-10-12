@@ -618,8 +618,365 @@ describe("panel instance transforms", () => {
       // Only module instances (no shared table frame)
       expect(group.children.length).toBe(1);
       expect(group.getObjectByName("SolarPanelSharedFrame")).toBeUndefined();
+      const mesh = group.getObjectByName("SolarPanelInstances") as THREE.InstancedMesh;
+      expect(legClusters(mesh.geometry, "x")).toBe(config.legCols);
+      expect(legClusters(mesh.geometry, "y")).toBe(config.legRows);
 
       disposePanelGroup(group);
+    });
+
+    it("preserves both mounting styles simultaneously in a mixed layout (standalone panel + Panel Set)", () => {
+      const config = {
+        ...DEFAULT_PANEL_CONFIG,
+        setRows: 2,
+        setCols: 3,
+        tiltDeg: 15,
+        mountHeightM: 0.4,
+      };
+      // Build a 2x3 panel set using tableId metadata + 2 standalone panels without tableId
+      const setPanels: PlacedPanel[] = [];
+      for (let r = 0; r < 2; r++) {
+        for (let c = 0; c < 3; c++) {
+          setPanels.push({
+            index: setPanels.length,
+            x: (c - 1) * 1.33,
+            y: (r - 0.5) * 2.48,
+            rotationDeg: 180,
+            tableId: "set-table-1",
+            tableRow: r,
+            tableCol: c,
+            tableRows: 2,
+            tableCols: 3,
+          });
+        }
+      }
+      const standalonePanelA: PlacedPanel = {
+        index: 6,
+        x: 8.0,
+        y: 4.0,
+        rotationDeg: 180,
+      };
+      const standalonePanelB: PlacedPanel = {
+        index: 7,
+        x: -8.0,
+        y: -4.0,
+        rotationDeg: 180,
+      };
+
+      const mixedPanels = [standalonePanelA, ...setPanels, standalonePanelB];
+      const group = createPanelGroup(
+        mixedPanels,
+        config.panelTypeId,
+        config.mounting,
+        config.tiltDeg,
+        12.0,
+        config.mountHeightM,
+        config.legRows,
+        config.legCols,
+        undefined,
+        undefined,
+        { isPanelSet: true, config },
+      );
+
+      const setMesh = group.getObjectByName("SolarPanelInstances") as THREE.InstancedMesh;
+      const standaloneMesh = group.getObjectByName("SolarPanelStandaloneInstances") as THREE.InstancedMesh;
+      const sharedFrame = group.getObjectByName("SolarPanelSharedFrame") as THREE.InstancedMesh;
+
+      expect(setMesh).toBeDefined();
+      expect(setMesh.count).toBe(6);
+      // Set modules have no individual legs reaching the roof plane
+      setMesh.geometry.computeBoundingBox();
+      expect(setMesh.geometry.boundingBox!.min.z).toBeGreaterThan(0.25);
+
+      expect(standaloneMesh).toBeDefined();
+      expect(standaloneMesh.count).toBe(2);
+      // Standalone modules have individual legs reaching the roof plane
+      standaloneMesh.geometry.computeBoundingBox();
+      expect(standaloneMesh.geometry.boundingBox!.min.z).toBeCloseTo(PANEL_ROOF_STANDOFF_M, 3);
+
+      expect(sharedFrame).toBeDefined();
+      expect(sharedFrame.count).toBe(1);
+
+      disposePanelGroup(group);
+    });
+
+    it("adding or removing a standalone panel does not change the Panel Set mounting style or frame transform", () => {
+      const config = {
+        ...DEFAULT_PANEL_CONFIG,
+        setRows: 2,
+        setCols: 4,
+        tiltDeg: 20,
+        mountHeightM: 0.45,
+      };
+      const setPanels: PlacedPanel[] = [];
+      const centerX = 3.5;
+      const centerY = -2.2;
+      const stepU = 1.13 + 0.2;
+      const stepV = 2.28 + 0.2;
+      for (let r = 0; r < 2; r++) {
+        for (let c = 0; c < 4; c++) {
+          const du = (c - 1.5) * stepU;
+          const dv = (r - 0.5) * stepV;
+          setPanels.push({
+            index: setPanels.length,
+            x: centerX - du, // 180 deg rotation
+            y: centerY - dv,
+            rotationDeg: 180,
+            tableId: "table-alpha",
+            tableRow: r,
+            tableCol: c,
+            tableRows: 2,
+            tableCols: 4,
+          });
+        }
+      }
+
+      const groupSetOnly = createPanelGroup(
+        setPanels,
+        config.panelTypeId,
+        config.mounting,
+        config.tiltDeg,
+        10.0,
+        config.mountHeightM,
+        config.legRows,
+        config.legCols,
+        undefined,
+        undefined,
+        { isPanelSet: true, config },
+      );
+
+      const standalone: PlacedPanel = { index: 8, x: -10, y: 6, rotationDeg: 180 };
+      const groupWithStandalone = createPanelGroup(
+        [...setPanels, standalone],
+        config.panelTypeId,
+        config.mounting,
+        config.tiltDeg,
+        10.0,
+        config.mountHeightM,
+        config.legRows,
+        config.legCols,
+        undefined,
+        undefined,
+        { isPanelSet: true, config },
+      );
+
+      const frameBefore = groupSetOnly.getObjectByName("SolarPanelSharedFrame") as THREE.InstancedMesh;
+      const frameAfterAdd = groupWithStandalone.getObjectByName("SolarPanelSharedFrame") as THREE.InstancedMesh;
+      expect(frameBefore).toBeDefined();
+      expect(frameAfterAdd).toBeDefined();
+      expect(frameBefore.count).toBe(1);
+      expect(frameAfterAdd.count).toBe(1);
+
+      const matBefore = new THREE.Matrix4();
+      const matAfterAdd = new THREE.Matrix4();
+      frameBefore.getMatrixAt(0, matBefore);
+      frameAfterAdd.getMatrixAt(0, matAfterAdd);
+      for (let i = 0; i < 16; i++) {
+        expect(matAfterAdd.elements[i]).toBeCloseTo(matBefore.elements[i], 6);
+      }
+
+      // Removing the standalone panel (or even removing one panel from the set) preserves the shared frame transform
+      const groupIncompleteSet = createPanelGroup(
+        setPanels.slice(0, -1),
+        config.panelTypeId,
+        config.mounting,
+        config.tiltDeg,
+        10.0,
+        config.mountHeightM,
+        config.legRows,
+        config.legCols,
+        undefined,
+        undefined,
+        { isPanelSet: true, config },
+      );
+      const frameIncomplete = groupIncompleteSet.getObjectByName("SolarPanelSharedFrame") as THREE.InstancedMesh;
+      expect(frameIncomplete).toBeDefined();
+      const matIncomplete = new THREE.Matrix4();
+      frameIncomplete.getMatrixAt(0, matIncomplete);
+      for (let i = 0; i < 16; i++) {
+        expect(matIncomplete.elements[i]).toBeCloseTo(matBefore.elements[i], 6);
+      }
+
+      disposePanelGroup(groupSetOnly);
+      disposePanelGroup(groupWithStandalone);
+      disposePanelGroup(groupIncompleteSet);
+    });
+
+    it("aligns rotated sets accurately with module positions and orientations", () => {
+      const config = {
+        ...DEFAULT_PANEL_CONFIG,
+        setRows: 2,
+        setCols: 3,
+        tiltDeg: 18,
+        mountHeightM: 0.4,
+      };
+      const rotDeg = 37;
+      const rad = (rotDeg * Math.PI) / 180;
+      const cos = Math.cos(rad);
+      const sin = Math.sin(rad);
+      const stepU = 1.13 + 0.2;
+      const stepV = 2.28 + 0.2;
+      const cx = -4.2;
+      const cy = 5.8;
+
+      const rotatedPanels: PlacedPanel[] = [];
+      for (let r = 0; r < 2; r++) {
+        for (let c = 0; c < 3; c++) {
+          const du = (c - 1) * stepU;
+          const dv = (r - 0.5) * stepV;
+          rotatedPanels.push({
+            index: rotatedPanels.length,
+            x: cx + du * cos - dv * sin,
+            y: cy + du * sin + dv * cos,
+            rotationDeg: rotDeg,
+            tableId: "rotated-table",
+            tableRow: r,
+            tableCol: c,
+            tableRows: 2,
+            tableCols: 3,
+          });
+        }
+      }
+
+      const roofZ = 14.5;
+      const group = createPanelGroup(
+        rotatedPanels,
+        config.panelTypeId,
+        config.mounting,
+        config.tiltDeg,
+        roofZ,
+        config.mountHeightM,
+        config.legRows,
+        config.legCols,
+        undefined,
+        undefined,
+        { isPanelSet: true, config },
+      );
+
+      const frameMesh = group.getObjectByName("SolarPanelSharedFrame") as THREE.InstancedMesh;
+      expect(frameMesh).toBeDefined();
+      const fMat = new THREE.Matrix4();
+      const pos = new THREE.Vector3();
+      const quat = new THREE.Quaternion();
+      const scl = new THREE.Vector3();
+      frameMesh.getMatrixAt(0, fMat);
+      fMat.decompose(pos, quat, scl);
+
+      expect(pos.x).toBeCloseTo(cx, 6);
+      expect(pos.y).toBeCloseTo(cy, 6);
+      expect(pos.z).toBeCloseTo(roofZ, 6);
+
+      const expectedQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), rad);
+      expect(Math.abs(quat.dot(expectedQuat))).toBeCloseTo(1, 6);
+
+      disposePanelGroup(group);
+    });
+
+    it("rebuilds shared frame when set dimensions, spacing, tilt, or mount height change without stale geometry", () => {
+      const baseConfig = {
+        ...DEFAULT_PANEL_CONFIG,
+        setRows: 2,
+        setCols: 3,
+        tiltDeg: 15,
+        mountHeightM: 0.4,
+        spacingM: 0.2,
+      };
+      const tallerConfig = { ...baseConfig, mountHeightM: 0.75 };
+      const steeperConfig = { ...baseConfig, tiltDeg: 32 };
+      const widerConfig = { ...baseConfig, setCols: 5, spacingM: 0.4 };
+
+      const geomBase = createSharedPanelSetFrameGeometry(baseConfig);
+      const geomTaller = createSharedPanelSetFrameGeometry(tallerConfig);
+      const geomSteeper = createSharedPanelSetFrameGeometry(steeperConfig);
+      const geomWider = createSharedPanelSetFrameGeometry(widerConfig);
+
+      geomBase.computeBoundingBox();
+      geomTaller.computeBoundingBox();
+      geomSteeper.computeBoundingBox();
+      geomWider.computeBoundingBox();
+
+      expect(geomTaller.boundingBox!.max.z).toBeGreaterThan(geomBase.boundingBox!.max.z + 0.3);
+      expect(geomSteeper.boundingBox!.max.z).toBeGreaterThan(geomBase.boundingBox!.max.z + 0.15);
+      expect(geomWider.boundingBox!.max.x).toBeGreaterThan(geomBase.boundingBox!.max.x + 1.0);
+
+      geomBase.dispose();
+      geomTaller.dispose();
+      geomSteeper.dispose();
+      geomWider.dispose();
+    });
+
+    it("never intersects the active photovoltaic surface and keeps rails flush with module undersides across rows", () => {
+      // Documented tolerance: 0.5 mm for floating-point matrix transforms
+      const TOLERANCE_M = 0.0005;
+      const SUPPORT_OVERLAP_M = 0.0015;
+      const typeDef = panelTypeDefinition("panel-550w");
+      const l = typeDef.lengthM;
+      const t = typeDef.thicknessM;
+      // In row-local tilted coordinates (where module is centred at (colCenterX, 0, 0)):
+      // - Module underside plane is z_local = -t / 2 (-0.0175 m)
+      // - Allowed structural weld overlap into bottom aluminium frame rim is +0.0015 m (-0.0160 m)
+      // - Active PV glass bottom face is z_local = -0.15 * t (-0.00525 m)
+      // - Active PV glass top face is z_local = +0.35 * t (+0.01225 m)
+      const maxAllowedSupportLocalZ = -t / 2 + SUPPORT_OVERLAP_M + TOLERANCE_M;
+      const pvGlassBottomLocalZ = -0.15 * t;
+
+      for (const tiltDeg of [0, 15, 25, 38]) {
+        for (const setRows of [1, 2, 3]) {
+          const config = {
+            ...DEFAULT_PANEL_CONFIG,
+            panelTypeId: "panel-550w" as const,
+            setRows,
+            setCols: 4,
+            tiltDeg,
+            mountHeightM: 0.45,
+            spacingM: 0.2,
+            legRows: 2,
+            legCols: 3,
+          };
+
+          const frameGeom = createSharedPanelSetFrameGeometry(config);
+          const pos = frameGeom.getAttribute("position");
+
+          const tiltRad = (tiltDeg * Math.PI) / 180;
+          const sin = Math.sin(tiltRad);
+          const centerH = PANEL_ROOF_STANDOFF_M + config.mountHeightM + (l / 2) * sin;
+          const stepV = l + config.spacingM;
+          const unTiltMatrix = new THREE.Matrix4().makeRotationX(tiltRad);
+          const v = new THREE.Vector3();
+
+          // Check every row r in the multi-row set
+          const rowHalfSpanWorldY = (l / 2) * Math.cos(tiltRad) + 0.02;
+          for (let r = 0; r < setRows; r++) {
+            const rowCenterY = (r - (setRows - 1) / 2) * stepV;
+            let highestSupportUnderRow = Number.NEGATIVE_INFINITY;
+
+            for (let i = 0; i < pos.count; i++) {
+              const dyWorld = pos.getY(i) - rowCenterY;
+              // Only inspect support vertices that lie within row r's horizontal roof footprint
+              if (Math.abs(dyWorld) > rowHalfSpanWorldY) continue;
+
+              v.set(pos.getX(i), dyWorld, pos.getZ(i) - centerH);
+              v.applyMatrix4(unTiltMatrix);
+
+              if (Math.abs(v.y) <= l / 2 + 0.02) {
+                if (v.z > highestSupportUnderRow) {
+                  highestSupportUnderRow = v.z;
+                }
+                // 1. No vertex of the shared frame may ever reach the active PV glass layer
+                expect(v.z).toBeLessThan(pvGlassBottomLocalZ - 0.005);
+                // 2. No vertex of the shared frame may protrude above the module underside + 1.5mm frame weld
+                expect(v.z).toBeLessThanOrEqual(maxAllowedSupportLocalZ);
+              }
+            }
+
+            // 3. No floating panels: the rails under row r must meet the module underside (-t/2 + 1.5mm)
+            expect(highestSupportUnderRow).toBeGreaterThanOrEqual(-t / 2 - TOLERANCE_M);
+            expect(highestSupportUnderRow).toBeCloseTo(-t / 2 + SUPPORT_OVERLAP_M, 4);
+          }
+
+          frameGeom.dispose();
+        }
+      }
     });
   });
 });

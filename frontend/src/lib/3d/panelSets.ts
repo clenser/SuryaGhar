@@ -44,6 +44,12 @@ export interface PlacedSetPanel {
   x: number;
   y: number;
   rotationDeg: number;
+  /** Shared mounting table identifier when placed as part of a multi-panel set. */
+  tableId?: string;
+  tableRow?: number;
+  tableCol?: number;
+  tableRows?: number;
+  tableCols?: number;
 }
 
 /** Auto or manual placement, plus a label. */
@@ -262,7 +268,7 @@ export function autoPlaceAllSets(
       );
       if (collides) continue;
       peers.push({ x: p.x, y: p.y, rotationDeg: p.rotationDeg, width: dims.widthM, length: dims.lengthM });
-      kept.push({ index: kept.length, x: p.x, y: p.y, rotationDeg: p.rotationDeg });
+      kept.push({ ...p, index: kept.length });
     }
     if (kept.length === 0) blocked.push(set.name);
     for (const p of kept) {
@@ -289,7 +295,7 @@ export function autoPlaceSet(
     ...set,
     mode: "auto",
     userModified: false,
-    panels: result.panels.map((p) => ({ index: 0, x: p.x, y: p.y, rotationDeg: p.rotationDeg })),
+    panels: result.panels.map((p) => ({ ...p, index: 0 })),
   };
 }
 
@@ -438,7 +444,7 @@ export function setBlockPanels(
   centreX: number,
   centreY: number,
   rotationDeg: number,
-): Array<{ x: number; y: number; rotationDeg: number }> {
+): Array<Omit<PlacedSetPanel, "index">> {
   const dims = effectivePanelDims(config);
   const rowSpacing = effectiveRowSpacingM(config);
   const colSpacing = effectiveColSpacingM(config);
@@ -453,7 +459,11 @@ export function setBlockPanels(
   const vy = cos;
   const stepU = dims.widthM + colSpacing;
   const stepV = dims.lengthM + rowSpacing;
-  const panels: Array<{ x: number; y: number; rotationDeg: number }> = [];
+  const isMultiPanelTable = config.setRows > 1 || config.setCols > 1;
+  const tableId = isMultiPanelTable
+    ? `set-${centreX.toFixed(3)}-${centreY.toFixed(3)}-${rotationDeg.toFixed(1)}-${config.setRows}x${config.setCols}`
+    : undefined;
+  const panels: Array<Omit<PlacedSetPanel, "index">> = [];
   for (let r = 0; r < config.setRows; r++) {
     for (let c = 0; c < config.setCols; c++) {
       const du = (c - (config.setCols - 1) / 2) * stepU;
@@ -462,6 +472,15 @@ export function setBlockPanels(
         x: centreX + du * ux + dv * vx,
         y: centreY + du * uy + dv * vy,
         rotationDeg,
+        ...(isMultiPanelTable
+          ? {
+              tableId,
+              tableRow: r,
+              tableCol: c,
+              tableRows: config.setRows,
+              tableCols: config.setCols,
+            }
+          : {}),
       });
     }
   }
@@ -485,7 +504,7 @@ export function validateSetPlacement(
   rotationDeg: number,
   config: PanelLayoutConfig,
   context: PlacementContext,
-): { valid: true; panels: Array<{ x: number; y: number; rotationDeg: number }> } | { valid: false; error: string } {
+): { valid: true; panels: Array<Omit<PlacedSetPanel, "index">> } | { valid: false; error: string } {
   if (!Number.isFinite(centreX) || !Number.isFinite(centreY)) {
     return { valid: false, error: "Set position is not a valid number" };
   }

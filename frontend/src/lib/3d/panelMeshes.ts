@@ -303,9 +303,12 @@ export function createPanelUnitGeometry(
     const y = -l / 2 + (j * l) / CELLS_ALONG;
     panelParts.push(box(w - 2 * FRAME_W_M, 0.01, 0.004, 0, y, gridZ, GRID_COLOR));
   }
-  // Two rails under the panel (they follow the tilt).
-  panelParts.push(box(0.06, l - 0.1, 0.04, -(w / 2 - 0.14), 0, -t / 2 - 0.02, SUPPORT_COLOR));
-  panelParts.push(box(0.06, l - 0.1, 0.04, w / 2 - 0.14, 0, -t / 2 - 0.02, SUPPORT_COLOR));
+  // Two rails under the panel (they follow the tilt) — only when using individual panel legs.
+  // When withoutLegs is true, the shared table frame provides continuous rails across the set.
+  if (!withoutLegs) {
+    panelParts.push(box(0.06, l - 0.1, 0.04, -(w / 2 - 0.14), 0, -t / 2 - 0.02, SUPPORT_COLOR));
+    panelParts.push(box(0.06, l - 0.1, 0.04, w / 2 - 0.14, 0, -t / 2 - 0.02, SUPPORT_COLOR));
+  }
 
   // Tilt about X: the +Y edge dips toward the sun (normal leans to +Y).
   const tiltMatrix = new THREE.Matrix4().makeRotationX(-tilt);
@@ -484,15 +487,19 @@ export function createPanelHeatmapFaceGeometry(
 /**
  * Shared mounting table frame geometry for Panel Sets (Task 1).
  *
- * Implements a true commercial mounting table structure:
+ * Implements a true commercial mounting table structure where every row `r`
+ * tilts about its own row axis `(Y = rowCenterY, Z = centerH)` — matching the
+ * exact per-module transform in `createPanelUnitGeometry`:
  * - Continuous longitudinal rails per row running beneath the modules across all columns.
- * - Transverse cross-beams / rafters under the rails running along the slope direction.
- * - Shared structural legs (legRows × legCols per table) with baseplates and ballast ties.
- * - Diagonal wind struts triangulating front and back legs in each bent.
- * - Clamping brackets at module joints and table ends.
+ * - Under-frame mounting clamps flush with the module frame underside (never penetrating the PV glass).
+ * - Transverse cross-beams / sloped rafters directly beneath the rails in each row.
+ * - Vertical structural legs supporting each row's rafters from roof baseplates, tied by
+ *   continuous ground channels and low-clearance knee braces that stay strictly below the rafters.
  */
 export function createSharedPanelSetFrameGeometry(
   config: PanelLayoutConfig,
+  tableRowsOverride?: number,
+  tableColsOverride?: number,
 ): THREE.BufferGeometry {
   const typeDef = panelTypeDefinition(config.panelTypeId);
   const dims = effectivePanelDims(config);
@@ -503,8 +510,8 @@ export function createSharedPanelSetFrameGeometry(
   const sin = Math.sin(tilt);
   const cos = Math.cos(tilt);
 
-  const setRows = Math.max(1, config.setRows);
-  const setCols = Math.max(1, config.setCols);
+  const setRows = Math.max(1, tableRowsOverride ?? config.setRows);
+  const setCols = Math.max(1, tableColsOverride ?? config.setCols);
   const rowSpacing = effectiveRowSpacingM(config);
   const colSpacing = effectiveColSpacingM(config);
 
@@ -512,7 +519,6 @@ export function createSharedPanelSetFrameGeometry(
   const stepV = l + rowSpacing;
 
   const totalWidth = setCols * w + (setCols - 1) * colSpacing;
-  const totalLength = setRows * l + (setRows - 1) * rowSpacing;
 
   const mountHeight = Number.isFinite(config.mountHeightM) && config.mountHeightM > 0
     ? config.mountHeightM
@@ -522,32 +528,47 @@ export function createSharedPanelSetFrameGeometry(
   const parts: THREE.BufferGeometry[] = [];
 
   const railProfileW = 0.04;
-  const railProfileH = 0.04;
-  const railLengthX = totalWidth + 0.08;
+  const railProfileH = 0.035;
+  const railLengthX = totalWidth + 0.06;
+
+  // In each row's local tilted frame, the panel underside is at z = -t / 2.
+  // The top of the longitudinal rail welds into the bottom of the aluminium frame rim by SUPPORT_OVERLAP_M (2 mm),
+  // staying >10 mm below the recessed PV glass layer.
+  const railTopLocalZ = -t / 2 + SUPPORT_OVERLAP_M;
+  const railCenterLocalZ = railTopLocalZ - railProfileH / 2;
+  const railBottomLocalZ = railTopLocalZ - railProfileH;
 
   const railTiltMatrix = new THREE.Matrix4().makeRotationX(-tilt);
 
-  // 1. Continuous longitudinal rails per row across all columns
+  // 1. Continuous longitudinal rails per row across all columns + under-frame clamps
   for (let r = 0; r < setRows; r++) {
     const rowCenterY = (r - (setRows - 1) / 2) * stepV;
-    const yOffsets = [-l * 0.25, l * 0.25];
+    const yOffsets = [-l * 0.26, l * 0.26];
 
     for (const dy of yOffsets) {
-      const localY = dy;
-      const localZ = -t / 2 - railProfileH / 2;
-      const unrotatedRail = box(railLengthX, railProfileW, railProfileH, 0, localY, localZ, SUPPORT_COLOR);
+      const unrotatedRail = box(
+        railLengthX,
+        railProfileW,
+        railProfileH,
+        0,
+        dy,
+        railCenterLocalZ,
+        SUPPORT_COLOR,
+      );
       unrotatedRail.applyMatrix4(railTiltMatrix);
       unrotatedRail.translate(0, rowCenterY, centerH);
       parts.push(unrotatedRail);
 
-      // Clamping brackets at module borders and ends
+      // Under-frame clamping brackets at module borders and table ends (strictly below railTopLocalZ)
+      const clampH = 0.016;
+      const clampCenterLocalZ = railTopLocalZ - clampH / 2;
       for (let c = 0; c <= setCols; c++) {
         let clampX: number;
         if (c === 0) clampX = -totalWidth / 2;
         else if (c === setCols) clampX = totalWidth / 2;
         else clampX = -totalWidth / 2 + c * stepU - colSpacing / 2;
 
-        const clamp = box(0.035, 0.05, 0.015, clampX, localY, localZ + railProfileH / 2 + 0.0075, FRAME_COLOR);
+        const clamp = box(0.035, 0.05, clampH, clampX, dy, clampCenterLocalZ, FRAME_COLOR);
         clamp.applyMatrix4(railTiltMatrix);
         clamp.translate(0, rowCenterY, centerH);
         parts.push(clamp);
@@ -555,39 +576,36 @@ export function createSharedPanelSetFrameGeometry(
     }
   }
 
-  // 2. Transverse cross-beams / rafters under the longitudinal rails
+  // 2. Transverse cross-beams / sloped rafters directly beneath the longitudinal rails
   const legCols = Math.max(1, config.legCols);
   const legRows = Math.max(1, config.legRows);
 
   const spanX = (count: number): number[] => {
     if (count <= 1) return [0];
-    const half = (totalWidth - 0.36) / 2;
-    return Array.from({ length: count }, (_, i) => -half + (i * 2 * half) / (count - 1));
-  };
-
-  const spanY = (count: number): number[] => {
-    if (count <= 1) return [0];
-    const half = (totalLength - 0.40) / 2;
+    const margin = Math.min(0.28, totalWidth * 0.2);
+    const half = Math.max(0.05, totalWidth / 2 - margin);
     return Array.from({ length: count }, (_, i) => -half + (i * 2 * half) / (count - 1));
   };
 
   const legXs = spanX(legCols);
-  const legYs = spanY(legRows);
 
   const rafterW = 0.05;
-  const rafterH = 0.05;
+  const rafterH = 0.04;
+  const rafterLen = l * 0.88;
+  const rafterTopLocalZ = railBottomLocalZ + SUPPORT_OVERLAP_M;
+  const rafterCenterLocalZ = rafterTopLocalZ - rafterH / 2;
+  const rafterBottomLocalZ = rafterTopLocalZ - rafterH;
 
   for (const rx of legXs) {
     for (let r = 0; r < setRows; r++) {
       const rowCenterY = (r - (setRows - 1) / 2) * stepV;
-      const rafterLen = l * 0.96;
       const unrotatedRafter = box(
         rafterW,
         rafterLen,
         rafterH,
         rx,
         0,
-        -t / 2 - railProfileH - rafterH / 2,
+        rafterCenterLocalZ,
         SUPPORT_COLOR,
       );
       unrotatedRafter.applyMatrix4(railTiltMatrix);
@@ -596,83 +614,114 @@ export function createSharedPanelSetFrameGeometry(
     }
   }
 
-  // 3. Shared structural legs (legRows × legCols) with baseplates and bottom ties
+  // 3. Shared structural legs, baseplates, continuous ground channels, and low-clearance bracing
   const basePlateSize = 0.16;
-  const basePlateThickness = 0.015;
-  const legThickness = 0.06;
+  const basePlateThickness = 0.014;
+  const legThickness = 0.05;
+
+  // Support positions along each row's sloped rafter (in the row's local tilted frame):
+  // - Single row: legRows positions distributed along the rafter.
+  // - Multi-row: if legRows <= 1, one central post per row; otherwise front & back posts per row
+  //   so every row's tilted rafter is supported at both its high and low ends without floating or piercing.
+  const rowSyPoints: number[] = (() => {
+    if (legRows <= 1) return [0];
+    if (setRows === 1) {
+      const half = l * 0.32;
+      return Array.from({ length: legRows }, (_, i) => -half + (i * 2 * half) / (legRows - 1));
+    }
+    return [-l * 0.32, l * 0.32];
+  })();
 
   for (const lx of legXs) {
-    if (legYs.length >= 2) {
-      const yStart = cos * legYs[0] - sin * (t / 2);
-      const yEnd = cos * legYs[legYs.length - 1] - sin * (t / 2);
-      const tieLen = Math.abs(yEnd - yStart) + basePlateSize;
-      const tieCenterY = (yStart + yEnd) / 2;
+    const allBentLegYs: number[] = [];
+
+    for (let r = 0; r < setRows; r++) {
+      const rowCenterY = (r - (setRows - 1) / 2) * stepV;
+      const rowLegs: Array<{ y: number; zTop: number }> = [];
+
+      for (const sy of rowSyPoints) {
+        // Exact world/table coordinates of the point (lx, sy, rafterBottomLocalZ) on row r's rafter underside:
+        // After makeRotationX(-tilt) and translate(0, rowCenterY, centerH):
+        //   Y = rowCenterY + cos(tilt)*sy + sin(tilt)*rafterBottomLocalZ
+        //   Z = centerH    - sin(tilt)*sy + cos(tilt)*rafterBottomLocalZ
+        const legY = rowCenterY + cos * sy + sin * rafterBottomLocalZ;
+        const rafterUndersideZ = centerH - sin * sy + cos * rafterBottomLocalZ;
+
+        // Account for leg cross-section slope clearance so the high-side edge of the vertical post
+        // stays strictly inside the rafter and never protrudes above the rafter top face.
+        const topZ = Math.max(
+          ROOF_STANDOFF_M + MIN_SUPPORT_LENGTH_M,
+          rafterUndersideZ + SUPPORT_OVERLAP_M,
+        );
+        const legHeight = topZ - ROOF_STANDOFF_M;
+
+        parts.push(
+          box(
+            basePlateSize,
+            basePlateSize,
+            basePlateThickness,
+            lx,
+            legY,
+            ROOF_STANDOFF_M + basePlateThickness / 2,
+            FOOTING_COLOR,
+          ),
+        );
+        parts.push(
+          box(
+            legThickness,
+            legThickness,
+            legHeight,
+            lx,
+            legY,
+            ROOF_STANDOFF_M + legHeight / 2,
+            SUPPORT_COLOR,
+          ),
+        );
+
+        allBentLegYs.push(legY);
+        rowLegs.push({ y: legY, zTop: topZ });
+      }
+
+      // Low-clearance diagonal brace within row r: stays strictly below the lowest rafter point (front.zTop)
+      if (rowLegs.length >= 2) {
+        const back = rowLegs[0]; // high side (-Y in row)
+        const front = rowLegs[rowLegs.length - 1]; // low side (+Y in row)
+        const zBottom = ROOF_STANDOFF_M + basePlateThickness + 0.015;
+        const zBraceTop = Math.min(front.zTop, back.zTop) - 0.015;
+        const dy = back.y - front.y;
+        const dz = zBraceTop - zBottom;
+        const strutLen = Math.hypot(dy, dz);
+        if (zBraceTop > zBottom + 0.04 && strutLen > 0.18) {
+          const strut = box(0.032, strutLen, 0.032, 0, 0, 0, SUPPORT_COLOR);
+          const strutAngle = Math.atan2(dz, dy);
+          strut.applyMatrix4(new THREE.Matrix4().makeRotationX(strutAngle));
+          strut.translate(
+            lx,
+            (front.y + back.y) / 2,
+            (zBottom + zBraceTop) / 2,
+          );
+          parts.push(strut);
+        }
+      }
+    }
+
+    // Continuous ground channel rail tying all legs of this bent across all rows on the roof
+    if (allBentLegYs.length >= 2) {
+      const minY = Math.min(...allBentLegYs);
+      const maxY = Math.max(...allBentLegYs);
+      const tieLen = (maxY - minY) + basePlateSize * 0.75;
+      const tieCenterY = (minY + maxY) / 2;
       parts.push(
         box(
-          0.05,
+          0.045,
           tieLen,
-          0.03,
+          0.025,
           lx,
           tieCenterY,
-          ROOF_STANDOFF_M + basePlateThickness + 0.015,
+          ROOF_STANDOFF_M + basePlateThickness + 0.0125,
           FOOTING_COLOR,
         ),
       );
-    }
-
-    const bentPoints: Array<{ y: number; zTop: number }> = [];
-
-    for (const sy of legYs) {
-      const legY = cos * sy - sin * (t / 2);
-      parts.push(
-        box(
-          basePlateSize,
-          basePlateSize,
-          basePlateThickness,
-          lx,
-          legY,
-          ROOF_STANDOFF_M + basePlateThickness / 2,
-          FOOTING_COLOR,
-        ),
-      );
-
-      const underside = centerH - sin * sy - cos * (t / 2 + railProfileH + rafterH);
-      const legHeight = Math.max(MIN_SUPPORT_LENGTH_M, underside + SUPPORT_OVERLAP_M - ROOF_STANDOFF_M);
-      parts.push(
-        box(
-          legThickness,
-          legThickness,
-          legHeight,
-          lx,
-          legY,
-          ROOF_STANDOFF_M + legHeight / 2,
-          SUPPORT_COLOR,
-        ),
-      );
-      bentPoints.push({ y: legY, zTop: ROOF_STANDOFF_M + legHeight });
-    }
-
-    // 4. Diagonal wind struts triangulating front and back legs in this bent
-    if (bentPoints.length >= 2) {
-      const front = bentPoints[bentPoints.length - 1]; // low side (+Y)
-      const back = bentPoints[0]; // high side (-Y)
-
-      const dy = back.y - front.y;
-      const zBottom = ROOF_STANDOFF_M + basePlateThickness;
-      const zTop = back.zTop * 0.85;
-      const dz = zTop - zBottom;
-      const strutLen = Math.hypot(dy, dz);
-      if (strutLen > 0.2) {
-        const strut = box(0.035, strutLen, 0.035, 0, 0, 0, SUPPORT_COLOR);
-        const strutAngle = Math.atan2(dz, dy);
-        strut.applyMatrix4(new THREE.Matrix4().makeRotationX(strutAngle));
-        strut.translate(
-          lx,
-          (front.y + back.y) / 2,
-          (zBottom + zTop) / 2,
-        );
-        parts.push(strut);
-      }
     }
   }
 
@@ -683,6 +732,152 @@ export function createSharedPanelSetFrameGeometry(
   }
   merged.computeBoundingSphere();
   return merged;
+}
+
+interface ResolvedTableDescriptor {
+  tableId: string;
+  rows: number;
+  cols: number;
+  centerX: number;
+  centerY: number;
+  rotationDeg: number;
+  panels: PlacedPanel[];
+}
+
+/**
+ * Partition `panels` into shared-table panels (with resolved table descriptors)
+ * and standalone individual-mount panels.
+ *
+ * Ownership rules:
+ * 1. Any panel with an explicit `tableId` and `(tableRows > 1 || tableCols > 1)`
+ *    always uses its shared mounting table frame, even if standalone panels are
+ *    later added to the same `PanelSet` or if a panel in the table was removed.
+ * 2. Any panel without `tableId` when other panels in the list have `tableId` is
+ *    an explicit standalone panel and always receives individual legs.
+ * 3. When no panel in `panels` carries `tableId` (legacy/direct callers) and
+ *    `options?.isPanelSet` is true with `setRows * setCols > 1`, complete chunks
+ *    of `setRows * setCols` are grouped into shared tables and any remaining
+ *    panels receive individual legs.
+ */
+function partitionPanelsByMounting(
+  panels: PlacedPanel[],
+  options?: { isPanelSet?: boolean; config?: PanelLayoutConfig },
+): {
+  setPanels: PlacedPanel[];
+  standalonePanels: PlacedPanel[];
+  tables: ResolvedTableDescriptor[];
+} {
+  const config = options?.config;
+  if (!config) {
+    return { setPanels: [], standalonePanels: panels, tables: [] };
+  }
+
+  const dims = effectivePanelDims(config);
+  const stepU = dims.widthM + effectiveColSpacingM(config);
+  const stepV = dims.lengthM + effectiveRowSpacingM(config);
+
+  const hasExplicitTableIds = panels.some((p) => Boolean(p.tableId));
+
+  if (hasExplicitTableIds) {
+    const setPanels: PlacedPanel[] = [];
+    const standalonePanels: PlacedPanel[] = [];
+    const byTable = new Map<string, PlacedPanel[]>();
+
+    for (const p of panels) {
+      const tRows = p.tableRows ?? config.setRows;
+      const tCols = p.tableCols ?? config.setCols;
+      if (p.tableId && (tRows > 1 || tCols > 1)) {
+        setPanels.push(p);
+        const list = byTable.get(p.tableId);
+        if (list) list.push(p);
+        else byTable.set(p.tableId, [p]);
+      } else {
+        standalonePanels.push(p);
+      }
+    }
+
+    const tables: ResolvedTableDescriptor[] = [];
+    for (const [tableId, members] of byTable.entries()) {
+      const first = members[0];
+      const rows = Math.max(1, first.tableRows ?? config.setRows);
+      const cols = Math.max(1, first.tableCols ?? config.setCols);
+      const rotDeg = first.rotationDeg;
+      const rad = (rotDeg * Math.PI) / 180;
+      const cos = Math.cos(rad);
+      const sin = Math.sin(rad);
+
+      let sumCx = 0;
+      let sumCy = 0;
+      for (const m of members) {
+        if (
+          m.tableRow !== undefined &&
+          m.tableCol !== undefined &&
+          m.tableRows !== undefined &&
+          m.tableCols !== undefined
+        ) {
+          const du = (m.tableCol - (m.tableCols - 1) / 2) * stepU;
+          const dv = (m.tableRow - (m.tableRows - 1) / 2) * stepV;
+          sumCx += m.x - (du * cos - dv * sin);
+          sumCy += m.y - (du * sin + dv * cos);
+        } else {
+          sumCx += m.x;
+          sumCy += m.y;
+        }
+      }
+
+      tables.push({
+        tableId,
+        rows,
+        cols,
+        centerX: sumCx / members.length,
+        centerY: sumCy / members.length,
+        rotationDeg: rotDeg,
+        panels: members,
+      });
+    }
+
+    return { setPanels, standalonePanels, tables };
+  }
+
+  // Fallback for callers that pass raw PlacedPanel[] without tableId
+  const tableSize = config.setRows * config.setCols;
+  const useLegacySet = Boolean(
+    options?.isPanelSet &&
+    (config.setRows > 1 || config.setCols > 1) &&
+    panels.length >= tableSize,
+  );
+
+  if (!useLegacySet) {
+    return { setPanels: [], standalonePanels: panels, tables: [] };
+  }
+
+  const tableCount = Math.floor(panels.length / tableSize);
+  const setPanelCount = tableCount * tableSize;
+  const setPanels = panels.slice(0, setPanelCount);
+  const standalonePanels = panels.slice(setPanelCount);
+  const tables: ResolvedTableDescriptor[] = [];
+
+  for (let tIdx = 0; tIdx < tableCount; tIdx++) {
+    const start = tIdx * tableSize;
+    const members = panels.slice(start, start + tableSize);
+    let avgX = 0;
+    let avgY = 0;
+    for (const m of members) {
+      avgX += m.x;
+      avgY += m.y;
+    }
+    tables.push({
+      tableId: `legacy-table-${tIdx}`,
+      rows: config.setRows,
+      cols: config.setCols,
+      centerX: avgX / members.length,
+      centerY: avgY / members.length,
+      rotationDeg: members[0].rotationDeg,
+      panels: members,
+    });
+  }
+
+  return { setPanels, standalonePanels, tables };
 }
 
 /**
@@ -710,64 +905,84 @@ export function createPanelGroup(
   group.name = "SolarPanels";
   if (panels.length === 0) return group;
 
-  const isSet = Boolean(
-    options?.isPanelSet &&
-    options?.config &&
-    (options.config.setRows > 1 || options.config.setCols > 1) &&
-    panels.length >= (options.config.setRows * options.config.setCols),
-  );
-
-  const geometry = createPanelUnitGeometry(
-    panelTypeId,
-    mounting,
-    tiltDeg,
-    mountHeightM,
-    legRows,
-    legCols,
-    isSet,
-  );
-  const material = new THREE.MeshStandardMaterial({
-    vertexColors: true,
-    roughness: 0.28,
-    metalness: 0.18,
-  });
-  const mesh = new THREE.InstancedMesh(geometry, material, panels.length);
-  mesh.name = "SolarPanelInstances";
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  mesh.frustumCulled = false; // one bounding volume for the whole layout
+  const { setPanels, standalonePanels, tables } = partitionPanelsByMounting(panels, options);
 
   const matrix = new THREE.Matrix4();
   const quaternion = new THREE.Quaternion();
   const scale = new THREE.Vector3(1, 1, 1);
 
-  for (let i = 0; i < panels.length; i++) {
-    const panel = panels[i];
-    quaternion.setFromAxisAngle(
-      new THREE.Vector3(0, 0, 1),
-      (panel.rotationDeg * Math.PI) / 180,
+  const buildModuleInstancedMesh = (
+    subset: PlacedPanel[],
+    withoutLegs: boolean,
+    meshName: string,
+  ): THREE.InstancedMesh => {
+    const geometry = createPanelUnitGeometry(
+      panelTypeId,
+      mounting,
+      tiltDeg,
+      mountHeightM,
+      legRows,
+      legCols,
+      withoutLegs,
     );
-    matrix.compose(new THREE.Vector3(panel.x, panel.y, roofZ), quaternion, scale);
-    mesh.setMatrixAt(i, matrix);
+    const material = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.28,
+      metalness: 0.18,
+    });
+    const mesh = new THREE.InstancedMesh(geometry, material, subset.length);
+    mesh.name = meshName;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.frustumCulled = false;
+
+    for (let i = 0; i < subset.length; i++) {
+      const panel = subset[i];
+      quaternion.setFromAxisAngle(
+        new THREE.Vector3(0, 0, 1),
+        (panel.rotationDeg * Math.PI) / 180,
+      );
+      matrix.compose(new THREE.Vector3(panel.x, panel.y, roofZ), quaternion, scale);
+      mesh.setMatrixAt(i, matrix);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    return mesh;
+  };
+
+  if (setPanels.length > 0 && standalonePanels.length === 0) {
+    group.add(buildModuleInstancedMesh(setPanels, true, "SolarPanelInstances"));
+  } else if (standalonePanels.length > 0 && setPanels.length === 0) {
+    group.add(buildModuleInstancedMesh(standalonePanels, false, "SolarPanelInstances"));
+  } else {
+    // Mixed layout: set panels use legless module geometry on shared frames;
+    // standalone panels use full individual-leg geometry simultaneously.
+    group.add(buildModuleInstancedMesh(setPanels, true, "SolarPanelInstances"));
+    group.add(buildModuleInstancedMesh(standalonePanels, false, "SolarPanelStandaloneInstances"));
   }
-  mesh.instanceMatrix.needsUpdate = true;
-  group.add(mesh);
 
-  // When placing Panel Sets, render the shared mounting table frames
-  if (isSet && options?.config) {
+  // Render shared mounting table frames for all multi-panel tables
+  if (tables.length > 0 && options?.config) {
     const config = options.config;
-    const tableSize = config.setRows * config.setCols;
-    const tableCount = Math.floor(panels.length / tableSize);
+    // Group tables by (rows, cols) in case a layer contains tables of different grid sizes
+    const byDims = new Map<string, ResolvedTableDescriptor[]>();
+    for (const tbl of tables) {
+      const key = `${tbl.rows}x${tbl.cols}`;
+      const list = byDims.get(key);
+      if (list) list.push(tbl);
+      else byDims.set(key, [tbl]);
+    }
 
-    if (tableCount > 0) {
-      const frameGeom = createSharedPanelSetFrameGeometry(config);
+    let dimGroupIdx = 0;
+    for (const [, dimTables] of byDims.entries()) {
+      const { rows, cols } = dimTables[0];
+      const frameGeom = createSharedPanelSetFrameGeometry(config, rows, cols);
       const frameMat = new THREE.MeshStandardMaterial({
         vertexColors: true,
         roughness: 0.35,
         metalness: 0.40,
       });
-      const frameMesh = new THREE.InstancedMesh(frameGeom, frameMat, tableCount);
-      frameMesh.name = "SolarPanelSharedFrame";
+      const frameMesh = new THREE.InstancedMesh(frameGeom, frameMat, dimTables.length);
+      frameMesh.name = dimGroupIdx === 0 ? "SolarPanelSharedFrame" : `SolarPanelSharedFrame_${dimGroupIdx}`;
       frameMesh.castShadow = true;
       frameMesh.receiveShadow = true;
       frameMesh.frustumCulled = false;
@@ -776,28 +991,18 @@ export function createPanelGroup(
       const fQuat = new THREE.Quaternion();
       const fScale = new THREE.Vector3(1, 1, 1);
 
-      for (let tIdx = 0; tIdx < tableCount; tIdx++) {
-        let avgX = 0;
-        let avgY = 0;
-        const start = tIdx * tableSize;
-        const end = start + tableSize;
-        for (let p = start; p < end; p++) {
-          avgX += panels[p].x;
-          avgY += panels[p].y;
-        }
-        avgX /= tableSize;
-        avgY /= tableSize;
-        const rotDeg = panels[start].rotationDeg;
-
+      for (let tIdx = 0; tIdx < dimTables.length; tIdx++) {
+        const tbl = dimTables[tIdx];
         fQuat.setFromAxisAngle(
           new THREE.Vector3(0, 0, 1),
-          (rotDeg * Math.PI) / 180,
+          (tbl.rotationDeg * Math.PI) / 180,
         );
-        fMatrix.compose(new THREE.Vector3(avgX, avgY, roofZ), fQuat, fScale);
+        fMatrix.compose(new THREE.Vector3(tbl.centerX, tbl.centerY, roofZ), fQuat, fScale);
         frameMesh.setMatrixAt(tIdx, fMatrix);
       }
       frameMesh.instanceMatrix.needsUpdate = true;
       group.add(frameMesh);
+      dimGroupIdx += 1;
     }
   }
 

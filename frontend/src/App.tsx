@@ -212,19 +212,20 @@ export default function App() {
   // Sidebar stage navigation. The map stays clean: progress is communicated
   // through the current stage panel, section headings and primary actions.
   const stageOrder: Stage[] = ["select", "model", "validate"];
+  const inDesignWorkspace = stage === "model" && designMode;
 
   return (
     <div className="app" data-sheet={sheetCtl.sheet}>
-      <Header advanced={advanced} onAdvancedToggle={handleAdvancedToggle} onSelectPlace={handleSelectPlace} designMode={designMode} />
+      <Header advanced={advanced} onAdvancedToggle={handleAdvancedToggle} onSelectPlace={handleSelectPlace} designMode={inDesignWorkspace} />
 
-      <main className={`workspace${designMode ? " design-mode" : ""}`} data-sheet={sheetCtl.sheet}>
+      <main className={`workspace${inDesignWorkspace ? " design-mode" : ""}`} data-sheet={sheetCtl.sheet}>
         {/*
           Design mode owns the workspace: the map unmounts completely (no
           hidden inset, no background GPU work) and the panel becomes the 3D
           design surface. Mounting again on exit resumes the preserved
           provider state via ensureProviderWatch — never a fresh wake cycle.
         */}
-        {!designMode && (
+        {!inDesignWorkspace && (
         <MapView
           ref={mapRef}
           layers={layers}
@@ -382,7 +383,7 @@ export default function App() {
           )}
 
           {/* Bottom Reset control is hidden in Step 2 / design mode (reclaimed for 3D viewport height) */}
-          {stage !== "model" && !designMode && (
+          {stage !== "model" && !inDesignWorkspace && (
             <ResetControl hasData={hasAnalysisData} onReset={handleReset} />
           )}
           </div>
@@ -409,7 +410,7 @@ export default function App() {
           belong to the 2D workspace. Their state lives in App, so exiting
           design mode restores them untouched.
         */}
-        {!designMode && (
+        {!inDesignWorkspace && (
           <>
             <ImagerySelector onOpenLayers={() => setLayersOpen(true)} />
 

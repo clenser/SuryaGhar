@@ -185,4 +185,39 @@ describe("ValidatePanel surface assessment", () => {
     await userEvent.click(topBackBtn);
     expect(onBackToModel).toHaveBeenCalledTimes(1);
   });
+
+  it("renders long assessment results with visual preview and static footer actions that do not obscure content", () => {
+    const bodyWithImages = {
+      ...resultBody(),
+      images: {
+        original: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+        mask: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+        overlay: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+      },
+      warnings: [REASON, "Check perimeter drainage channels.", "Verify northwest corner parapet height."],
+      limitations: ["Imagery resolution limits precision.", "Seasonal tree foliage may vary."],
+    };
+
+    renderPanel({
+      kind: "ok",
+      result: bodyWithImages as never,
+      model: "sam2_base_plus" as SegmentationModel,
+    });
+
+    const card = document.querySelector(".stage-card--validate");
+    expect(card).not.toBeNull();
+
+    // Visual results section and preview image are present above the footer
+    const previewImg = document.querySelector(".vis-preview");
+    expect(previewImg).not.toBeNull();
+
+    // Footer actions use the dedicated non-sticky footer class so they sit below content
+    const footerActions = document.querySelector(".stage-card__actions--footer");
+    expect(footerActions).not.toBeNull();
+    expect(footerActions?.querySelectorAll("button").length).toBe(3);
+
+    // Ensure DOM order places visual results preview BEFORE the footer actions
+    const relation = previewImg!.compareDocumentPosition(footerActions!);
+    expect(relation & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
 });

@@ -720,12 +720,15 @@ export function ModelPanel({
           }))
         : undefined;
 
-      const isSet = previewCandidate.config.setRows > 1 || previewCandidate.config.setCols > 1;
+      const isSet =
+        previewCandidate.panels.some((p) => Boolean(p.tableId)) ||
+        previewCandidate.config.setRows > 1 ||
+        previewCandidate.config.setCols > 1;
       return [
         {
           config: previewCandidate.config,
           panels: previewCandidate.panels.map(
-            (p) => ({ index: p.index, x: p.x, y: p.y, rotationDeg: p.rotationDeg }) as PlacedPanel,
+            (p) => ({ ...p }) as PlacedPanel,
           ),
           isPanelSet: isSet,
           shadingSeverities: shadingVisualizationActive
@@ -765,13 +768,15 @@ export function ModelPanel({
       }
 
       globalPanelOffset += set.panels.length;
-      const isSet = (set.config.setRows > 1 || set.config.setCols > 1) &&
-        (set.mode === "auto" || (set.panels.length % (set.config.setRows * set.config.setCols) === 0 && set.panels.length > 0));
+      const hasTablePanels = set.panels.some((p) => Boolean(p.tableId));
+      const isSet =
+        hasTablePanels ||
+        ((set.config.setRows > 1 || set.config.setCols > 1) && set.mode === "auto");
 
       return {
         config: set.config,
         panels: set.panels.map(
-          (p) => ({ index: p.index, x: p.x, y: p.y, rotationDeg: p.rotationDeg }) as PlacedPanel,
+          (p) => ({ ...p }) as PlacedPanel,
         ),
         isPanelSet: isSet,
         shadingSeverities: severities,
@@ -1137,13 +1142,13 @@ export function ModelPanel({
         return;
       }
 
-      const kept: Array<{ index: number; x: number; y: number; rotationDeg: number }> = [];
+      const kept: PlacedPanel[] = [];
       const seen = [...reserved];
       for (const x of result.panels) {
         const rect = rectangleCorners(x.x, x.y, dims.widthM, dims.lengthM, x.rotationDeg);
         if (seen.some((peer) => footprintsOverlap(rect, rectangleCorners(peer.x, peer.y, peer.width, peer.length, peer.rotationDeg)))) continue;
         seen.push({ x: x.x, y: x.y, rotationDeg: x.rotationDeg, width: dims.widthM, length: dims.lengthM });
-        kept.push({ index: kept.length, x: x.x, y: x.y, rotationDeg: x.rotationDeg });
+        kept.push({ ...x, index: kept.length });
       }
 
       if (kept.length === 0) {

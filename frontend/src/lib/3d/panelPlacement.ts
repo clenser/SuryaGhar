@@ -45,6 +45,16 @@ export interface PlacedPanel {
   y: number;
   /** Degrees counter-clockwise about Z. */
   rotationDeg: number;
+  /** Shared mounting table identifier when placed as part of a multi-panel set. */
+  tableId?: string;
+  /** Row index (0..tableRows-1) within its shared mounting table. */
+  tableRow?: number;
+  /** Column index (0..tableCols-1) within its shared mounting table. */
+  tableCol?: number;
+  /** Total rows in its shared mounting table. */
+  tableRows?: number;
+  /** Total columns in its shared mounting table. */
+  tableCols?: number;
 }
 
 export interface PlacementRequest {
@@ -428,6 +438,25 @@ function computePlacePanels(request: PlacementRequest): PlacementResult {
       targetStatus = `Roof capacity bounded to ${achievedKwp.toFixed(2)} kWp (${best.length} panels) with current setbacks and obstacles; target of ${targetKwp} kWp cannot be fully placed.`;
       targetAchieved = false;
     }
+  }
+
+  if (rows > 1 || cols > 1) {
+    const setSize = rows * cols;
+    best = best.map((p, idx) => {
+      const tableIdx = Math.floor(idx / setSize);
+      const inBlock = idx % setSize;
+      const r = Math.floor(inBlock / cols);
+      const c = inBlock % cols;
+      return {
+        ...p,
+        index: idx,
+        tableId: `auto-table-${tableIdx}`,
+        tableRow: r,
+        tableCol: c,
+        tableRows: rows,
+        tableCols: cols,
+      };
+    });
   }
 
   return { panels: best, reason: null, targetStatus, targetAchieved };
