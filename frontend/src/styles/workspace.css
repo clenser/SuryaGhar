@@ -550,8 +550,9 @@
   to { transform: rotate(360deg); }
 }
 
-.map-view__canvas[data-mode="drawing"] .maplibregl-canvas {
-  cursor: crosshair;
+.map-view__canvas[data-mode="drawing"],
+.map-view__canvas[data-mode="drawing"] * {
+  cursor: crosshair !important;
 }
 
 .map-view__canvas[data-mode="editing"] .maplibregl-canvas,

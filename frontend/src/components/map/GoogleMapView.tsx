@@ -122,12 +122,13 @@ export const GoogleMapView = forwardRef<GoogleMapViewHandle, MapViewProps>(funct
         const map = new googleInstance.maps.Map(containerRef.current, {
           center: { lat: KOLKATA_VIEW.center.lat, lng: KOLKATA_VIEW.center.lng },
           zoom: Math.round(KOLKATA_VIEW.zoom),
-          mapTypeId: googleInstance.maps.MapTypeId.SATELLITE,
+          mapTypeId: (googleInstance.maps?.MapTypeId?.SATELLITE as string | undefined) ?? "satellite",
           tilt: 0,
           heading: 0,
           disableDefaultUI: true,
           gestureHandling: "greedy",
           rotateControl: false,
+          draggableCursor: selectionMode === "drawing" ? "crosshair" : undefined,
         });
 
         mapRef.current = map;
@@ -171,19 +172,33 @@ export const GoogleMapView = forwardRef<GoogleMapViewHandle, MapViewProps>(funct
     };
   }, []);
 
+  // Update map cursor based on selectionMode
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !loaded || typeof window === "undefined" || !window.google?.maps) return;
+    map.setOptions({
+      draggableCursor: selectionMode === "drawing" ? "crosshair" : null,
+    });
+  }, [selectionMode, loaded]);
+
   // Update map type / context layer based on layers prop
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !loaded || typeof window === "undefined" || !window.google?.maps) return;
 
+    const mapsApi = window.google.maps;
+    const hybridId = (mapsApi.MapTypeId?.HYBRID as string | undefined) ?? "hybrid";
+    const satelliteId = (mapsApi.MapTypeId?.SATELLITE as string | undefined) ?? "satellite";
+    const roadmapId = (mapsApi.MapTypeId?.ROADMAP as string | undefined) ?? "roadmap";
+
     if (layers.satelliteOpacity > 0) {
       if (layers.contextOpacity > 0) {
-        map.setMapTypeId(window.google.maps.MapTypeId.HYBRID);
+        map.setMapTypeId(hybridId);
       } else {
-        map.setMapTypeId(window.google.maps.MapTypeId.SATELLITE);
+        map.setMapTypeId(satelliteId);
       }
     } else {
-      map.setMapTypeId(window.google.maps.MapTypeId.ROADMAP);
+      map.setMapTypeId(roadmapId);
     }
   }, [layers, loaded]);
 
