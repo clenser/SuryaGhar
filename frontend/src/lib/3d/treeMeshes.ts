@@ -39,11 +39,29 @@ function getGLTFLoader(): GLTFLoader {
   return gltfLoaderInstance;
 }
 
-/** Map of tree types to their GLB file paths. */
+/** Map of tree types to their GLTF/GLB file paths in the public directory. */
 export const TREE_MODEL_URLS: Record<TreeType, string> = {
-  broadleaf: "/models/trees/broadleaf.glb",
-  conifer: "/models/trees/conifer.glb",
-  "small-ornamental": "/models/trees/small-ornamental.glb",
+  broadleaf: "/assets/trees/stylized-nature/CommonTree_1.gltf",
+  conifer: "/assets/trees/stylized-nature/Pine_1.gltf",
+  "small-ornamental": "/assets/trees/stylized-nature/TwistedTree_1.gltf",
+};
+
+/** Secondary fallback URLs in case local assets are arranged in alternative paths. */
+export const TREE_MODEL_FALLBACK_URLS: Record<TreeType, string[]> = {
+  broadleaf: [
+    "/assets/stylized-nature/CommonTree_1.gltf",
+    "/assets/trees/stylized-nature/CommonTree_2.gltf",
+    "/models/trees/broadleaf.glb",
+  ],
+  conifer: [
+    "/assets/stylized-nature/Pine_1.gltf",
+    "/models/trees/conifer.glb",
+  ],
+  "small-ornamental": [
+    "/assets/stylized-nature/TwistedTree_1.gltf",
+    "/assets/trees/stylized-nature/CommonTree_3.gltf",
+    "/models/trees/small-ornamental.glb",
+  ],
 };
 
 /**
@@ -64,6 +82,8 @@ export function registerTreeTemplate(type: TreeType, group: THREE.Group): void {
  * - Translates along Z so the base of the trunk sits at Z = 0.
  * - Center X and Y at origin (0, 0).
  * - Enables castShadow and receiveShadow on all child meshes.
+ * - Configures MeshStandardMaterial properties for natural architectural lighting:
+ *   leaves have alphaTesting enabled and slightly softened roughness, avoiding pitch-black foliage.
  */
 export function normalizeTreeGLTF(scene: THREE.Group): { group: THREE.Group; nativeHeight: number; nativeWidth: number } {
   const container = new THREE.Group();
@@ -92,10 +112,26 @@ export function normalizeTreeGLTF(scene: THREE.Group): { group: THREE.Group; nat
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       if (mesh.material) {
+        const prepareMaterial = (mat: THREE.Material): THREE.Material => {
+          const m = mat.clone();
+          if ((m as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
+            const std = m as THREE.MeshStandardMaterial;
+            std.roughness = Math.max(0.65, Math.min(0.9, std.roughness || 0.8));
+            std.metalness = Math.min(0.05, std.metalness || 0);
+            std.shadowSide = THREE.DoubleSide;
+            // Prevent foliage with alpha mask from looking unnatural or completely black in shadow
+            if (std.alphaTest > 0 || std.transparent) {
+              std.alphaTest = Math.max(0.2, std.alphaTest || 0.2);
+              std.depthWrite = true;
+            }
+          }
+          return m;
+        };
+
         if (Array.isArray(mesh.material)) {
-          mesh.material = mesh.material.map((m) => m.clone());
+          mesh.material = mesh.material.map(prepareMaterial);
         } else {
-          mesh.material = mesh.material.clone();
+          mesh.material = prepareMaterial(mesh.material);
         }
       }
     }
@@ -111,30 +147,31 @@ export function normalizeTreeGLTF(scene: THREE.Group): { group: THREE.Group; nat
 }
 
 /**
- * Asynchronously load a tree model by category.
+ * Asynchronously load a tree model by category with fallback chain.
  */
 export async function loadTreeModel(type: TreeType): Promise<THREE.Group> {
   const cached = treeTemplateCache.get(type);
   if (cached) return cached.group;
 
-  const url = TREE_MODEL_URLS[type];
+  const primaryUrl = TREE_MODEL_URLS[type];
+  const fallbackUrls = TREE_MODEL_FALLBACK_URLS[type] ?? [];
+  const candidateUrls = [primaryUrl, ...fallbackUrls];
   const loader = getGLTFLoader();
 
-  return new Promise((resolve, reject) => {
-    loader.load(
-      url,
-      (gltf) => {
-        const normalized = normalizeTreeGLTF(gltf.scene);
-        treeTemplateCache.set(type, normalized);
-        resolve(normalized.group);
-      },
-      undefined,
-      (err) => {
-        console.warn(`[treeMeshes] Failed to load GLB model for ${type}:`, err);
-        reject(err);
-      },
-    );
-  });
+  for (const url of candidateUrls) {
+    try {
+      const gltf = await new Promise<any>((resolve, reject) => {
+        loader.load(url, resolve, undefined, reject);
+      });
+      const normalized = normalizeTreeGLTF(gltf.scene);
+      treeTemplateCache.set(type, normalized);
+      return normalized.group;
+    } catch {
+      // Continue to next fallback URL
+    }
+  }
+
+  throw new Error(`Failed to load 3D tree model for ${type} from all candidates`);
 }
 
 /**

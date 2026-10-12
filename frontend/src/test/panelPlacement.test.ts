@@ -323,4 +323,60 @@ describe("placePanels", () => {
     expect(oneByFour.panels.length % 4).toBe(0);
     expect(oneByFour.panels).not.toEqual(twoByFive.panels);
   });
+
+  it("maximizes packing on concave / notched roofs across separated rows", () => {
+    // L-shaped roof:
+    // Bottom wing: X in [-10, 0], Y in [-10, 0]
+    // Top wing: X in [-10, 10], Y in [0, 10]
+    // An obstacle or notch in the bottom wing must NOT prevent panels from filling the top wing
+    const lShapedTerrace: Point2[] = [
+      { x: -10, y: -10 },
+      { x: 0, y: -10 },
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: -10, y: 10 },
+    ];
+    const config = { ...DEFAULT_PANEL_CONFIG, setRows: 1, setCols: 1 };
+    const { panels, reason } = placePanels({
+      terrace: lShapedTerrace,
+      obstacles: [],
+      config,
+    });
+    expect(reason).toBeNull();
+    // In an L-shaped roof of 100m² + 100m² = 200m², single panels must populate both wings
+    expect(panels.length).toBeGreaterThan(20);
+
+    const hasBottomWing = panels.some((p) => p.x < 0 && p.y < 0);
+    const hasTopWing = panels.some((p) => p.x > 0 && p.y > 0);
+    expect(hasBottomWing).toBe(true);
+    expect(hasTopWing).toBe(true);
+  });
+
+  it("continues placing valid panels after an obstacle blocks an intermediate row", () => {
+    // Rectangular roof with a wide obstacle across the center Y = [-1, 1]
+    const terrace = rectRing(25, 25);
+    const centerObstacle: Obstacle = {
+      id: "divider",
+      type: "staircase-room",
+      position: { x: 0, y: 0 },
+      width: 22,
+      length: 4,
+      height: 2.5,
+      rotation: 0,
+    };
+    const config = { ...DEFAULT_PANEL_CONFIG, setRows: 1, setCols: 1 };
+    const { panels, reason } = placePanels({
+      terrace,
+      obstacles: [centerObstacle],
+      config,
+    });
+    expect(reason).toBeNull();
+    // Panels must be placed on BOTH sides of the obstacle (north and south)
+    const northPanels = panels.filter((p) => p.y > 3);
+    const southPanels = panels.filter((p) => p.y < -3);
+    expect(northPanels.length).toBeGreaterThan(0);
+    expect(southPanels.length).toBeGreaterThan(0);
+  });
 });
+

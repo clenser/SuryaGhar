@@ -1,0 +1,37 @@
+{
+  "name": "Stylized Nature MegaKit - Tree Assets",
+  "version": "1.0.0",
+  "license": "CC0-1.0 (Public Domain)",
+  "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "source": "Stylized Nature MegaKit (Kay Lousberg / Quaternius)",
+  "models": [
+    {
+      "id": "broadleaf",
+      "file": "CommonTree_1.gltf",
+      "type": "broadleaf",
+      "description": "Broadleaf deciduous tree with natural foliage and textured bark",
+      "textures": ["Bark_NormalTree.png", "Bark_NormalTree_Normal.png", "Leaves_NormalTree_C.png"]
+    },
+    {
+      "id": "broadleaf-variation",
+      "file": "CommonTree_2.gltf",
+      "type": "broadleaf",
+      "description": "Secondary broadleaf tree variation with alternate canopy profile",
+      "textures": ["Bark_NormalTree.png", "Bark_NormalTree_Normal.png", "Leaves_NormalTree_C.png"]
+    },
+    {
+      "id": "conifer",
+      "file": "Pine_1.gltf",
+      "type": "conifer",
+      "description": "Conifer / pine tree with layered needle tiers",
+      "textures": ["Bark_NormalTree.png", "Bark_NormalTree_Normal.png", "Leaf_Pine_C.png"]
+    },
+    {
+      "id": "twisted",
+      "file": "TwistedTree_1.gltf",
+      "type": "small-ornamental",
+      "description": "Ornamental twisted tree with curved trunk and natural canopy",
+      "textures": ["Bark_TwistedTree.png", "Bark_TwistedTree_Normal.png", "Leaves_TwistedTree_C.png"]
+    }
+  ]
+}

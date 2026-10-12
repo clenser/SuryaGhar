@@ -282,11 +282,11 @@ export function placePanels(request: PlacementRequest): PlacementResult {
   /**
    * Lattice phases to try, as fractions of one step. The lattice is anchored on
    * the terrace bounding box, so an unaligned origin can strand a whole row or
-   * column. Sweeping a few deterministic phases and keeping the densest result
+   * column. Sweeping deterministic phases and keeping the densest result
    * recovers those columns without changing the spacing rule: within any one
    * phase the step is still exactly one panel pitch per axis.
    */
-  const PHASES = [0, 0.5, 0.25, 0.75];
+  const PHASES = [0, 0.5, 0.25, 0.75, 0.125, 0.375, 0.625, 0.875];
 
   let best: PlacedPanel[] = [];
   for (const phaseU of PHASES) {
@@ -317,6 +317,12 @@ export function placePanels(request: PlacementRequest): PlacementResult {
    * roof, obstacle and peer checks (all-or-nothing: a set never straddles
    * an edge, an obstacle or another set). Block pitch equals the intra-set
    * panel pitch, so gaps stay uniform within and between sets.
+   *
+   * Crucially, candidate rows and columns are searched across the full
+   * bounding extent. A row or section that cannot fit a panel (e.g. Due to
+   * a courtyard, notch, obstacle, or setback) does NOT terminate the search,
+   * ensuring concave/L-shaped/U-shaped roofs and separated usable regions
+   * are fully packed to maximum feasible density.
    */
   function latticeAt(originU: number, originV: number): PlacedPanel[] {
     const placed: PlacedPanel[] = [];
@@ -326,16 +332,11 @@ export function placePanels(request: PlacementRequest): PlacementResult {
     const uLimit = uMax;
     const vLimit = vMax;
     for (let bv = originV; bv <= vLimit + 1e-9; bv += stepV) {
-      let placedInRow = false;
       for (let bu = originU; bu <= uLimit + 1e-9; bu += stepU) {
         const block = blockAt(bu, bv, placed);
         if (block === null) continue;
         for (const panel of block) placed.push({ ...panel, index: placed.length });
-        placedInRow = true;
       }
-      // A row that places nothing means every later row is also empty: the
-      // lattice only walks away from the roof bounding box.
-      if (!placedInRow) break;
     }
     return placed;
   }

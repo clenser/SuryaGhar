@@ -227,4 +227,16 @@ describe("Tree 3D templates and interactive preview", () => {
     });
     expect(translucentCount).toBeGreaterThan(0);
   });
+
+  it("points to Stylized Nature MegaKit asset paths with fallback chains", async () => {
+    const { TREE_MODEL_URLS, TREE_MODEL_FALLBACK_URLS } = await import("../lib/3d/treeMeshes");
+    expect(TREE_MODEL_URLS.broadleaf).toContain("CommonTree_1.gltf");
+    expect(TREE_MODEL_URLS.conifer).toContain("Pine_1.gltf");
+    expect(TREE_MODEL_URLS["small-ornamental"]).toContain("TwistedTree_1.gltf");
+
+    expect(TREE_MODEL_FALLBACK_URLS.broadleaf.length).toBeGreaterThanOrEqual(1);
+    expect(TREE_MODEL_FALLBACK_URLS.conifer.length).toBeGreaterThanOrEqual(1);
+    expect(TREE_MODEL_FALLBACK_URLS["small-ornamental"].length).toBeGreaterThanOrEqual(1);
+  });
 });
+

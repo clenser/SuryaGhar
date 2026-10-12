@@ -74,6 +74,63 @@ export function framingFromBox(box: THREE.Box3): BuildingFraming {
 }
 
 /**
+ * Create a lightweight, high-dynamic-range procedural environment map for architectural PBR materials.
+ * Gives realistic subtle sky-and-ground specular reflections to photovoltaic glass and building materials
+ * without expensive real-time planar reflection cameras or external image downloads.
+ */
+export function createArchitecturalEnvironmentMap(renderer: THREE.WebGLRenderer): THREE.WebGLRenderTarget {
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  pmrem.compileEquirectangularShader();
+
+  const envScene = new THREE.Scene();
+  // Soft ambient sky gradient
+  const skyColor = new THREE.Color(0xdde8f5);
+  const horizonColor = new THREE.Color(0xb8c8d8);
+  const groundColor = new THREE.Color(0x384048);
+
+  // Simple environment sphere
+  const geom = new THREE.SphereGeometry(100, 16, 12);
+  const mat = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    uniforms: {
+      topColor: { value: skyColor },
+      midColor: { value: horizonColor },
+      bottomColor: { value: groundColor },
+    },
+    vertexShader: `
+      varying vec3 vWorldPosition;
+      void main() {
+        vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+        vWorldPosition = worldPosition.xyz;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 topColor;
+      uniform vec3 midColor;
+      uniform vec3 bottomColor;
+      varying vec3 vWorldPosition;
+      void main() {
+        vec3 n = normalize(vWorldPosition);
+        float h = n.z; // Z-up local coordinate frame
+        vec3 col = h > 0.0 ? mix(midColor, topColor, pow(h, 0.7)) : mix(midColor, bottomColor, pow(-h, 0.7));
+        gl_FragColor = vec4(col, 1.0);
+      }
+    `,
+  });
+
+  const skyMesh = new THREE.Mesh(geom, mat);
+  envScene.add(skyMesh);
+
+  const envMap = pmrem.fromScene(envScene, 0.04);
+  geom.dispose();
+  mat.dispose();
+  pmrem.dispose();
+
+  return envMap;
+}
+
+/**
  * Create a Three.js scene with professional defaults.
  * Dark neutral studio background (M2 redesign): restrained, contrasts the
  * warm-white building, and makes directional shadows easy to read.
@@ -503,8 +560,22 @@ export function setupScene(
     scene.add(light);
   }
 
+  // Create subtle architectural environment map for PBR specular reflections
+  let envMap: THREE.WebGLRenderTarget | null = null;
+  try {
+    envMap = createArchitecturalEnvironmentMap(renderer);
+    scene.environment = envMap.texture;
+    scene.environmentIntensity = 0.45;
+  } catch {
+    // Graceful fallback for mock/jsdom environments
+  }
+
   const dispose = () => {
     controls.dispose();
+    if (envMap) {
+      envMap.dispose();
+      envMap = null;
+    }
     renderer.dispose();
     // Building geometries/materials are disposed by the viewer component.
     scene.clear();

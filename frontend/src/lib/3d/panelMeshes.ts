@@ -355,8 +355,8 @@ export function createPanelGroup(
   const geometry = createPanelUnitGeometry(panelTypeId, mounting, tiltDeg, mountHeightM, legRows, legCols);
   const material = new THREE.MeshStandardMaterial({
     vertexColors: true,
-    roughness: 0.45,
-    metalness: 0.45,
+    roughness: 0.28,
+    metalness: 0.18,
   });
   const mesh = new THREE.InstancedMesh(geometry, material, panels.length);
   mesh.name = "SolarPanelInstances";
