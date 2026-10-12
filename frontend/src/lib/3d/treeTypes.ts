@@ -176,6 +176,13 @@ export function segmentsCross(a: Point2, b: Point2, c: Point2, d: Point2): boole
   return t1 <= 0 && t2 <= 0;
 }
 
+/** True when segments ab and cd cross strictly in their interiors (proper intersection). */
+export function properSegmentsCross(a: Point2, b: Point2, c: Point2, d: Point2): boolean {
+  const t1 = orientation(a, b, c) * orientation(a, b, d);
+  const t2 = orientation(c, d, a) * orientation(c, d, b);
+  return t1 < 0 && t2 < 0;
+}
+
 /** True when a ring self-intersects (any non-adjacent edge pair crosses). */
 export function polygonSelfIntersects(ring: Point2[]): boolean {
   const n = ring.length;
@@ -222,7 +229,7 @@ function distanceToSegment(p: Point2, a: Point2, b: Point2): number {
 }
 
 /** Minimum distance from a point to the polygon boundary. */
-function distanceToRing(p: Point2, ring: Point2[]): number {
+export function distanceToRing(p: Point2, ring: Point2[]): number {
   let min = Number.POSITIVE_INFINITY;
   for (let i = 0; i < ring.length; i++) {
     const d = distanceToSegment(p, ring[i], ring[(i + 1) % ring.length]);
@@ -247,23 +254,43 @@ export function pointInPolygon(point: Point2, polygon: Point2[]): boolean {
   return inside;
 }
 
-/** General polygon-polygon overlap test (handles concave polygons). Touching at edges/corners is allowed. */
+/**
+ * General polygon-polygon overlap test (handles concave polygons).
+ * Touching along edges or at corners is allowed (zero clearance contact).
+ * Returns true only when polygons have strict positive-area overlap.
+ */
 export function polygonsOverlap(a: Point2[], b: Point2[]): boolean {
   if (a.length < 3 || b.length < 3) return false;
-  // Check for any proper edge crossing
+  // 1. Check for proper edge crossings (strict interior crossing of boundary segments)
   for (let i = 0; i < a.length; i++) {
     for (let j = 0; j < b.length; j++) {
       const a1 = a[i];
       const a2 = a[(i + 1) % a.length];
       const b1 = b[j];
       const b2 = b[(j + 1) % b.length];
-      if (segmentsCross(a1, a2, b1, b2)) return true;
+      if (properSegmentsCross(a1, a2, b1, b2)) return true;
     }
   }
-  // Check containment (one polygon fully inside the other without edge crossing)
-  // Boundary points count as inside for this test
-  if (a.some((p) => pointInPolygon(p, b))) return true;
-  if (b.some((p) => pointInPolygon(p, a))) return true;
+  // 2. Check for vertices strictly contained in the interior (distance to boundary > 1e-4)
+  if (a.some((p) => pointInPolygon(p, b) && distanceToRing(p, b) > 1e-4)) return true;
+  if (b.some((p) => pointInPolygon(p, a) && distanceToRing(p, a) > 1e-4)) return true;
+
+  // 3. Check edge midpoints strictly contained in interior
+  for (let i = 0; i < a.length; i++) {
+    const mid = { x: (a[i].x + a[(i + 1) % a.length].x) / 2, y: (a[i].y + a[(i + 1) % a.length].y) / 2 };
+    if (pointInPolygon(mid, b) && distanceToRing(mid, b) > 1e-4) return true;
+  }
+  for (let j = 0; j < b.length; j++) {
+    const mid = { x: (b[j].x + b[(j + 1) % b.length].x) / 2, y: (b[j].y + b[(j + 1) % b.length].y) / 2 };
+    if (pointInPolygon(mid, a) && distanceToRing(mid, a) > 1e-4) return true;
+  }
+
+  // 4. Check centroid interior containment
+  const centA = { x: a.reduce((s, p) => s + p.x, 0) / a.length, y: a.reduce((s, p) => s + p.y, 0) / a.length };
+  if (pointInPolygon(centA, b) && distanceToRing(centA, b) > 1e-4) return true;
+  const centB = { x: b.reduce((s, p) => s + p.x, 0) / b.length, y: b.reduce((s, p) => s + p.y, 0) / b.length };
+  if (pointInPolygon(centB, a) && distanceToRing(centB, a) > 1e-4) return true;
+
   return false;
 }
 
@@ -290,6 +317,8 @@ export function treeTrunkRadius(type: TreeType): number {
  * - Trees may be placed immediately beside exterior building walls (zero clearance contact).
  * - The trunk/base must never penetrate the interior of the building footprint.
  * - The canopy may touch or overhang the exterior wall, but trunk position must remain outside.
+ * - Canopies of adjacent trees may touch along edges or corners without artificial gaps.
+ * - Trunks of adjacent trees must not collide (distance < r1 + r2).
  * Returns { valid: true } or { valid: false; error: string }.
  */
 export function validateTree(
@@ -325,10 +354,20 @@ export function validateTree(
     return { valid: false, error: "Tree trunk intersects building interior" };
   }
 
-  // 4. Overlap with other trees (canopy spacing check between trees)
+  // 4. Overlap and collision with other trees
   const footprint = treeFootprint(tree);
   for (const other of others) {
     if (other.id === tree.id) continue;
+    // Trunk collision check: trunks must not collide with other trunks (d < r1 + r2)
+    const trunkDist = Math.hypot(tree.position.x - other.position.x, tree.position.y - other.position.y);
+    const minTrunkDist = trunkR + treeTrunkRadius(other.type) - 1e-4;
+    if (trunkDist < minTrunkDist) {
+      return {
+        valid: false,
+        error: `Tree trunk collides with the ${treeTypeLabel(other.type).toLowerCase()}`,
+      };
+    }
+
     const otherFootprint = treeFootprint(other);
     if (polygonsOverlap(footprint, otherFootprint)) {
       return {

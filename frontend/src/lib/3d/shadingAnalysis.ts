@@ -225,9 +225,21 @@ export function clipPolygonConvex(subject: Point2[], clipper: Point2[]): Point2[
 /**
  * Projects an elevated obstacle onto the roof plane (at roofZ) along the sun ray.
  *
+ * For rooftop obstacles: baseZ = roofZ, topZ = roofZ + height.
+ * For ground-planted trees: baseZ is the canopy base elevation (or 0 for trunk), topZ is the total tree height.
+ * 
+ * Physics principles:
+ * 1. If topZ <= roofZ: The entire obstacle is below or level with the roof plane.
+ *    Downwards sunlight rays cannot intersect the roof plane after passing through the obstacle.
+ *    Returns empty array [] (zero shadow on roof).
+ * 2. Only the portion of the obstacle above the roof plane (z >= roofZ) can cast a shadow ONTO the roof plane.
+ *    The elevation range above the roof plane is [effectiveBaseZ, topZ] where effectiveBaseZ = Math.max(roofZ, baseZ).
+ * 3. A point (x, y, z) casts shadow onto the horizontal plane at Z = roofZ at:
+ *    (x - (z - roofZ)/tan(el) * sin(az), y - (z - roofZ)/tan(el) * cos(az)).
+ *
  * @param footprint 2D footprint of the obstacle in local metres
- * @param baseZ Elevation of the obstacle base in local metres (e.g. roofZ for rooftop obstacles, 0 for ground trees)
- * @param topZ Elevation of the obstacle top in local metres (baseZ + height)
+ * @param baseZ Elevation of the obstacle base in local metres (e.g. roofZ for rooftop obstacles, canopy base for trees)
+ * @param topZ Elevation of the obstacle top in local metres (total height)
  * @param roofZ Elevation of the roof surface in local metres
  * @param solarAzimuthDeg Solar azimuth degrees clockwise from North
  * @param solarElevationDeg Solar elevation degrees above horizon
@@ -241,19 +253,21 @@ export function projectObstacleShadowToRoof(
   solarElevationDeg: number,
 ): Point2[] {
   if (solarElevationDeg <= 1.0) return []; // Sun at or below horizon
-  if (topZ <= roofZ) return [];
+  if (topZ <= roofZ) return []; // Obstacle does not reach roof height
 
   const elRad = (solarElevationDeg * Math.PI) / 180;
   const azRad = (solarAzimuthDeg * Math.PI) / 180;
   const tanEl = Math.tan(elRad);
   if (tanEl <= 1e-4) return [];
 
+  // Elevation span above roof plane
   const effectiveTopH = topZ - roofZ;
   const effectiveBaseH = Math.max(0, baseZ - roofZ);
 
   const lenTop = effectiveTopH / tanEl;
   const lenBase = effectiveBaseH / tanEl;
 
+  // Displacement pointing away from the sun
   const dxTop = -Math.sin(azRad) * lenTop;
   const dyTop = -Math.cos(azRad) * lenTop;
   const dxBase = -Math.sin(azRad) * lenBase;
@@ -448,12 +462,16 @@ export function runAnnualShadingAnalysis(params: {
     };
   });
 
-  // Pre-calculate tree footprints (ground level Z = 0)
+  // Pre-calculate tree footprints and elevated canopy geometry
+  // Trees are planted on the ground (ground Z = 0). The foliage canopy begins
+  // above trunk height: broadleaf ~0.35H, conifer ~0.20H, small-ornamental ~0.40H.
   const treeGeoms = trees.map((t) => {
     const footprint = treeFootprint(t);
+    const trunkFraction = t.type === "broadleaf" ? 0.35 : t.type === "conifer" ? 0.20 : 0.40;
+    const canopyBaseZ = t.height * trunkFraction;
     return {
       footprint,
-      baseZ: 0,
+      baseZ: canopyBaseZ,
       topZ: t.height,
     };
   });
@@ -677,3 +695,129 @@ export function runAnnualShadingAnalysis(params: {
     },
   };
 }
+
+/** Instantaneous geometric shade result per panel at a specific sun position. */
+export interface InstantaneousPanelShade {
+  panelId: string;
+  setId: string;
+  index: number;
+  shadeFraction: number; // 0 (unshaded) to 1.0 (fully shaded)
+  shadedAreaM2: number;
+  totalAreaM2: number;
+}
+
+/**
+ * Computes instantaneous geometric shade fraction for all active panels at the current sun azimuth/elevation.
+ * Pure deterministic geometry, zero canvas pixel rendering dependencies.
+ */
+export function computeInstantaneousShade(params: {
+  panels: Array<{
+    id: string;
+    setId: string;
+    index: number;
+    x: number;
+    y: number;
+    rotationDeg: number;
+    config: PanelLayoutConfig;
+  }>;
+  terraceRing: Point2[];
+  roofZ: number;
+  solarAzimuthDeg: number;
+  solarElevationDeg: number;
+  obstacles: Obstacle[];
+  trees: Tree[];
+  parapetHeightM: number;
+}): InstantaneousPanelShade[] {
+  const { panels, terraceRing, roofZ, solarAzimuthDeg, solarElevationDeg, obstacles, trees, parapetHeightM } = params;
+
+  if (solarElevationDeg <= 1.0 || panels.length === 0) {
+    return panels.map((p) => {
+      const dims = effectivePanelDims(p.config);
+      const totalArea = dims.widthM * dims.lengthM;
+      return {
+        panelId: p.id,
+        setId: p.setId,
+        index: p.index,
+        shadeFraction: 0,
+        shadedAreaM2: 0,
+        totalAreaM2: totalArea,
+      };
+    });
+  }
+
+  // 1. Obstacle shadows
+  const shadowPolygons: Point2[][] = [];
+  for (const obs of obstacles) {
+    let footprint: Point2[];
+    if (obs.polygon && obs.polygon.length >= 3) {
+      const hw = Math.cos((obs.rotation * Math.PI) / 180);
+      const sh = Math.sin((obs.rotation * Math.PI) / 180);
+      footprint = obs.polygon.map((p) => ({
+        x: obs.position.x + p.x * hw - p.y * sh,
+        y: obs.position.y + p.x * sh + p.y * hw,
+      }));
+    } else {
+      footprint = rectangleCorners(obs.position.x, obs.position.y, obs.width, obs.length, obs.rotation);
+    }
+    const shadow = projectObstacleShadowToRoof(
+      footprint,
+      roofZ,
+      roofZ + obs.height,
+      roofZ,
+      solarAzimuthDeg,
+      solarElevationDeg,
+    );
+    if (shadow.length >= 3) shadowPolygons.push(shadow);
+  }
+
+  // 2. Tree canopy shadows
+  for (const tree of trees) {
+    if (tree.height > roofZ) {
+      const footprint = treeFootprint(tree);
+      const trunkFraction = tree.type === "broadleaf" ? 0.35 : tree.type === "conifer" ? 0.20 : 0.40;
+      const canopyBaseZ = tree.height * trunkFraction;
+      const shadow = projectObstacleShadowToRoof(
+        footprint,
+        canopyBaseZ,
+        tree.height,
+        roofZ,
+        solarAzimuthDeg,
+        solarElevationDeg,
+      );
+      if (shadow.length >= 3) shadowPolygons.push(shadow);
+    }
+  }
+
+  // 3. Parapet shadows
+  if (parapetHeightM > 0) {
+    const parapetInner = offsetPolygonInward(terraceRing, 0.25);
+    if (parapetInner) {
+      const shadow = projectObstacleShadowToRoof(
+        parapetInner,
+        roofZ,
+        roofZ + parapetHeightM,
+        roofZ,
+        solarAzimuthDeg,
+        solarElevationDeg,
+      );
+      if (shadow.length >= 3) shadowPolygons.push(shadow);
+    }
+  }
+
+  // 4. Panel geometric shade evaluation
+  return panels.map((p) => {
+    const dims = effectivePanelDims(p.config);
+    const corners = rectangleCorners(p.x, p.y, dims.widthM, dims.lengthM, p.rotationDeg);
+    const totalAreaM2 = dims.widthM * dims.lengthM;
+    const shadeFraction = computePanelShadeFraction(corners, shadowPolygons);
+    return {
+      panelId: p.id,
+      setId: p.setId,
+      index: p.index,
+      shadeFraction: Math.round(shadeFraction * 1000) / 1000,
+      shadedAreaM2: Math.round(shadeFraction * totalAreaM2 * 100) / 100,
+      totalAreaM2,
+    };
+  });
+}
+

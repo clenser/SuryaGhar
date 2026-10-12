@@ -22,7 +22,7 @@
 import type { Obstacle, Point2 } from "./obstacles";
 import type { Tree } from "./treeTypes";
 import type { PanelLayoutConfig } from "./panels";
-import { effectiveRowSpacingM, panelTypeDefinition } from "./panels";
+import { effectivePanelDims, effectiveRowSpacingM, panelTypeDefinition } from "./panels";
 import { validatePanelPlacement, type PlacementContext, type PlacedPanelPeer, type PlacedSetPanel } from "./panelSets";
 import { placePanels } from "./panelPlacement";
 import { runAnnualShadingAnalysis, type AnnualShadingResult } from "./shadingAnalysis";
@@ -65,12 +65,13 @@ function isCandidateValid(
   context: PlacementContext,
 ): boolean {
   if (panels.length === 0) return false;
+  const dims = effectivePanelDims(config);
   const peers: PlacedPanelPeer[] = panels.map((p) => ({
     x: p.x,
     y: p.y,
     rotationDeg: p.rotationDeg,
-    width: 1.13,
-    length: 2.28,
+    width: dims.widthM,
+    length: dims.lengthM,
   }));
 
   for (let i = 0; i < panels.length; i++) {

@@ -82,11 +82,13 @@ const CELLS_ALONG = 12;
 
 /**
  * Shading heatmap metrics per panel.
- * Driven by the analytical annual loss percent (0 to 100).
+ * Driven by either annual loss percent or instantaneous geometric shade fraction.
  */
 export interface PanelShadingMetric {
   annualLossPercent: number;
   severity?: "none" | "moderate" | "severe";
+  /** Optional instantaneous shade fraction (0.0 to 1.0) when in Current Sun / Shadow View mode */
+  instantaneousShadeFraction?: number;
 }
 
 /**
@@ -145,6 +147,21 @@ export function getShadingHeatmapColor(lossPercent: number | undefined): THREE.C
     );
   }
   return c;
+}
+
+/**
+ * Continuous shading heatmap color function for instantaneous geometric shade fraction (0 to 1.0).
+ * 0.0 = deep blue (full direct sunlight / 0% shaded)
+ * 0.25 = cyan (25% obstructed)
+ * 0.50 = yellow (50% obstructed)
+ * 0.75 = orange (75% obstructed)
+ * 1.00 = crimson red (100% in shade)
+ */
+export function getInstantaneousShadeColor(fraction: number | undefined): THREE.Color {
+  if (fraction === undefined || fraction === null || !Number.isFinite(fraction) || fraction < 0) {
+    return new THREE.Color(0x1d4ed8); // Default to unshaded blue
+  }
+  return getShadingHeatmapColor(fraction * 20); // Scale 0..1 to 0..20 to reuse smooth color stops
 }
 
 function paint(geometry: THREE.BufferGeometry, color: number): THREE.BufferGeometry {
@@ -535,7 +552,9 @@ export function createPanelGroup(
 
       let color: THREE.Color;
       const metric = shadingMetrics ? shadingMetrics[i] : undefined;
-      if (metric && Number.isFinite(metric.annualLossPercent)) {
+      if (metric && Number.isFinite(metric.instantaneousShadeFraction)) {
+        color = getInstantaneousShadeColor(metric.instantaneousShadeFraction);
+      } else if (metric && Number.isFinite(metric.annualLossPercent)) {
         color = getShadingHeatmapColor(metric.annualLossPercent);
       } else if (shadingSeverities && shadingSeverities[i]) {
         const sev = shadingSeverities[i];

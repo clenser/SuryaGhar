@@ -6,12 +6,14 @@
 
 import { describe, expect, it } from "vitest";
 import type { Obstacle, Point2 } from "../lib/3d/obstacles";
+import type { Tree } from "../lib/3d/treeTypes";
 import { DEFAULT_PANEL_CONFIG, type PanelLayoutConfig } from "../lib/3d/panels";
 import {
   projectObstacleShadowToRoof,
   computePanelShadeFraction,
   estimateHourIrradianceAndPower,
   runAnnualShadingAnalysis,
+  computeInstantaneousShade,
 } from "../lib/3d/shadingAnalysis";
 import { optimizeSolarLayout } from "../lib/3d/layoutOptimization";
 
@@ -131,6 +133,71 @@ describe("M4 Analytical Shading Engine", () => {
 
     expect(result.uncertainty.missingBuildingHeight).toBe(true);
     expect(result.uncertainty.confidence).toBe("low");
+  });
+
+  it("yields zero shadow on roof from ground trees shorter than the building roof", () => {
+    const groundTreeFootprint: Point2[] = [
+      { x: -5, y: -5 },
+      { x: -3, y: -5 },
+      { x: -3, y: -3 },
+      { x: -5, y: -3 },
+    ];
+    // 8m tall tree on ground (baseZ=2.8m canopy, topZ=8m) vs 10m tall building roof
+    const shadow = projectObstacleShadowToRoof(groundTreeFootprint, 2.8, 8, 10, 180, 45);
+    expect(shadow).toEqual([]);
+  });
+
+  it("projects ground tree shadow only from canopy portion that exceeds roof elevation", () => {
+    const groundTreeFootprint: Point2[] = [
+      { x: -2, y: -2 },
+      { x: 2, y: -2 },
+      { x: 2, y: 2 },
+      { x: -2, y: 2 },
+    ];
+    // 14m tall tree (canopyBaseZ=4.9m, topZ=14m) on ground vs 10m tall building roof
+    // Sun from South (azimuth 180°), elevation 45°: tan(45°)=1
+    // Effective top height above roof = 14 - 10 = 4m
+    // Shadow displacement along +Y is 4m
+    const shadow = projectObstacleShadowToRoof(groundTreeFootprint, 4.9, 14, 10, 180, 45);
+    expect(shadow.length).toBeGreaterThan(2);
+
+    const maxY = Math.max(...shadow.map((p) => p.y));
+    // Base footprint top was at +2; displaced by 4m North -> maxY should be approximately 6.0
+    expect(maxY).toBeCloseTo(6.0, 1);
+  });
+
+  it("computes instantaneous shade fraction deterministically at given sun position", () => {
+    const simPanel = {
+      id: "p-0",
+      setId: "set-1",
+      index: 0,
+      x: 0,
+      y: 4, // Panel at y=4
+      rotationDeg: 0,
+      config: MOCK_CONFIG,
+    };
+    const tallTree: Tree = {
+      id: "tree-1",
+      type: "broadleaf",
+      position: { x: 0, y: 0 },
+      height: 15,
+      canopyWidth: 4,
+      rotation: 0,
+    };
+    // Sun from South (180°), elevation 45° -> shadow projects Northwards onto panel at y=4
+    const shades = computeInstantaneousShade({
+      panels: [simPanel],
+      terraceRing: MOCK_TERRACE,
+      roofZ: 10,
+      solarAzimuthDeg: 180,
+      solarElevationDeg: 45,
+      obstacles: [],
+      trees: [tallTree],
+      parapetHeightM: 0,
+    });
+
+    expect(shades.length).toBe(1);
+    expect(shades[0].shadeFraction).toBeGreaterThan(0);
   });
 });
 

@@ -18,6 +18,8 @@ interface CollapsibleSectionProps {
   icon?: React.ReactNode;
   /** Whether the section is initially open */
   defaultOpen?: boolean;
+  /** Optional callback when open state changes */
+  onToggle?: (open: boolean) => void;
   /** Unique ID for persistence */
   id: string;
   /** Children content */
@@ -34,6 +36,7 @@ export function CollapsibleSection({
   title,
   icon,
   defaultOpen = false,
+  onToggle,
   id,
   children,
   badge,
@@ -42,12 +45,20 @@ export function CollapsibleSection({
 }: CollapsibleSectionProps) {
   const [open, setOpen] = useState(defaultOpen);
 
+  const handleToggle = () => {
+    setOpen((prev) => {
+      const next = !prev;
+      onToggle?.(next);
+      return next;
+    });
+  };
+
   return (
     <section className={`collapsible-section${open ? " is-open" : " is-closed"} ${className}`} data-section-id={id}>
       <button
         type="button"
         className="collapsible-section__header"
-        onClick={() => setOpen((v) => !v)}
+        onClick={handleToggle}
         aria-expanded={open}
         aria-controls={`section-content-${id}`}
       >

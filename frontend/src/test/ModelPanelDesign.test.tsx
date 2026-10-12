@@ -223,6 +223,8 @@ describe("ModelPanel design correction", () => {
     try {
       renderPanel();
       fireEvent.click(screen.getByRole("button", { name: "Enable solar panels" }));
+      const clearBtn = screen.queryByRole("button", { name: "Clear panels" });
+      if (clearBtn) fireEvent.click(clearBtn);
       fireEvent.click(screen.getByRole("button", { name: "Manual placement" }));
       const coords = createBuildingModel(TERRACE, 12).coords;
       const camera = new THREE.PerspectiveCamera(45, 16 / 9, 0.1, 10000);

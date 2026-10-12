@@ -36,8 +36,15 @@ export type ViewportTool =
   | "xray"
   | "reset-view"
   | "sun"
-  | "weather"
   | "trees";
+
+export interface LayerVisibility {
+  building: boolean;
+  panels: boolean;
+  obstacles: boolean;
+  trees: boolean;
+  ground: boolean;
+}
 
 interface ViewportToolbarProps {
   /** Currently active tool */
@@ -48,8 +55,8 @@ interface ViewportToolbarProps {
   xrayActive: boolean;
   /** Toggle X-ray mode */
   onToggleXray: () => void;
-  /** Reset camera to default view */
-  onResetView: () => void;
+  /** Reset camera to default view (relocated to inspector bottom, kept optional here) */
+  onResetView?: () => void;
   /** Current obstacle type for draw mode (Custom obstacles only) */
   obstacleType?: ObstacleType;
   /** Whether we're in footprint drawing mode */
@@ -64,6 +71,14 @@ interface ViewportToolbarProps {
   inspectorCollapsed?: boolean;
   /** Exit 3D design mode and return to map */
   onExitDesign?: () => void;
+  /** Layer visibility states */
+  layerVisibility?: LayerVisibility;
+  /** Toggle layer visibility callback */
+  onToggleLayer?: (layer: keyof LayerVisibility) => void;
+  /** Delete currently selected object callback */
+  onDeleteSelected?: () => void;
+  /** Whether an obstacle or tree is currently selected */
+  hasSelectedObject?: boolean;
 }
 
 const TOOL_CONFIG: Record<Exclude<ViewportTool, "draw-obstacle">, { icon: React.ReactNode; label: string; title: string }> = {
@@ -72,9 +87,8 @@ const TOOL_CONFIG: Record<Exclude<ViewportTool, "draw-obstacle">, { icon: React.
   delete: { icon: <Trash2 size={16} strokeWidth={2} />, label: "Delete", title: "Delete selected object (Del)" },
   layers: { icon: <Layers size={16} strokeWidth={2} />, label: "Layers", title: "Toggle layer visibility (L)" },
   xray: { icon: <Eye size={16} strokeWidth={2} />, label: "X-ray", title: "Toggle X-ray view (X)" },
-  "reset-view": { icon: <RotateCcw size={16} strokeWidth={2} />, label: "Reset view", title: "Reset camera to default (R)" },
+  "reset-view": { icon: <RotateCcw size={16} strokeWidth={2} />, label: "Reset view", title: "Reset camera to default view (R)" },
   sun: { icon: <Sun size={16} strokeWidth={2} />, label: "Sun", title: "Sun & shadows (S)" },
-  weather: { icon: <Box size={16} strokeWidth={2} />, label: "Weather", title: "Weather presets (W)" },
   trees: { icon: <TreePine size={16} strokeWidth={2} />, label: "Trees", title: "Trees & obstacles (T)" },
 };
 
@@ -99,23 +113,32 @@ export function ViewportToolbar({
   onToggleSunPlay,
   inspectorCollapsed = false,
   onExitDesign,
+  layerVisibility,
+  onToggleLayer,
+  onDeleteSelected,
+  hasSelectedObject = false,
 }: ViewportToolbarProps) {
   const [collapsed, setCollapsed] = useState(false);
 
   // Primary tools: always visible
   const primaryTools: ViewportTool[] = ["select", "move", "delete", "layers"];
 
-  // Mode tools: visible when relevant
+  // Mode tools: visible when relevant (weather removed per priority 3)
   const modeTools: ViewportTool[] = [];
   if (drawing || obstacleType === "custom") modeTools.push("draw-obstacle");
   if (manualPlaceActive) modeTools.push("sun"); // Sun affects panel preview shadows
   if (sunPlaying !== undefined) modeTools.push("sun");
-  modeTools.push("weather", "trees");
+  modeTools.push("trees");
 
   // View tools: always visible
-  const viewTools: ViewportTool[] = ["xray", "reset-view"];
+  const viewTools: ViewportTool[] = ["xray"];
+  if (onResetView) viewTools.push("reset-view");
 
   const handleToolClick = (tool: ViewportTool) => {
+    if (tool === "delete" && hasSelectedObject && onDeleteSelected) {
+      onDeleteSelected();
+      return;
+    }
     onToolChange(activeTool === tool ? null : tool);
   };
 
@@ -289,6 +312,53 @@ export function ViewportToolbar({
           </button>
         )}
       </div>
+
+      {/* Layer Visibility Menu */}
+      {activeTool === "layers" && layerVisibility && onToggleLayer && (
+        <div className="viewport-layers-menu" role="menu" aria-label="Layer visibility">
+          <div className="viewport-layers-menu__title">Layer Visibility</div>
+          <label className="viewport-layers-menu__item">
+            <input
+              type="checkbox"
+              checked={layerVisibility.building}
+              onChange={() => onToggleLayer("building")}
+            />
+            <span>Building structure</span>
+          </label>
+          <label className="viewport-layers-menu__item">
+            <input
+              type="checkbox"
+              checked={layerVisibility.panels}
+              onChange={() => onToggleLayer("panels")}
+            />
+            <span>Solar panels</span>
+          </label>
+          <label className="viewport-layers-menu__item">
+            <input
+              type="checkbox"
+              checked={layerVisibility.obstacles}
+              onChange={() => onToggleLayer("obstacles")}
+            />
+            <span>Rooftop obstacles</span>
+          </label>
+          <label className="viewport-layers-menu__item">
+            <input
+              type="checkbox"
+              checked={layerVisibility.trees}
+              onChange={() => onToggleLayer("trees")}
+            />
+            <span>Ground trees</span>
+          </label>
+          <label className="viewport-layers-menu__item">
+            <input
+              type="checkbox"
+              checked={layerVisibility.ground}
+              onChange={() => onToggleLayer("ground")}
+            />
+            <span>Satellite ground</span>
+          </label>
+        </div>
+      )}
     </div>
   );
 }

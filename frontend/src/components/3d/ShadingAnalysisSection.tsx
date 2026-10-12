@@ -22,10 +22,14 @@ import {
 import type { AnnualShadingResult, AnalyzedPanel } from "../../lib/3d/shadingAnalysis";
 import type { OptimizationCandidate, OptimizationResult } from "../../lib/3d/layoutOptimization";
 
+export type HeatmapMode = "annual" | "instantaneous";
+
 interface ShadingAnalysisSectionProps {
   shadingResult: AnnualShadingResult | null;
   shadingVisualizationActive: boolean;
   onToggleShadingVisualization: () => void;
+  heatmapMode?: HeatmapMode;
+  onChangeHeatmapMode?: (mode: HeatmapMode) => void;
   selectedPanelId: string | null;
   onSelectPanelId: (id: string | null) => void;
   onRunOptimization: () => void;
@@ -40,6 +44,8 @@ export const ShadingAnalysisSection: React.FC<ShadingAnalysisSectionProps> = ({
   shadingResult,
   shadingVisualizationActive,
   onToggleShadingVisualization,
+  heatmapMode = "annual",
+  onChangeHeatmapMode,
   selectedPanelId,
   onSelectPanelId,
   onRunOptimization,
@@ -76,7 +82,7 @@ export const ShadingAnalysisSection: React.FC<ShadingAnalysisSectionProps> = ({
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--space-2)" }}>
           <span style={{ fontWeight: 600, fontSize: "0.85rem", display: "flex", alignItems: "center", gap: "6px" }}>
             <Sun size={15} style={{ color: "var(--color-primary, #38bdf8)" }} />
-            Module Shading Overlay
+            Module Heatmap Overlay
           </span>
           <button
             type="button"
@@ -86,12 +92,34 @@ export const ShadingAnalysisSection: React.FC<ShadingAnalysisSectionProps> = ({
             aria-pressed={shadingVisualizationActive}
           >
             <Eye size={13} style={{ marginRight: "4px" }} />
-            {shadingVisualizationActive ? "Overlay Active" : "Color by Shading"}
+            {shadingVisualizationActive ? "Overlay Active" : "Show Heatmap"}
           </button>
         </div>
 
+        {/* View Mode Selector: Annual Shading Loss vs Current Sun Shadow */}
+        {onChangeHeatmapMode && (
+          <div style={{ display: "flex", gap: "6px", marginBottom: "8px" }}>
+            <button
+              type="button"
+              className={`btn ${heatmapMode === "annual" ? "btn--primary" : "btn--secondary"}`}
+              style={{ flex: 1, fontSize: "0.72rem", padding: "3px 6px", minHeight: "26px" }}
+              onClick={() => onChangeHeatmapMode("annual")}
+            >
+              Annual Loss (%)
+            </button>
+            <button
+              type="button"
+              className={`btn ${heatmapMode === "instantaneous" ? "btn--primary" : "btn--secondary"}`}
+              style={{ flex: 1, fontSize: "0.72rem", padding: "3px 6px", minHeight: "26px" }}
+              onClick={() => onChangeHeatmapMode("instantaneous")}
+            >
+              Current Sun / Shadow
+            </button>
+          </div>
+        )}
+
         {/* Continuous Heatmap Legend */}
-        <div style={{ marginTop: "10px" }}>
+        <div style={{ marginTop: "6px" }}>
           <div
             style={{
               height: 10,
@@ -100,7 +128,11 @@ export const ShadingAnalysisSection: React.FC<ShadingAnalysisSectionProps> = ({
               boxShadow: "inset 0 1px 2px rgba(0,0,0,0.3)",
               marginBottom: 4,
             }}
-            title="Continuous annual loss heatmap: 0% (deep blue) to >=20% (crimson red)"
+            title={
+              heatmapMode === "annual"
+                ? "Continuous annual loss heatmap: 0% (deep blue) to >=20% (crimson red)"
+                : "Instantaneous geometric shadow coverage: 0% unshaded (deep blue) to 100% full shadow (crimson red)"
+            }
           />
           <div
             style={{
@@ -111,11 +143,23 @@ export const ShadingAnalysisSection: React.FC<ShadingAnalysisSectionProps> = ({
               marginBottom: 8,
             }}
           >
-            <span>0% loss</span>
-            <span>5% (cyan)</span>
-            <span>10% (yellow)</span>
-            <span>15% (orange)</span>
-            <span>&ge;20% (red)</span>
+            {heatmapMode === "annual" ? (
+              <>
+                <span>0% loss (blue)</span>
+                <span>5% (cyan)</span>
+                <span>10% (yellow)</span>
+                <span>15% (orange)</span>
+                <span>&ge;20% (red)</span>
+              </>
+            ) : (
+              <>
+                <span>0% (Sunlit)</span>
+                <span>25%</span>
+                <span>50%</span>
+                <span>75%</span>
+                <span>100% (Shaded)</span>
+              </>
+            )}
           </div>
 
           <div
@@ -129,7 +173,7 @@ export const ShadingAnalysisSection: React.FC<ShadingAnalysisSectionProps> = ({
               borderTop: "1px solid rgba(255, 255, 255, 0.06)",
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: "5px" }} title="Low shading (<3.5%)">
+            <div style={{ display: "flex", alignItems: "center", gap: "5px" }} title="Minimal shading (<3.5%)">
               <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#1d4ed8", flexShrink: 0, display: "inline-block" }} />
               <span>&lt;3.5% ({shadingResult.severityCounts.none})</span>
             </div>

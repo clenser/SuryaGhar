@@ -166,7 +166,7 @@ export interface Site3DViewerProps {
     config: PanelLayoutConfig;
     panels: PlacedPanel[];
     shadingSeverities?: Array<"none" | "moderate" | "severe">;
-    shadingMetrics?: Array<{ annualLossPercent: number; severity?: "none" | "moderate" | "severe" } | null | undefined>;
+    shadingMetrics?: Array<{ annualLossPercent: number; severity?: "none" | "moderate" | "severe"; instantaneousShadeFraction?: number } | null | undefined>;
   }> | null;
   /**
    * Manual panel placement session: while true, a press-and-release click on
@@ -219,6 +219,26 @@ export interface Site3DViewerProps {
    * it the viewer keeps its neutral studio ground.
    */
   siteAnchor?: { ring: LngLat[]; originUtm: { x: number; y: number } } | null;
+  /** Layer visibility toggles (Building, Solar panels, Rooftop obstacles, Ground trees, Satellite ground) */
+  layerVisibility?: {
+    building: boolean;
+    panels: boolean;
+    obstacles: boolean;
+    trees: boolean;
+    ground: boolean;
+  };
+  /** Whether dragging trees is enabled */
+  treeDragEnabled?: boolean;
+  /** Live tree drag position in local ground metres */
+  onTreeDragMove?: (id: string, x: number, y: number) => void;
+  /** Fires when tree drag ends */
+  onTreeDragEnd?: (id: string) => void;
+  /** Currently active viewport tool */
+  activeTool?: string | null;
+  /** Delete obstacle callback */
+  onDeleteObstacle?: (id: string) => void;
+  /** Delete tree callback */
+  onDeleteTree?: (id: string) => void;
   /** Additional CSS class for the container */
   className?: string;
   /** Inline style for the container */
@@ -272,6 +292,13 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       onGroundPlace,
       onCancelTreePlace,
       weatherPreset = "sunny",
+      layerVisibility,
+      treeDragEnabled = false,
+      onTreeDragMove,
+      onTreeDragEnd,
+      activeTool = null,
+      onDeleteObstacle,
+      onDeleteTree,
     },
     ref,
   ) {
@@ -355,6 +382,18 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
     onRoofFinishRef.current = onRoofFinish;
     const previewActiveRef = useRef(previewObstacle !== null);
     previewActiveRef.current = previewObstacle !== null;
+    const treeDragEnabledRef = useRef(treeDragEnabled);
+    treeDragEnabledRef.current = treeDragEnabled;
+    const onTreeDragMoveRef = useRef(onTreeDragMove);
+    onTreeDragMoveRef.current = onTreeDragMove;
+    const onTreeDragEndRef = useRef(onTreeDragEnd);
+    onTreeDragEndRef.current = onTreeDragEnd;
+    const activeToolRef = useRef(activeTool);
+    activeToolRef.current = activeTool;
+    const onDeleteObstacleRef = useRef(onDeleteObstacle);
+    onDeleteObstacleRef.current = onDeleteObstacle;
+    const onDeleteTreeRef = useRef(onDeleteTree);
+    onDeleteTreeRef.current = onDeleteTree;
 
     /**
      * The renderer renders shadow maps on demand (`autoUpdate` is false), so
@@ -726,6 +765,35 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       if (!treeGroupRef.current) return;
       applyTreeSelection(treeGroupRef.current, selectedTreeId);
     }, [selectedTreeId, trees, isInitialized]);
+
+    // Apply layer visibility controls (Building, Panels, Obstacles, Trees, Ground)
+    useEffect(() => {
+      if (!isInitialized) return;
+      if (meshesRef.current) {
+        const showBuilding = layerVisibility?.building !== false;
+        meshesRef.current.building.visible = showBuilding;
+        if (meshesRef.current.parapet) meshesRef.current.parapet.visible = showBuilding;
+        if (meshesRef.current.wireframe) meshesRef.current.wireframe.visible = showBuilding;
+        if (!texturedGroundRef.current) {
+          meshesRef.current.ground.visible = layerVisibility?.ground !== false;
+        }
+      }
+      if (panelGroupRef.current) {
+        for (const g of panelGroupRef.current) {
+          g.visible = layerVisibility?.panels !== false;
+        }
+      }
+      if (obstacleGroupRef.current) {
+        obstacleGroupRef.current.visible = layerVisibility?.obstacles !== false;
+      }
+      if (treeGroupRef.current) {
+        treeGroupRef.current.visible = layerVisibility?.trees !== false;
+      }
+      if (texturedGroundRef.current?.mesh) {
+        texturedGroundRef.current.mesh.visible = layerVisibility?.ground !== false;
+      }
+      requestShadowUpdate();
+    }, [layerVisibility, isInitialized]);
 
     // Weather effects:
     // 1. Falling rain streaks & wet surface response in Rainy preset.
@@ -1326,19 +1394,16 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       };
     }, [footprintDrawing, footprintPoints, localCoords, isInitialized]);
 
-    // Obstacle drag-to-move: pressing on an obstacle mesh while the editor is
-    // open starts a move gesture instead of a camera orbit. Priority (§11):
-    // footprint drawing and manual panel placement win over dragging, and a
-    // Ctrl/Meta gesture always stays a camera pan. While dragging, the camera
-    // is frozen so the same gesture cannot rotate the view; the parent owns
-    // the draft and commits or reverts on release.
+    // Drag-to-move for obstacles (on roof) and trees (on ground).
+    // Priority: footprint drawing and manual panel placement win over dragging,
+    // and Ctrl/Meta gesture always stays a camera pan. While dragging, OrbitControls
+    // is frozen so the gesture moves the object instead of orbiting.
     useEffect(() => {
       if (!isInitialized) return;
       const canvas = canvasRef.current;
       if (!canvas) return;
 
-      // (drag state lives in this closure; the parent owns the draft)
-      let dragging: { id: string } | null = null;
+      let dragging: { type: "obstacle" | "tree"; id: string } | null = null;
 
       const toNdc = (event: PointerEvent) => {
         const rect = canvas.getBoundingClientRect();
@@ -1366,6 +1431,25 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         return hits.length ? ((hits[0].object.userData.obstacleId as string | undefined) ?? null) : null;
       };
 
+      const pickTree = (ndc: THREE.Vector2): string | null => {
+        const camera = cameraRef.current;
+        const group = treeGroupRef.current;
+        if (!camera || !group) return null;
+        camera.updateMatrixWorld(true);
+        group.updateMatrixWorld(true);
+        const raycaster = new THREE.Raycaster();
+        raycaster.setFromCamera(ndc, camera);
+        const targets: THREE.Object3D[] = [];
+        group.traverse((child) => {
+          if ((child as THREE.Mesh).isMesh) targets.push(child);
+        });
+        if (targets.length === 0) return null;
+        const hits = raycaster.intersectObjects(targets, false);
+        if (!hits.length) return null;
+        const hitObj = hits[0].object;
+        return (hitObj.userData.treeId ?? hitObj.parent?.userData.treeId) as string | null;
+      };
+
       const roofHit = (ndc: THREE.Vector2): { x: number; y: number } | null => {
         const camera = cameraRef.current;
         if (!camera) return null;
@@ -1377,40 +1461,76 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         return raycaster.ray.intersectPlane(plane, hit) ? { x: hit.x, y: hit.y } : null;
       };
 
+      const groundHit = (ndc: THREE.Vector2): { x: number; y: number } | null => {
+        const camera = cameraRef.current;
+        if (!camera) return null;
+        camera.updateMatrixWorld(true);
+        const raycaster = new THREE.Raycaster();
+        raycaster.setFromCamera(ndc, camera);
+        const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+        const hit = new THREE.Vector3();
+        return raycaster.ray.intersectPlane(plane, hit) ? { x: hit.x, y: hit.y } : null;
+      };
+
       // Capture phase on the canvas: OrbitControls listens in the bubble
       // phase, so disabling the controls here wins before it reads the event.
       const handleDown = (event: PointerEvent) => {
         if (event.button !== 0 || event.ctrlKey || event.metaKey) return;
-        if (!obstacleDragEnabledRef.current) return;
+        if (!obstacleDragEnabledRef.current && !treeDragEnabledRef.current) return;
         if (manualPanelPreviewRef.current) return;
         if (previewActiveRef.current || onRoofFinishRef.current) return;
         const ndc = toNdc(event);
         if (!ndc) return;
-        const id = pickObstacle(ndc);
-        if (!id) return; // empty space: ordinary camera orbit
-        dragging = { id };
-        if (controlsRef.current) controlsRef.current.enabled = false;
-        canvas.style.cursor = "grabbing";
-        event.preventDefault();
-        event.stopPropagation();
+
+        if (obstacleDragEnabledRef.current) {
+          const id = pickObstacle(ndc);
+          if (id) {
+            dragging = { type: "obstacle", id };
+            if (controlsRef.current) controlsRef.current.enabled = false;
+            canvas.style.cursor = "grabbing";
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
+        }
+
+        if (treeDragEnabledRef.current || obstacleDragEnabledRef.current) {
+          const tId = pickTree(ndc);
+          if (tId) {
+            dragging = { type: "tree", id: tId };
+            if (controlsRef.current) controlsRef.current.enabled = false;
+            canvas.style.cursor = "grabbing";
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
+        }
       };
 
       const handleMove = (event: PointerEvent) => {
         if (!dragging) return;
         const ndc = toNdc(event);
         if (!ndc) return;
-        const hit = roofHit(ndc);
-        if (!hit) return;
-        onObstacleDragMoveRef.current?.(dragging.id, hit.x, hit.y);
+        if (dragging.type === "obstacle") {
+          const hit = roofHit(ndc);
+          if (hit) onObstacleDragMoveRef.current?.(dragging.id, hit.x, hit.y);
+        } else if (dragging.type === "tree") {
+          const hit = groundHit(ndc);
+          if (hit) onTreeDragMoveRef.current?.(dragging.id, hit.x, hit.y);
+        }
       };
 
       const handleUp = () => {
         if (!dragging) return;
-        const id = dragging.id;
+        const cur = dragging;
         dragging = null;
         if (controlsRef.current) controlsRef.current.enabled = true;
-        canvas.style.cursor = "";
-        onObstacleDragEndRef.current?.(id);
+        canvas.style.cursor = activeToolRef.current === "move" ? "grab" : "";
+        if (cur.type === "obstacle") {
+          onObstacleDragEndRef.current?.(cur.id);
+        } else if (cur.type === "tree") {
+          onTreeDragEndRef.current?.(cur.id);
+        }
       };
 
       canvas.addEventListener("pointerdown", handleDown, true);
@@ -1426,6 +1546,19 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         dragging = null;
       };
     }, [isInitialized]);
+
+    // Update cursor feedback based on active tool
+    useEffect(() => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      if (activeTool === "move") {
+        canvas.style.cursor = "grab";
+      } else if (activeTool === "delete") {
+        canvas.style.cursor = "crosshair";
+      } else if (!footprintDrawing && !manualPlaceActive && !treePlaceActive) {
+        canvas.style.cursor = "";
+      }
+    }, [activeTool, footprintDrawing, manualPlaceActive, treePlaceActive]);
 
     // Pointer interaction: a click (press + release without movement) either
     // places the draft footprint on the roof plane or picks an obstacle.
@@ -1530,11 +1663,19 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           : undefined;
 
         if (id) {
-          onObstacleSelectRef.current?.(id);
-          onTreeSelectRef.current?.(null);
+          if (activeToolRef.current === "delete") {
+            onDeleteObstacleRef.current?.(id);
+          } else {
+            onObstacleSelectRef.current?.(id);
+            onTreeSelectRef.current?.(null);
+          }
         } else if (treeId) {
-          onTreeSelectRef.current?.(treeId);
-          onObstacleSelectRef.current?.(null);
+          if (activeToolRef.current === "delete") {
+            onDeleteTreeRef.current?.(treeId);
+          } else {
+            onTreeSelectRef.current?.(treeId);
+            onObstacleSelectRef.current?.(null);
+          }
         } else {
           onObstacleSelectRef.current?.(null);
           onTreeSelectRef.current?.(null);

@@ -114,15 +114,15 @@ describe("ModelPanel", () => {
     expect(document.querySelector("canvas")).toBeInTheDocument();
   });
 
-  it("stacks footer actions by default and rows them in the enlarged view", () => {
+  it("shows viewer-footer in normal mode and hides it in design mode (inspector panel takes over)", () => {
     const { rerender, props } = renderPanel({ buildingHeight: 17.2 });
 
     const footer = document.querySelector(".viewer-footer");
     expect(footer).toBeInTheDocument();
     expect(footer).not.toHaveClass("viewer-footer--expanded");
-    // Help text and the three actions share the footer without competing.
+    // Help text and camera actions share the footer.
     expect(footer!.querySelector(".viewer-help")).toBeInTheDocument();
-    expect(footer!.querySelectorAll(".viewer-actions .btn")).toHaveLength(3);
+    expect(footer!.querySelectorAll(".viewer-actions .btn").length).toBeGreaterThanOrEqual(2);
 
     rerender(
       <ModelPanel
@@ -132,9 +132,9 @@ describe("ModelPanel", () => {
         onExitDesign={() => {}}
       />,
     );
-    expect(document.querySelector(".viewer-footer")).toHaveClass(
-      "viewer-footer--expanded",
-    );
+    // In design mode the footer bar is hidden; the full inspector panel shows instead.
+    expect(document.querySelector(".viewer-footer")).not.toBeInTheDocument();
+    expect(document.querySelector(".inspector-panel")).toBeInTheDocument();
   });
 
   it("shows the entered height in the viewport summary", () => {

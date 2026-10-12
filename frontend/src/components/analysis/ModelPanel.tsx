@@ -99,8 +99,8 @@ import {
   validatePanelConfig,
   type PanelLayoutConfig,
 } from "../../lib/3d/panels";
-import { ShadingAnalysisSection } from "../3d/ShadingAnalysisSection";
-import { runAnnualShadingAnalysis, type AnnualShadingResult } from "../../lib/3d/shadingAnalysis";
+import { ShadingAnalysisSection, type HeatmapMode } from "../3d/ShadingAnalysisSection";
+import { runAnnualShadingAnalysis, computeInstantaneousShade, type AnnualShadingResult } from "../../lib/3d/shadingAnalysis";
 import { optimizeSolarLayout, type OptimizationCandidate, type OptimizationResult } from "../../lib/3d/layoutOptimization";
 
 interface ModelPanelProps {
@@ -240,16 +240,47 @@ export function ModelPanel({
   const [lastSetCommit, setLastSetCommit] = useState<{ setId: string; indices: number[] } | null>(null);
   const [panelRevision, setPanelRevision] = useState(0);
   const [manualStatus, setManualStatus] = useState<string | null>(null);
+  /** Warning from the most recent auto-place or placement failure. */
+  const [placeWarning, setPlaceWarning] = useState<string | null>(null);
 
   // M4 State: Shading analysis visualization and layout optimization
   const [shadingVisualizationActive, setShadingVisualizationActive] = useState(false);
+  const [heatmapMode, setHeatmapMode] = useState<HeatmapMode>("annual");
   const [selectedPanelId, setSelectedPanelId] = useState<string | null>(null);
   const [optimizationResult, setOptimizationResult] = useState<OptimizationResult | null>(null);
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [previewCandidate, setPreviewCandidate] = useState<OptimizationCandidate | null>(null);
+  const [shadingSectionOpen, setShadingSectionOpen] = useState(false);
+  const activeOptimizationJobRef = useRef(0);
 
   // Active viewport tool (for contextual toolbar)
   const [activeTool, setActiveTool] = useState<ViewportTool | null>("select");
+  const [layerVisibility, setLayerVisibility] = useState({
+    building: true,
+    panels: true,
+    obstacles: true,
+    trees: true,
+    ground: true,
+  });
+  const handleToggleLayer = (layer: keyof typeof layerVisibility) => {
+    setLayerVisibility((prev) => ({ ...prev, [layer]: !prev[layer] }));
+  };
+
+  const handleToolChange = (tool: ViewportTool | null) => {
+    if (tool === "delete") {
+      if (selectedObstacleId || selectedTreeId) {
+        handleDeleteSelected();
+        setActiveTool("select");
+        return;
+      }
+    }
+    if (tool === "trees") {
+      setTreePlaceActive((v) => !v);
+      setActiveTool((cur) => (cur === "trees" ? "select" : "trees"));
+      return;
+    }
+    setActiveTool(tool);
+  };
   // Escape cancels the active transient tool: drawing first, then manual
   // panel placement, then the obstacle editor. One listener with cleanup, and
   // it reads current state through refs-safe values because the effect
@@ -474,17 +505,15 @@ export function ModelPanel({
   // Deterministic panel placement, derived from the roof, the obstacles and
   // the each set's configuration â€” recomputed when any of them change (the
   // revision counter backs the explicit "Recalculate" action). Disabled by
-  // default: an empty configuration produces zero panel meshes, never a full
-  // roof. EVERY set is placed with the SAME placePanels lattice, so auto and
-  // manual placement share one geometric rule set.
-  const placements = useMemo(() => {
-    if (!panelsEnabled) return panelSets.map(() => ({ panels: [], reason: null as string | null }));
-    return panelSets.map((set) => {
-      const error = validatePanelConfig(set.config);
-      if (error) return { panels: [], reason: error };
-      return placePanels({ terrace: usableRing, obstacles, config: set.config });
-    });
-  }, [usableRing, obstacles, panelSets, panelRevision, panelsEnabled]);
+  // Active set placement warning: only evaluated when panels are enabled AND
+  // the active set has 0 panels, avoiding expensive placePanels runs when panels already exist.
+  const activeSetPlacementWarning = useMemo(() => {
+    if (!panelsEnabled || !activeSet || activeSet.panels.length > 0 || placeWarning) return null;
+    const error = validatePanelConfig(activeSet.config);
+    if (error) return error;
+    const result = placePanels({ terrace: usableRing, obstacles, config: activeSet.config });
+    return result.reason;
+  }, [panelsEnabled, activeSet?.id, activeSet?.config, activeSet?.panels.length, placeWarning, usableRing, obstacles, panelRevision]);
 
   // Capacity: count Ã— watts / 1000, across every set.
   const panelCount = panelsEnabled
@@ -533,9 +562,19 @@ export function ModelPanel({
       .map(([hour, sample]) => ({ hour, azimuthDeg: sample.azimuthDeg, elevationDeg: sample.elevationDeg }));
   }, [sun.samples]);
 
-  // M4 Annual Shading Analysis: Evaluates individual modules across representative seasons
+  // M4 Annual Shading Analysis: Evaluates individual modules across representative seasons.
+  // ONLY runs when shading visualization is active or the shading analysis section is open.
+  // When panels are simply enabled for viewing / layout, we do NOT run this expensive
+  // 365-day multi-season calculation synchronously on the main thread (AGENTS.md §45, §72).
   const annualShading = useMemo<AnnualShadingResult | null>(() => {
-    if (!panelsEnabled || allPanels.panels.length === 0 || !metrics?.centroid) return null;
+    if (
+      !panelsEnabled ||
+      (!shadingVisualizationActive && !shadingSectionOpen) ||
+      allPanels.panels.length === 0 ||
+      !metrics?.centroid
+    ) {
+      return null;
+    }
     const simPanels = allPanels.panels.map((p, idx) => ({
       id: `p-${idx}`,
       setId: activeSetId,
@@ -559,6 +598,8 @@ export function ModelPanel({
     });
   }, [
     panelsEnabled,
+    shadingVisualizationActive,
+    shadingSectionOpen,
     allPanels.panels,
     metrics?.centroid,
     activeSetId,
@@ -569,6 +610,53 @@ export function ModelPanel({
     trees,
     parapetHeightM,
     parapetClearanceM,
+  ]);
+
+  // Instantaneous shade fraction per panel at current simulated sun position.
+  // ONLY computed when shading visualization is actively requesting instantaneous heatmap mode.
+  const instantaneousShades = useMemo(() => {
+    if (
+      !panelsEnabled ||
+      !shadingVisualizationActive ||
+      heatmapMode !== "instantaneous" ||
+      allPanels.panels.length === 0 ||
+      !sun.state
+    ) {
+      return new Map<string, number>();
+    }
+    const simPanels = allPanels.panels.map((p, idx) => ({
+      id: `p-${idx}`,
+      setId: activeSetId,
+      index: idx,
+      x: p.x,
+      y: p.y,
+      rotationDeg: p.rotationDeg,
+      config: activeSet?.config ?? DEFAULT_PANEL_CONFIG,
+    }));
+    const results = computeInstantaneousShade({
+      panels: simPanels,
+      terraceRing,
+      roofZ: buildingHeight ?? 0,
+      solarAzimuthDeg: sun.state.azimuthDeg,
+      solarElevationDeg: sun.state.elevationDeg,
+      obstacles,
+      trees,
+      parapetHeightM,
+    });
+    return new Map(results.map((r) => [r.panelId, r.shadeFraction]));
+  }, [
+    panelsEnabled,
+    shadingVisualizationActive,
+    heatmapMode,
+    allPanels.panels,
+    sun.state,
+    activeSetId,
+    activeSet?.config,
+    terraceRing,
+    buildingHeight,
+    obstacles,
+    trees,
+    parapetHeightM,
   ]);
 
   // Per-set viewport layers: each set renders with its OWN configuration.
@@ -599,22 +687,35 @@ export function ModelPanel({
       ];
     }
 
+    let globalPanelOffset = 0;
     return panelSets.map((set) => {
       let severities: Array<"none" | "moderate" | "severe"> | undefined = undefined;
-      let metrics: Array<{ annualLossPercent: number; severity?: "none" | "moderate" | "severe" }> | undefined = undefined;
-      if (shadingVisualizationActive && annualShading) {
-        severities = set.panels.map((_, idx) => {
-          const match = annualShading.panels[idx];
+      let metrics: Array<{
+        annualLossPercent: number;
+        severity?: "none" | "moderate" | "severe";
+        instantaneousShadeFraction?: number;
+      }> | undefined = undefined;
+
+      if (shadingVisualizationActive) {
+        severities = set.panels.map((_, localIdx) => {
+          const globalIdx = globalPanelOffset + localIdx;
+          const match = annualShading?.panels[globalIdx];
           return match ? match.severity : "none";
         });
-        metrics = set.panels.map((_, idx) => {
-          const match = annualShading.panels[idx];
+
+        metrics = set.panels.map((_, localIdx) => {
+          const globalIdx = globalPanelOffset + localIdx;
+          const match = annualShading?.panels[globalIdx];
+          const instantShade = instantaneousShades.get(`p-${globalIdx}`);
           return {
             annualLossPercent: match ? match.annualLossPercent : 0,
             severity: match ? match.severity : "none",
+            instantaneousShadeFraction: heatmapMode === "instantaneous" ? instantShade : undefined,
           };
         });
       }
+
+      globalPanelOffset += set.panels.length;
       return {
         config: set.config,
         panels: set.panels.map(
@@ -624,7 +725,15 @@ export function ModelPanel({
         shadingMetrics: metrics,
       };
     });
-  }, [panelsEnabled, panelSets, previewCandidate, shadingVisualizationActive, annualShading]);
+  }, [
+    panelsEnabled,
+    panelSets,
+    previewCandidate,
+    shadingVisualizationActive,
+    heatmapMode,
+    annualShading,
+    instantaneousShades,
+  ]);
 
   const energy = useMemo(() => {
     if (!panelsEnabled || !activeSet || allPanels.panels.length === 0 || hourlySun.length === 0) return null;
@@ -641,8 +750,10 @@ export function ModelPanel({
   const handleRunOptimization = () => {
     if (!activeSet || activeSet.panels.length === 0 || !metrics?.centroid) return;
     setIsOptimizing(true);
+    const jobId = ++activeOptimizationJobRef.current;
     // Yield execution to allow UI spinner
     setTimeout(() => {
+      if (jobId !== activeOptimizationJobRef.current) return;
       try {
         const result = optimizeSolarLayout({
           currentPanels: activeSet.panels,
@@ -657,11 +768,15 @@ export function ModelPanel({
           parapetHeightM,
           parapetClearanceM,
         });
-        setOptimizationResult(result);
+        if (jobId === activeOptimizationJobRef.current) {
+          setOptimizationResult(result);
+        }
       } catch (err) {
         console.error("[ModelPanel] Optimization error:", err);
       } finally {
-        setIsOptimizing(false);
+        if (jobId === activeOptimizationJobRef.current) {
+          setIsOptimizing(false);
+        }
       }
     }, 50);
   };
@@ -710,41 +825,48 @@ export function ModelPanel({
         };
         if (!valid) return updated;
 
-        // When azimuthDeg changes: rotate existing placed panels around their collective centroid
-        // in-place without triggering repacking, regenerating, adding or deleting panels!
-        // Repacking must only occur on explicit Auto Place.
+        // When azimuthDeg changes: rotate each placed panel around its OWN center
+        // in-place (x, y remain fixed; rotationDeg updates) without rotating around collective centroid,
+        // without translating panels, and without triggering repacking/auto-place.
         if (rest.azimuthDeg !== undefined && updated.panels.length > 0) {
           const rotation = panelRotationForAzimuth(nextConfig.azimuthDeg);
-          const oldRotation = updated.panels[0].rotationDeg;
-          const deltaDeg = rotation - oldRotation;
-          const deltaRad = (deltaDeg * Math.PI) / 180;
-          const cos = Math.cos(deltaRad);
-          const sin = Math.sin(deltaRad);
+          const rotatedPanels = updated.panels.map((p, i) => ({
+            ...p,
+            index: i,
+            x: p.x,
+            y: p.y,
+            rotationDeg: rotation,
+          }));
 
-          // Calculate centroid of current panels
-          let sumX = 0;
-          let sumY = 0;
-          for (const p of updated.panels) {
-            sumX += p.x;
-            sumY += p.y;
-          }
-          const cx = sumX / updated.panels.length;
-          const cy = sumY / updated.panels.length;
+          const candidateSet: PanelSet = {
+            ...updated,
+            config: nextConfig,
+            panels: rotatedPanels,
+          };
 
-          // Rotate panel centers around centroid and update panel rotation angle
-          const rotatedPanels = updated.panels.map((p, i) => {
-            const dx = p.x - cx;
-            const dy = p.y - cy;
-            const nx = cx + dx * cos - dy * sin;
-            const ny = cy + dx * sin + dy * cos;
-            return {
-              ...p,
-              index: i,
-              x: nx,
-              y: ny,
-              rotationDeg: rotation,
-            };
+          const invalidPanels = findInvalidPanels(candidateSet, {
+            terrace: terraceRing,
+            obstacles,
+            parapetInsetM,
+            parapetClearanceM,
           });
+
+          if (invalidPanels.length > 0) {
+            setManualStatus(
+              `Cannot rotate panels to ${nextConfig.azimuthDeg}°: ${invalidPanels[0].error}`,
+            );
+            // Reject change and preserve current panels & previous azimuth
+            return {
+              ...set,
+              config: {
+                ...set.config,
+                ...rest,
+                azimuthDeg: set.config.azimuthDeg,
+              },
+            };
+          }
+
+          setManualStatus(null);
           return { ...updated, panels: rotatedPanels };
         }
 
@@ -843,6 +965,18 @@ export function ModelPanel({
   };
 
   /**
+   * Enables solar panel display and sets up the initial layout if empty.
+   * Idempotent: repeated toggles preserve existing placed panels without duplication.
+   */
+  const handleEnablePanels = () => {
+    setPanelsEnabled(true);
+    // If active set has 0 panels, generate the initial layout from current settings
+    if (activeSet && activeSet.panels.length === 0) {
+      handleAutoPlaceSet();
+    }
+  };
+
+  /**
    * Recalculate the active set from its current configuration.
    *
    * Automatic sets are regenerated immediately (same path as Auto-place
@@ -870,9 +1004,6 @@ export function ModelPanel({
         : `${invalid.length} panel${invalid.length === 1 ? "" : "s"} in ${activeSet.name} no longer ${invalid.length === 1 ? "fits" : "fit"} the roof, an obstacle, or the parapet clearance.`,
     );
   };
-
-  /** Warning from the most recent auto-place-all (a set that could not fit). */
-  const [placeWarning, setPlaceWarning] = useState<string | null>(null);
 
   /**
    * Auto-place every set into ONE shared collision space.
@@ -1192,41 +1323,82 @@ export function ModelPanel({
     if (treeMode === "editing") setTreeMode("idle");
   };
 
+  const handleDeleteSelected = () => {
+    if (selectedObstacleId) {
+      handleDeleteObstacle(selectedObstacleId);
+      setSelectedObstacleId(null);
+    } else if (selectedTreeId) {
+      handleDeleteTree(selectedTreeId);
+      setSelectedTreeId(null);
+    }
+  };
 
-  /**
-   * Obstacle drag-to-move (viewer gesture, editor open).
-   *
-   * Positions are rounded to the centimetre before entering state - well inside
-   * hand-drawn terrace accuracy - so sub-centimetre pointer jitter does not
-   * rebuild the preview mesh on every mousemove. The draft preview (and its
-   * red/green validity) follows automatically because it derives from the draft.
-   */
-  const handleObstacleDragMove = (id: string, x: number, y: number) => {
-    if (obstacleMode !== "editing" || id !== selectedObstacleId) return;
+  const handleTreeDragMove = (id: string, x: number, y: number) => {
     const rx = Math.round(x * 100) / 100;
     const ry = Math.round(y * 100) / 100;
-    setObstacleDraft((draft) => {
-      if (draft.x === String(rx) && draft.y === String(ry)) return draft;
-      return { ...draft, x: String(rx), y: String(ry) };
-    });
+    setTrees((list) => list.map((t) => (t.id === id ? { ...t, position: { x: rx, y: ry } } : t)));
+    if (selectedTreeId === id && treeMode === "editing") {
+      setTreeDraft((d) => ({ ...d, x: String(rx), y: String(ry) }));
+    }
+  };
+
+  const handleTreeDragEnd = (id: string) => {
+    const tree = trees.find((t) => t.id === id);
+    if (tree) {
+      const result = validateTree(tree, terraceRing, trees);
+      if (!result.valid) {
+        setTreePlacementStatus(result.error);
+      } else {
+        setTreePlacementStatus(null);
+      }
+    }
   };
 
   /**
-   * Obstacle drag end: commit the move only when the dropped footprint is
-   * valid, otherwise revert the draft to the stored obstacle. Selection and
-   * the editor stay open either way.
+   * Obstacle drag-to-move (viewer gesture).
+   *
+   * Positions are rounded to the centimetre before entering state.
+   */
+  const handleObstacleDragMove = (id: string, x: number, y: number) => {
+    const rx = Math.round(x * 100) / 100;
+    const ry = Math.round(y * 100) / 100;
+    if (obstacleMode === "editing" && id === selectedObstacleId) {
+      setObstacleDraft((draft) => {
+        if (draft.x === String(rx) && draft.y === String(ry)) return draft;
+        return { ...draft, x: String(rx), y: String(ry) };
+      });
+    } else {
+      const target = obstacles.find((o) => o.id === id);
+      if (target) {
+        onUpdateObstacle?.({ ...target, position: { x: rx, y: ry } });
+      }
+    }
+  };
+
+  /**
+   * Obstacle drag end: commit the move when dropped footprint is valid.
    */
   const handleObstacleDragEnd = (id: string) => {
-    if (obstacleMode !== "editing" || id !== selectedObstacleId) return;
-    const original = obstacles.find((o) => o.id === id);
-    if (!original) return;
-    const candidate = draftToObstacle(obstacleDraft, id);
-    const others = obstacles.filter((o) => o.id !== id);
-    const result = validateObstacle(candidate, { terrace: terraceRing, others, parapetInsetM, parapetContactM });
-    if (result.valid) {
-      onUpdateObstacle?.(candidate);
+    if (obstacleMode === "editing" && id === selectedObstacleId) {
+      const original = obstacles.find((o) => o.id === id);
+      if (!original) return;
+      const candidate = draftToObstacle(obstacleDraft, id);
+      const others = obstacles.filter((o) => o.id !== id);
+      const result = validateObstacle(candidate, { terrace: terraceRing, others, parapetInsetM, parapetContactM });
+      if (result.valid) {
+        onUpdateObstacle?.(candidate);
+      } else {
+        setObstacleDraft(obstacleToDraft(original));
+      }
     } else {
-      setObstacleDraft(obstacleToDraft(original));
+      const current = obstacles.find((o) => o.id === id);
+      if (current) {
+        const others = obstacles.filter((o) => o.id !== id);
+        const result = validateObstacle(current, { terrace: terraceRing, others, parapetInsetM, parapetContactM });
+        if (!result.valid) {
+          setObstacleSubmitted(true);
+        }
+      }
     }
   };
 
@@ -1311,7 +1483,7 @@ export function ModelPanel({
       {/* 3D design viewport: the dedicated inspection scene (rotation +
           elevation + zoom, building stays centred). Satellite ground texture
           replaces the void with the actual site context. */}
-      <div className="stage-3d-viewport" style={{ marginBottom: "var(--space-3)" }}>
+      <div className="stage-3d-viewport">
         <Site3DViewer
           ref={viewerRef}
           localCoords={model.coords}
@@ -1322,9 +1494,12 @@ export function ModelPanel({
           previewValid={drawing ? drawnValid : draftResult.valid}
 
           onObstacleSelect={handleObstacleSelect}
-          obstacleDragEnabled={obstacleMode === "editing"}
+          obstacleDragEnabled={obstacleMode === "editing" || activeTool === "move"}
+          treeDragEnabled={treeMode === "editing" || activeTool === "move"}
           onObstacleDragMove={handleObstacleDragMove}
           onObstacleDragEnd={handleObstacleDragEnd}
+          onTreeDragMove={handleTreeDragMove}
+          onTreeDragEnd={handleTreeDragEnd}
           manualPanelPreview={
             manualPlaceActive && panelsEnabled && activeSet
               ? {
@@ -1364,16 +1539,19 @@ export function ModelPanel({
           treePlaceRotation={treePlaceRotation}
           onGroundPlace={handleGroundPlace}
           onCancelTreePlace={() => setTreePlaceActive(false)}
+          layerVisibility={layerVisibility}
+          activeTool={activeTool}
+          onDeleteObstacle={handleDeleteObstacle}
+          onDeleteTree={handleDeleteTree}
           className="model-viewport"
         />
         {/* Viewport Toolbar - floating contextual tools anchored to viewport */}
         {designMode && (
           <ViewportToolbar
             activeTool={activeTool}
-            onToolChange={setActiveTool}
+            onToolChange={handleToolChange}
             xrayActive={xray}
             onToggleXray={() => setXray((v) => !v)}
-            onResetView={() => viewerRef.current?.resetCamera()}
             obstacleType={obstacleDraft.type}
             drawing={drawing}
             manualPlaceActive={manualPlaceActive}
@@ -1381,6 +1559,10 @@ export function ModelPanel({
             onToggleSunPlay={sun.togglePlay}
             inspectorCollapsed={inspectorCollapsed}
             onExitDesign={onExitDesign}
+            layerVisibility={layerVisibility}
+            onToggleLayer={handleToggleLayer}
+            onDeleteSelected={handleDeleteSelected}
+            hasSelectedObject={selectedObstacleId !== null || selectedTreeId !== null}
           />
         )}
       </div>
@@ -2000,7 +2182,7 @@ export function ModelPanel({
                   }
                   panelCount={panelCount}
                   capacityKw={capacityKw}
-                  warning={placeWarning ?? (activeSet ? (placements[panelSets.indexOf(activeSet)]?.reason ?? null) : null)}
+                  warning={placeWarning ?? activeSetPlacementWarning}
                   energy={energy}
                 />
               </>
@@ -2014,7 +2196,7 @@ export function ModelPanel({
                   <button
                     type="button"
                     className="btn btn--secondary"
-                    onClick={() => setPanelsEnabled(true)}
+                    onClick={handleEnablePanels}
                     title="Generate a panel layout from the current settings"
                   >
                     Enable solar panels
@@ -2029,12 +2211,15 @@ export function ModelPanel({
             id="shading-optimization"
             title="Annual Shading & Optimization"
             defaultOpen={false}
+            onToggle={setShadingSectionOpen}
             icon={<Sparkles size={14} strokeWidth={1.75} aria-hidden="true" />}
           >
             <ShadingAnalysisSection
               shadingResult={annualShading}
               shadingVisualizationActive={shadingVisualizationActive}
               onToggleShadingVisualization={() => setShadingVisualizationActive((v) => !v)}
+              heatmapMode={heatmapMode}
+              onChangeHeatmapMode={setHeatmapMode}
               selectedPanelId={selectedPanelId}
               onSelectPanelId={setSelectedPanelId}
               onRunOptimization={handleRunOptimization}
@@ -2067,6 +2252,15 @@ export function ModelPanel({
 
             {/* Primary action */}
             <div className="inspector-actions__primary">
+              <button
+                type="button"
+                className="btn btn--secondary"
+                onClick={() => viewerRef.current?.resetCamera()}
+                title="Reset camera to default view"
+              >
+                <RotateCcw size={15} strokeWidth={2} aria-hidden="true" />
+                Reset View
+              </button>
               <button
                 type="button"
                 className="btn btn--primary"

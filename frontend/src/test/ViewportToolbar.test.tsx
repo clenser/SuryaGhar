@@ -98,4 +98,55 @@ describe("ViewportToolbar sliding collapse and actions", () => {
     await userEvent.click(resetBtn);
     expect(onResetView).toHaveBeenCalledTimes(1);
   });
+
+  it("renders layer visibility menu when activeTool is layers and triggers onToggleLayer", async () => {
+    const onToggleLayer = vi.fn();
+    const layerVisibility = {
+      building: true,
+      panels: true,
+      obstacles: true,
+      trees: true,
+      ground: true,
+    };
+
+    render(
+      <ViewportToolbar
+        activeTool="layers"
+        onToolChange={vi.fn()}
+        xrayActive={false}
+        onToggleXray={vi.fn()}
+        layerVisibility={layerVisibility}
+        onToggleLayer={onToggleLayer}
+      />,
+    );
+
+    const menu = screen.getByRole("menu", { name: /Layer visibility/i });
+    expect(menu).toBeInTheDocument();
+
+    const buildingCheckbox = screen.getByLabelText(/Building structure/i);
+    expect(buildingCheckbox).toBeChecked();
+    await userEvent.click(buildingCheckbox);
+    expect(onToggleLayer).toHaveBeenCalledWith("building");
+  });
+
+  it("invokes onDeleteSelected when delete tool is clicked with selected object", async () => {
+    const onDeleteSelected = vi.fn();
+    const onToolChange = vi.fn();
+
+    render(
+      <ViewportToolbar
+        activeTool="select"
+        onToolChange={onToolChange}
+        xrayActive={false}
+        onToggleXray={vi.fn()}
+        hasSelectedObject={true}
+        onDeleteSelected={onDeleteSelected}
+      />,
+    );
+
+    const deleteBtn = screen.getByRole("button", { name: /Delete/i });
+    await userEvent.click(deleteBtn);
+    expect(onDeleteSelected).toHaveBeenCalledTimes(1);
+    expect(onToolChange).not.toHaveBeenCalled();
+  });
 });

@@ -77,6 +77,27 @@ describe("Ground tree validation", () => {
     }
   });
 
+  it("accepts adjacent trees whose canopies touch along an edge without gap", () => {
+    // existing centered at (16, 0) with canopyWidth 4 => x in [14, 18], y in [-2, 2]
+    const existing = makeTree({ id: "tree-1", position: { x: 16, y: 0 }, canopyWidth: 4 });
+    // candidate centered at (20, 0) with canopyWidth 4 => x in [18, 22], y in [-2, 2]
+    // Canopies touch at x = 18 with 0 gap, trunks are 4m apart (> 0.56m)
+    const candidate = makeTree({ id: "tree-2", position: { x: 20, y: 0 }, canopyWidth: 4 });
+    const result = validateTree(candidate, TERRACE, [existing]);
+    expect(result.valid).toBe(true);
+  });
+
+  it("rejects trees whose trunks collide with another trunk", () => {
+    // Valid dimensions (canopyWidth 0.6m >= MIN 0.5m) but trunks collide (d = 0.2m < r1 + r2)
+    const existing = makeTree({ id: "tree-1", position: { x: 15, y: 0 }, canopyWidth: 0.6 });
+    const candidate = makeTree({ id: "tree-2", position: { x: 15.2, y: 0 }, canopyWidth: 0.6 });
+    const result = validateTree(candidate, TERRACE, [existing]);
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.error).toContain("collides");
+    }
+  });
+
   it("computes symmetric canopy footprint extent", () => {
     const tree = makeTree({ position: { x: 20, y: 10 }, canopyWidth: 6, rotation: 0 });
     const fp = treeFootprint(tree);
