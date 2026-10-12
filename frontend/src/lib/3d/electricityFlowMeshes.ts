@@ -57,10 +57,11 @@ export function getFlowParticleColor(intensity: number): THREE.Color {
  */
 export function createElectricityFlowVisualizer(
   topology: ElectricalTopology,
-  initialFlowActive: boolean = true,
+  initialFlowActive: boolean = false,
 ): ElectricityFlowHandle {
   const group = new THREE.Group();
   group.name = "ElectricityFlowVisualization";
+  group.visible = initialFlowActive;
 
   const disposables: Array<{ dispose: () => void }> = [];
 
@@ -186,8 +187,8 @@ export function createElectricityFlowVisualizer(
   let particleMesh: THREE.InstancedMesh | null = null;
 
   if (particleCount > 0) {
-    // Compact spherical geometry (radius 0.035m, 6 segments)
-    const pGeom = new THREE.SphereGeometry(0.035, 6, 6);
+    // Compact spherical geometry (radius 0.055m, 6 segments)
+    const pGeom = new THREE.SphereGeometry(0.055, 6, 6);
     disposables.push(pGeom);
 
     // Standard depthTest = true and normal depthWrite = false, renderOrder = 1
@@ -233,6 +234,7 @@ export function createElectricityFlowVisualizer(
   let flowActive = initialFlowActive;
   const setFlowActive = (active: boolean) => {
     flowActive = active;
+    group.visible = active;
     if (particleMesh) {
       particleMesh.visible = active;
     }
@@ -246,7 +248,7 @@ export function createElectricityFlowVisualizer(
 
     for (let i = 0; i < particleCount; i++) {
       const trk = trackers[i];
-      const speed = trk.baseSpeed * Math.max(0.2, trk.intensity);
+      const speed = trk.baseSpeed * Math.max(0.25, trk.intensity);
       trk.distance = (trk.distance + speed * dt) % trk.route.totalLength;
 
       samplePointAlongPolyline(
@@ -261,7 +263,7 @@ export function createElectricityFlowVisualizer(
       if (trk.intensity <= 0.001) {
         dummyMatrix.scale.set(0, 0, 0);
       } else {
-        const pulse = (0.8 + 0.3 * trk.intensity) * (1.0 + 0.12 * Math.sin(trk.distance * 5));
+        const pulse = (0.9 + 0.3 * trk.intensity) * (1.0 + 0.12 * Math.sin(trk.distance * 5));
         dummyMatrix.scale.set(pulse, pulse, pulse);
       }
       dummyMatrix.updateMatrix();
@@ -307,7 +309,7 @@ export function createElectricityFlowVisualizer(
     for (let i = 0; i < trackers.length; i++) {
       const trk = trackers[i];
       // Scale base route flowIntensity with instantaneous sun factor
-      const baseIntensity = trk.route.flowIntensity;
+      const baseIntensity = trk.route.flowIntensity > 0 ? trk.route.flowIntensity : 0.8;
       const updatedInt = solarElevationDeg <= 0 ? 0.0 : Math.max(0, Math.min(1, baseIntensity * sunFactor * weatherScale));
       trk.intensity = updatedInt;
       particleMesh.setColorAt(i, getFlowParticleColor(updatedInt));

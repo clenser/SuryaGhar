@@ -362,6 +362,8 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
     parapetHeightRef.current = parapet?.heightM ?? 0;
     const panelLayersRef = useRef(panelLayers);
     panelLayersRef.current = panelLayers;
+    const layerVisibilityRef = useRef(layerVisibility);
+    layerVisibilityRef.current = layerVisibility;
 
     // Latest values for effects that must run exactly once per mount.
     const localCoordsRef = useRef(localCoords);
@@ -1140,7 +1142,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       const sun = sunRef.current;
       const sunState = sun ? sunStateAt(sun.samples, sun.timeMinutes) : null;
       const solarAzimuthDeg = sunState ? sunState.azimuthDeg : 180;
-      const solarElevationDeg = sunState && !sunState.night ? sunState.elevationDeg : 0;
+      const solarElevationDeg = sunState ? (sunState.night ? 0 : sunState.elevationDeg) : 45;
       const weatherPreset = weatherPresetRef.current ?? "sunny";
 
       const topology = buildElectricalTopology({
@@ -1994,9 +1996,9 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         // Advance animated electricity flow particles along cable routes
         // Advance animated electricity flow particles along cable routes when layer is visible
         if (electricityFlowRef.current) {
-          const isFlowActive = Boolean(layerVisibility?.electricityFlow);
+          const isFlowActive = Boolean(layerVisibilityRef.current?.electricityFlow);
           if (isFlowActive) {
-            const dt = lastFlowTime === null ? 0.016 : Math.min(Math.max((now - lastFlowTime) / 1000, 0), 0.1);
+            const dt = lastFlowTime === null ? 0.016 : Math.min(Math.max((now - lastFlowTime) / 1000, 0.001), 0.1);
             electricityFlowRef.current.update(dt);
           }
 

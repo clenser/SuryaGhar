@@ -149,4 +149,56 @@ describe("ViewportToolbar sliding collapse and actions", () => {
     expect(onDeleteSelected).toHaveBeenCalledTimes(1);
     expect(onToolChange).not.toHaveBeenCalled();
   });
+
+  it("renders Electricity Flow tool, reflects layerVisibility state, and fires onToggleLayer", async () => {
+    const onToggleLayer = vi.fn();
+    const { rerender } = render(
+      <ViewportToolbar
+        activeTool="select"
+        onToolChange={vi.fn()}
+        xrayActive={false}
+        onToggleXray={vi.fn()}
+        layerVisibility={{
+          building: true,
+          panels: true,
+          obstacles: true,
+          trees: true,
+          ground: true,
+          electricityFlow: false,
+        }}
+        onToggleLayer={onToggleLayer}
+      />,
+    );
+
+    const flowBtn = screen.getByRole("button", { name: /Enable electricity flow/i });
+    expect(flowBtn).toBeInTheDocument();
+    expect(flowBtn).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(flowBtn);
+    expect(onToggleLayer).toHaveBeenCalledWith("electricityFlow");
+
+    // Rerender with active flow state
+    rerender(
+      <ViewportToolbar
+        activeTool="select"
+        onToolChange={vi.fn()}
+        xrayActive={false}
+        onToggleXray={vi.fn()}
+        layerVisibility={{
+          building: true,
+          panels: true,
+          obstacles: true,
+          trees: true,
+          ground: true,
+          electricityFlow: true,
+        }}
+        onToggleLayer={onToggleLayer}
+      />,
+    );
+
+    const activeFlowBtn = screen.getByRole("button", { name: /Disable electricity flow/i });
+    expect(activeFlowBtn).toHaveAttribute("aria-pressed", "true");
+    expect(activeFlowBtn).toHaveClass("is-active");
+  });
 });
+

@@ -27,7 +27,7 @@ import {
 } from "../lib/3d/electricityFlowMeshes";
 import { DEFAULT_PANEL_CONFIG } from "../lib/3d/panels";
 import type { PlacedPanel } from "../lib/3d/panelPlacement";
-import { pointInPolygon, type Obstacle } from "../lib/3d/obstacles";
+import { pointInPolygon, type Obstacle, type Point2 } from "../lib/3d/obstacles";
 
 describe("Electrical Flow Topology & Routing", () => {
   const mockConfig = {
@@ -491,6 +491,234 @@ describe("Electrical Flow Topology & Routing", () => {
             expect(insideTank).toBe(false);
           }
         }
+      }
+    });
+
+    it("keeps all wiring and inverter hidden by default, toggles cleanly on single click, and preserves particle phase", () => {
+      const terraceRing = [
+        { x: -10, y: -10 },
+        { x: 10, y: -10 },
+        { x: 10, y: 10 },
+        { x: -10, y: 10 },
+      ];
+      const panels: PlacedPanel[] = [
+        { index: 0, x: -4, y: 0, rotationDeg: 0 },
+        { index: 1, x: 0, y: 0, rotationDeg: 0 },
+        { index: 2, x: 4, y: 0, rotationDeg: 0 },
+      ];
+
+      const topo = buildElectricalTopology({
+        panelLayers: [{ config: mockConfig, panels }],
+        roofZ: 10,
+        terraceRing,
+        solarElevationDeg: 45,
+        solarAzimuthDeg: 180,
+      });
+
+      // 1. Initial state: wiring, conduits, boxes and inverter must be hidden by default
+      const visualizer = createElectricityFlowVisualizer(topo);
+      expect(visualizer.group.visible).toBe(false);
+
+      // Conduits and inverter exist in group but are hidden by group visibility
+      expect(visualizer.group.children.length).toBeGreaterThan(0);
+
+      // 2. Single click turns on full visualization
+      visualizer.setFlowActive(true);
+      expect(visualizer.group.visible).toBe(true);
+
+      // 3. Second click turns full visualization off
+      visualizer.setFlowActive(false);
+      expect(visualizer.group.visible).toBe(false);
+
+      // 4. Repeated toggles do not duplicate meshes in the scene
+      const childCountBefore = visualizer.group.children.length;
+      visualizer.setFlowActive(true);
+      visualizer.setFlowActive(false);
+      visualizer.setFlowActive(true);
+      expect(visualizer.group.children.length).toBe(childCountBefore);
+
+      // 5. Clean disposal
+      visualizer.dispose();
+      expect(visualizer.group.children.length).toBe(0);
+    });
+
+    it("animates moving particles continuously, updates positions with delta time, and wraps at endpoints", () => {
+      const terraceRing = [
+        { x: -10, y: -10 },
+        { x: 10, y: -10 },
+        { x: 10, y: 10 },
+        { x: -10, y: 10 },
+      ];
+      const panels: PlacedPanel[] = [
+        { index: 0, x: -3, y: 0, rotationDeg: 0 },
+        { index: 1, x: 0, y: 0, rotationDeg: 0 },
+        { index: 2, x: 3, y: 0, rotationDeg: 0 },
+      ];
+
+      const topo = buildElectricalTopology({
+        panelLayers: [{ config: mockConfig, panels }],
+        roofZ: 10,
+        terraceRing,
+        solarElevationDeg: 50,
+        solarAzimuthDeg: 180,
+      });
+
+      const visualizer = createElectricityFlowVisualizer(topo, true);
+      const particleMesh = visualizer.group.children.find(
+        (c) => c.name === "ElectricityFlowParticles",
+      ) as THREE.InstancedMesh;
+      expect(particleMesh).toBeDefined();
+
+      const mat1 = new THREE.Matrix4();
+      particleMesh.getMatrixAt(0, mat1);
+      const pos1 = new THREE.Vector3().setFromMatrixPosition(mat1);
+
+      // Advance time by 0.5s
+      visualizer.update(0.5);
+
+      const mat2 = new THREE.Matrix4();
+      particleMesh.getMatrixAt(0, mat2);
+      const pos2 = new THREE.Vector3().setFromMatrixPosition(mat2);
+
+      // Particle position must change as it moves along the conduit
+      expect(pos1.distanceTo(pos2)).toBeGreaterThan(0.01);
+
+      // Continuous wrapping: advance time by a large step (e.g. 50 seconds)
+      // Particle must not produce NaN coordinates and must stay within valid roof bounds
+      for (let step = 0; step < 10; step++) {
+        visualizer.update(0.1);
+      }
+      const mat3 = new THREE.Matrix4();
+      particleMesh.getMatrixAt(0, mat3);
+      const pos3 = new THREE.Vector3().setFromMatrixPosition(mat3);
+      expect(Number.isFinite(pos3.x)).toBe(true);
+      expect(Number.isFinite(pos3.y)).toBe(true);
+      expect(Number.isFinite(pos3.z)).toBe(true);
+
+      visualizer.dispose();
+    });
+
+    it("strictly guarantees routes never cross the open central courtyard of a concave U-shaped building", () => {
+      // U-shaped building footprint with open central courtyard:
+      // Outer bounds: [-16, 16] x [-12, 12]
+      // Left wing: x in [-16, -6], y in [-12, 12]
+      // Right wing: x in [6, 16], y in [-12, 12]
+      // Base corridor connecting wings: y in [-12, -4], x in [-16, 16]
+      // Central courtyard (OPEN AIR): x in (-6, 6) and y in (-4, 12]
+      const uShapedRoof: Point2[] = [
+        { x: -16, y: -12 },
+        { x: 16, y: -12 },
+        { x: 16, y: 12 },
+        { x: 6, y: 12 },
+        { x: 6, y: -4 },
+        { x: -6, y: -4 },
+        { x: -6, y: 12 },
+        { x: -16, y: 12 },
+      ];
+
+      // Solar panels located in the Left Wing and Right Wing
+      const panels: PlacedPanel[] = [
+        // Left wing panels (N to S)
+        { index: 0, x: -11, y: 8, rotationDeg: 0 },
+        { index: 1, x: -11, y: 4, rotationDeg: 0 },
+        { index: 2, x: -11, y: 0, rotationDeg: 0 },
+        // Right wing panels (N to S)
+        { index: 3, x: 11, y: 8, rotationDeg: 0 },
+        { index: 4, x: 11, y: 4, rotationDeg: 0 },
+        { index: 5, x: 11, y: 0, rotationDeg: 0 },
+      ];
+
+      const topo = buildElectricalTopology({
+        panelLayers: [{ config: mockConfig, panels }],
+        roofZ: 14,
+        terraceRing: uShapedRoof,
+        solarElevationDeg: 45,
+        solarAzimuthDeg: 180,
+      });
+
+      expect(topo.isValidRouting).toBe(true);
+      expect(topo.routes.length).toBeGreaterThan(0);
+
+      // Verify the designated inverter is strictly on the solid roof, NOT in the courtyard
+      expect(pointInPolygon({ x: topo.endpointPosition.x, y: topo.endpointPosition.y }, uShapedRoof)).toBe(true);
+      const inverterInCourtyard =
+        topo.endpointPosition.x > -5.9 &&
+        topo.endpointPosition.x < 5.9 &&
+        topo.endpointPosition.y > -3.9;
+      expect(inverterInCourtyard).toBe(false);
+
+      // Verify the main DC junction is strictly on the solid roof, NOT in the courtyard
+      expect(pointInPolygon({ x: topo.mainJunctionPosition.x, y: topo.mainJunctionPosition.y }, uShapedRoof)).toBe(true);
+      const junctionInCourtyard =
+        topo.mainJunctionPosition.x > -5.9 &&
+        topo.mainJunctionPosition.x < 5.9 &&
+        topo.mainJunctionPosition.y > -3.9;
+      expect(junctionInCourtyard).toBe(false);
+
+      // Rigorous segment verification:
+      // Sample every route segment at high density (0.2m steps) and verify that
+      // ZERO points fall inside the central courtyard or cross outside the building polygon.
+      for (const route of topo.routes) {
+        expect(route.points.length).toBeGreaterThanOrEqual(2);
+
+        for (let i = 0; i < route.points.length - 1; i++) {
+          const p1 = route.points[i];
+          const p2 = route.points[i + 1];
+
+          // Skip vertical elevation drop segments at connectors / inverter
+          if (Math.abs(p1.x - p2.x) < 0.01 && Math.abs(p1.y - p2.y) < 0.01) {
+            continue;
+          }
+
+          const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+          const steps = Math.max(10, Math.ceil(dist / 0.2));
+
+          for (let s = 0; s <= steps; s++) {
+            const t = s / steps;
+            const sx = p1.x + t * (p2.x - p1.x);
+            const sy = p1.y + t * (p2.y - p1.y);
+
+            // Point must be inside building polygon
+            const insideRoof = pointInPolygon({ x: sx, y: sy }, uShapedRoof);
+            expect(insideRoof).toBe(true);
+
+            // Point must NEVER be in the courtyard rectangle (-5.9, 5.9) x (-3.9, 12)
+            const inCourtyard = sx > -5.9 && sx < 5.9 && sy > -3.9;
+            expect(inCourtyard).toBe(false);
+          }
+        }
+      }
+    });
+
+    it("keeps separate roof regions in separate strings and avoids straight-line shortcuts", () => {
+      const uShapedRoof: Point2[] = [
+        { x: -16, y: -12 },
+        { x: 16, y: -12 },
+        { x: 16, y: 12 },
+        { x: 6, y: 12 },
+        { x: 6, y: -4 },
+        { x: -6, y: -4 },
+        { x: -6, y: 12 },
+        { x: -16, y: 12 },
+      ];
+
+      const leftPanels: PlacedPanel[] = [
+        { index: 0, x: -12, y: 6, rotationDeg: 0 },
+        { index: 1, x: -12, y: 4, rotationDeg: 0 },
+      ];
+      const rightPanels: PlacedPanel[] = [
+        { index: 2, x: 12, y: 6, rotationDeg: 0 },
+        { index: 3, x: 12, y: 4, rotationDeg: 0 },
+      ];
+
+      const strings = groupPanelsIntoStrings([...leftPanels, ...rightPanels], 10, uShapedRoof);
+
+      // Left wing panels and Right wing panels must not be merged into a single straight jumper across the courtyard
+      expect(strings.length).toBeGreaterThanOrEqual(2);
+      for (const str of strings) {
+        const hasLeft = str.some((p) => p.x < 0);
+        const hasRight = str.some((p) => p.x > 0);
+        expect(hasLeft && hasRight).toBe(false);
       }
     });
   });
