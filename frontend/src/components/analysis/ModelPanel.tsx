@@ -14,12 +14,12 @@
  * viewport only renders them.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { RotateCcw, ArrowRight, Plus, Pencil, Trash2, AlertTriangle, Sun, TreePine, Eye, Moon, Grid3x3, X, Sparkles, Zap } from "lucide-react";
 import { BACKEND_WAITING_LABEL } from "../../hooks/useBackendStatus";
 import type { LngLat, PolygonMetrics } from "../../lib/geo";
 import { formatArea } from "../../lib/geo";
-import { createBuildingModel } from "../../lib/3d/building";
+import { createBuildingModel, DEFAULT_BUILDING_HEIGHT_M } from "../../lib/3d/building";
 import {
   DEFAULT_PARAPET_HEIGHT_M,
   DEFAULT_PARAPET_THICKNESS_M,
@@ -154,6 +154,10 @@ interface ModelPanelProps {
   /** Reset action passed from parent to reclaim bottom space */
   onReset?: () => void;
   hasAnalysisData?: boolean;
+  /** Current workspace stage: "model" (Step 2) or "validate" (Step 3) */
+  stage?: "model" | "validate";
+  /** Validation panel rendered in the right-hand column during Step 3 */
+  validationPanel?: ReactNode;
 }
 
 export function ModelPanel({
@@ -180,6 +184,8 @@ export function ModelPanel({
   onBackToMap,
   onReset,
   hasAnalysisData = false,
+  stage = "model",
+  validationPanel,
 }: ModelPanelProps) {
   // True while the user is back-editing an existing height.
   const [editingHeight, setEditingHeight] = useState(false);
@@ -376,16 +382,17 @@ export function ModelPanel({
     }
   }, [sun.date, sun.timeMinutes, sun.timezone]);
 
-  // Terrace polygon + height â†’ local 3D coordinates (metres, centroid at origin).
+  // Terrace polygon + height → local 3D coordinates (metres, centroid at origin).
+  const effectiveBuildingHeight = buildingHeight ?? (stage === "validate" ? DEFAULT_BUILDING_HEIGHT_M : null);
   const model = useMemo(() => {
-    if (buildingHeight === null || vertices.length < 3) return null;
+    if (effectiveBuildingHeight === null || vertices.length < 3) return null;
     try {
-      return createBuildingModel(vertices, buildingHeight);
+      return createBuildingModel(vertices, effectiveBuildingHeight);
     } catch (err) {
       console.error("[ModelPanel] Building model creation failed:", err);
       return null;
     }
-  }, [vertices, buildingHeight]);
+  }, [vertices, effectiveBuildingHeight]);
 
   // Roof ring in local metres â€” the authoritative boundary for obstacle checks.
   const terraceRing = useMemo(
@@ -1388,7 +1395,7 @@ export function ModelPanel({
   }, [drawnTemp, footPoints, terraceRing, obstacles, parapetInsetM]);
 
   // No height yet (or the user asked to change it): collect it first.
-  if (buildingHeight === null || editingHeight || !model) {
+  if ((buildingHeight === null && stage !== "validate") || editingHeight || !model) {
     return (
       <BuildingHeightPanel
         vertices={vertices}
@@ -1685,78 +1692,45 @@ export function ModelPanel({
     setFootError(null);
   };
 
-  if (finalView && model) {
-    return (
-      <div className="stage-card stage-card--final-view">
-        <div className="design-layout design-layout--final">
-          <div className="design-view design-view--full">
-            <div className="stage-3d-viewport stage-3d-viewport--full">
-              <Site3DViewer
-                ref={viewerRef}
-                localCoords={model.coords}
-                obstacles={obstacles}
-                selectedObstacleId={null}
-                hiddenObstacleId={null}
-                previewObstacle={null}
-                previewValid={true}
-                sun={sun.clock}
-                panelLayers={panelLayers}
-                siteAnchor={siteAnchor}
-                parapet={parapetModel}
-                xray={xray}
-                weatherPreset={weatherPreset}
-                trees={trees}
-                selectedTreeId={null}
-                layerVisibility={layerVisibility}
-                activeTool="select"
-                className="model-viewport model-viewport--final"
-              />
-              <FinalModelControls
-                weatherPreset={weatherPreset}
-                onWeatherPresetChange={setWeatherPreset}
-                sun={sun}
-                electricityFlowActive={layerVisibility.electricityFlow ?? false}
-                onToggleElectricityFlow={() => handleToggleLayer("electricityFlow")}
-                xray={xray}
-                onToggleXray={() => setXray((v) => !v)}
-                treesVisible={layerVisibility.trees ?? true}
-                onToggleTrees={() => handleToggleLayer("trees")}
-                onBackToDesign={onBackToDesign}
-                onBackToMap={onBackToMap}
-              />
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  const isValidateStage = stage === "validate";
+  const isReadOnlyViewport = isValidateStage || finalView;
 
   return (
-    <div className="stage-card">
-      <div className="design-layout">
-        <div className="design-view">
+    <div
+      className={`stage-card${finalView ? " stage-card--final-view" : ""}${isValidateStage ? " stage-card--validate-workspace" : ""}`}
+    >
+      <div className={`design-layout${finalView ? " design-layout--final" : ""}`}>
+        <div className={`design-view${finalView ? " design-view--full" : ""}`}>
       {/* 3D design viewport: the dedicated inspection scene (rotation +
           elevation + zoom, building stays centred). Satellite ground texture
           replaces the void with the actual site context. */}
-      <div className="stage-3d-viewport">
+      <div className={`stage-3d-viewport${finalView ? " stage-3d-viewport--full" : ""}`}>
         <Site3DViewer
           ref={viewerRef}
           localCoords={model.coords}
           obstacles={obstacles}
-          selectedObstacleId={selectedObstacleId}
-          hiddenObstacleId={obstacleMode === "editing" ? selectedObstacleId : null}
-          previewObstacle={drawing ? drawnTemp : obstacleMode !== "idle" ? draftToObstacle(obstacleDraft, "obstacle-draft") : null}
-          previewValid={drawing ? drawnValid : draftResult.valid}
+          selectedObstacleId={isReadOnlyViewport ? null : selectedObstacleId}
+          hiddenObstacleId={!isReadOnlyViewport && obstacleMode === "editing" ? selectedObstacleId : null}
+          previewObstacle={
+            isReadOnlyViewport
+              ? null
+              : drawing
+                ? drawnTemp
+                : obstacleMode !== "idle"
+                  ? draftToObstacle(obstacleDraft, "obstacle-draft")
+                  : null
+          }
+          previewValid={isReadOnlyViewport ? true : drawing ? drawnValid : draftResult.valid}
 
-          onObstacleSelect={handleObstacleSelect}
-          obstacleDragEnabled={obstacleMode === "editing" || activeTool === "move"}
-          treeDragEnabled={treeMode === "editing" || activeTool === "move"}
-          onObstacleDragMove={handleObstacleDragMove}
-          onObstacleDragEnd={handleObstacleDragEnd}
-          onTreeDragMove={handleTreeDragMove}
-          onTreeDragEnd={handleTreeDragEnd}
+          onObstacleSelect={isReadOnlyViewport ? undefined : handleObstacleSelect}
+          obstacleDragEnabled={!isReadOnlyViewport && (obstacleMode === "editing" || activeTool === "move")}
+          treeDragEnabled={!isReadOnlyViewport && (treeMode === "editing" || activeTool === "move")}
+          onObstacleDragMove={isReadOnlyViewport ? undefined : handleObstacleDragMove}
+          onObstacleDragEnd={isReadOnlyViewport ? undefined : handleObstacleDragEnd}
+          onTreeDragMove={isReadOnlyViewport ? undefined : handleTreeDragMove}
+          onTreeDragEnd={isReadOnlyViewport ? undefined : handleTreeDragEnd}
           manualPanelPreview={
-            manualPlaceActive && panelsEnabled && activeSet
+            !isReadOnlyViewport && manualPlaceActive && panelsEnabled && activeSet
               ? {
                   config: activeSet.config,
                   insetM: parapetInsetM,
@@ -1765,11 +1739,11 @@ export function ModelPanel({
                 }
               : null
           }
-          manualPlaceActive={manualPlaceActive}
-          onRoofPlace={handleRoofPlace}
-          onRoofFinish={drawing ? finishFootprint : undefined}
-          footprintPoints={drawing ? footPoints : null}
-          footprintDrawing={drawing}
+          manualPlaceActive={!isReadOnlyViewport && manualPlaceActive}
+          onRoofPlace={isReadOnlyViewport ? undefined : handleRoofPlace}
+          onRoofFinish={!isReadOnlyViewport && drawing ? finishFootprint : undefined}
+          footprintPoints={!isReadOnlyViewport && drawing ? footPoints : null}
+          footprintDrawing={!isReadOnlyViewport && drawing}
           sun={sun.clock}
           panelLayers={panelLayers}
           siteAnchor={siteAnchor}
@@ -1777,31 +1751,50 @@ export function ModelPanel({
           xray={xray}
           weatherPreset={weatherPreset}
           trees={trees}
-          selectedTreeId={selectedTreeId}
-          onTreeSelect={(id) => {
-            setSelectedTreeId(id);
-            if (id) {
-              const found = trees.find((t) => t.id === id);
-              if (found) startEditTree(found);
-            } else if (treeMode !== "idle") {
-              closeTreeEditor();
-            }
-          }}
-          treePlaceActive={treePlaceActive}
+          selectedTreeId={isReadOnlyViewport ? null : selectedTreeId}
+          onTreeSelect={
+            isReadOnlyViewport
+              ? undefined
+              : (id) => {
+                  setSelectedTreeId(id);
+                  if (id) {
+                    const found = trees.find((t) => t.id === id);
+                    if (found) startEditTree(found);
+                  } else if (treeMode !== "idle") {
+                    closeTreeEditor();
+                  }
+                }
+          }
+          treePlaceActive={!isReadOnlyViewport && treePlaceActive}
           treePlaceType={selectedTreeType}
           treePlaceHeight={treePlaceHeight}
           treePlaceCanopyWidth={treePlaceCanopyWidth}
           treePlaceRotation={treePlaceRotation}
-          onGroundPlace={handleGroundPlace}
-          onCancelTreePlace={() => setTreePlaceActive(false)}
+          onGroundPlace={isReadOnlyViewport ? undefined : handleGroundPlace}
+          onCancelTreePlace={isReadOnlyViewport ? undefined : () => setTreePlaceActive(false)}
           layerVisibility={layerVisibility}
-          activeTool={activeTool}
-          onDeleteObstacle={handleDeleteObstacle}
-          onDeleteTree={handleDeleteTree}
-          className="model-viewport"
+          activeTool={isReadOnlyViewport ? "select" : activeTool}
+          onDeleteObstacle={isReadOnlyViewport ? undefined : handleDeleteObstacle}
+          onDeleteTree={isReadOnlyViewport ? undefined : handleDeleteTree}
+          className={`model-viewport${finalView ? " model-viewport--final" : ""}`}
         />
+        {finalView && (
+          <FinalModelControls
+            weatherPreset={weatherPreset}
+            onWeatherPresetChange={setWeatherPreset}
+            sun={sun}
+            electricityFlowActive={layerVisibility.electricityFlow ?? false}
+            onToggleElectricityFlow={() => handleToggleLayer("electricityFlow")}
+            xray={xray}
+            onToggleXray={() => setXray((v) => !v)}
+            treesVisible={layerVisibility.trees ?? true}
+            onToggleTrees={() => handleToggleLayer("trees")}
+            onBackToDesign={onBackToDesign}
+            onBackToMap={onBackToMap}
+          />
+        )}
         {/* Viewport Toolbar - floating contextual tools anchored to viewport */}
-        {designMode && (
+        {!finalView && designMode && !isValidateStage && (
           <ViewportToolbar
             activeTool={activeTool}
             onToolChange={handleToolChange}
@@ -1823,7 +1816,7 @@ export function ModelPanel({
       </div>
 
       {/* Viewport hint + camera/design-mode actions */}
-      {!designMode && (
+      {!finalView && !designMode && !isValidateStage && (
         <div className="viewer-footer" style={{ marginBottom: "var(--space-3)" }}>
           <p className="viewer-help">
             <RotateCcw size={14} strokeWidth={1.75} aria-hidden="true" />
@@ -1864,7 +1857,19 @@ export function ModelPanel({
       )}
 
         </div>
-        <div className="design-side">
+        {!finalView && (
+        <div className={`design-side${isValidateStage ? " design-side--validate" : ""}`}>
+        {isValidateStage ? (
+          <div className="inspector-panel inspector-panel--validate" style={{ flex: 1 }}>
+            {validationPanel}
+            {onReset && (
+              <div className="inspector-actions__reset" style={{ marginTop: "var(--space-3)" }}>
+                <ResetControl hasData={hasAnalysisData} onReset={onReset} />
+              </div>
+            )}
+          </div>
+        ) : (
+        <>
       <p className="stage-card__eyebrow">Stage 2 of 3</p>
       <h2 className="stage-card__title">3D Building Model</h2>
       <p className="stage-card__body">
@@ -2578,7 +2583,10 @@ export function ModelPanel({
               {BACKEND_WAITING_LABEL} 3D view works offline; validation needs the analysis server.
             </p>
           )}
+        </>
+        )}
         </div>
+        )}
       </div>
     </div>
   );

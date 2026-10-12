@@ -3,10 +3,13 @@
  * roof by default), mounting offers Flat Roof only, and the design-mode
  * transition buttons fire their callbacks.
  */
+import { useState } from "react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import * as THREE from "three";
 import { ModelPanel } from "../components/analysis/ModelPanel";
+import { ValidatePanel } from "../components/analysis/ValidatePanel";
+import type { ValidationSnapshot } from "../hooks/useValidation";
 import type { LngLat, PolygonMetrics } from "../lib/geo";
 import { createBuildingModel } from "../lib/3d/building";
 import { buildingBounds, frameCamera, framingFromBox } from "../lib/3d/scene";
@@ -297,5 +300,152 @@ describe("ModelPanel design correction", () => {
     } finally {
       HTMLCanvasElement.prototype.getBoundingClientRect = originalRect;
     }
+  });
+
+  it("preserves the live 3D canvas, placed panels, sets, and X-ray state across Stage 2 -> Stage 3 -> Stage 2 -> Final Model", () => {
+    const initialModelStatuses = {
+      sam2_tiny: { id: "sam2_tiny" as const, display_name: "SAM 2.1 Tiny", available: true },
+      sam2_base_plus: { id: "sam2_base_plus" as const, display_name: "SAM 2.1 Base+", available: true },
+      sam2_large: { id: "sam2_large" as const, display_name: "SAM 2.1 Large", available: true },
+      hotosm_buildings: { id: "hotosm_buildings" as const, display_name: "HOTOSM Buildings", available: true },
+    };
+
+    function StageHarness() {
+      const [stage, setStage] = useState<"model" | "validate">("model");
+      const [designMode, setDesignMode] = useState(true);
+      const [finalView, setFinalView] = useState(false);
+      const [snapshot, setSnapshot] = useState<ValidationSnapshot>({ kind: "idle" });
+
+      return (
+        <div>
+          <button
+            type="button"
+            onClick={() =>
+              setSnapshot({
+                kind: "loading",
+                model: "sam2_tiny",
+                startedAt: Date.now(),
+              })
+            }
+          >
+            Trigger loading
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              setSnapshot({
+                kind: "ok",
+                result: {
+                  classification: "roof",
+                  confidence: 0.92,
+                  coverage: 0.88,
+                  components: { building: 0.88, other: 0.12 },
+                  metrics: { area_m2: 84.5 },
+                  images: null,
+                  warnings: [],
+                  limitations: null,
+                  providers: { imagery: "esri", vision: "groq", segmentation: "sam2_tiny" },
+                },
+                model: "sam2_tiny",
+              })
+            }
+          >
+            Trigger success
+          </button>
+          <ModelPanel
+            vertices={TERRACE}
+            metrics={METRICS}
+            buildingHeight={12}
+            onSetHeight={vi.fn()}
+            onContinue={() => {
+              setDesignMode(true);
+              setFinalView(false);
+              setStage("validate");
+            }}
+            backendReady={true}
+            designMode={designMode}
+            onEnterDesign={() => setDesignMode(true)}
+            onExitDesign={() => setDesignMode(false)}
+            finalView={finalView}
+            onBackToDesign={() => setFinalView(false)}
+            onBackToMap={vi.fn()}
+            stage={stage}
+            validationPanel={
+              <ValidatePanel
+                snapshot={snapshot}
+                elapsed={1.2}
+                segmentationModel="sam2_tiny"
+                onSegmentationModelChange={vi.fn()}
+                onProceed={vi.fn()}
+                onContinue={() => {
+                  setStage("model");
+                  setDesignMode(true);
+                  setFinalView(true);
+                }}
+                onRedraw={vi.fn()}
+                onBackToModel={() => {
+                  setStage("model");
+                  setFinalView(false);
+                }}
+                backendReady={true}
+                initialModelStatuses={initialModelStatuses}
+              />
+            }
+          />
+        </div>
+      );
+    }
+
+    render(<StageHarness />);
+
+    const canvasInStage2 = document.querySelector("canvas");
+    expect(canvasInStage2).toBeTruthy();
+
+    // Place solar panels in Stage 2
+    fireEvent.click(screen.getByRole("button", { name: "Enable solar panels" }));
+    fireEvent.click(screen.getByRole("button", { name: /Auto-place set/ }));
+    const getPlacedCountText = (): string | null => {
+      const el = Array.from(document.querySelectorAll(".obstacle-count")).find((node) =>
+        /^\d+ panels/.test(node.textContent ?? ""),
+      );
+      return el?.textContent ?? null;
+    };
+    const countBeforeValidate = getPlacedCountText();
+    expect(countBeforeValidate).toBeTruthy();
+
+    // Click Continue to Validate -> advances to Stage 3
+    fireEvent.click(screen.getByRole("button", { name: /Continue to Validate/i }));
+
+    // Stage 3 Surface Assessment panel is rendered in the right-hand column
+    expect(screen.getByRole("heading", { name: /Surface Assessment/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Back to Step 2/i })).toBeInTheDocument();
+
+    // The exact same 3D canvas DOM instance remains mounted on the left
+    const canvasInStage3 = document.querySelector("canvas");
+    expect(canvasInStage3).toBe(canvasInStage2);
+
+    // Simulate validation loading and success -> canvas still identical
+    fireEvent.click(screen.getByRole("button", { name: "Trigger loading" }));
+    expect(document.querySelector("canvas")).toBe(canvasInStage2);
+
+    fireEvent.click(screen.getByRole("button", { name: "Trigger success" }));
+    expect(document.querySelector("canvas")).toBe(canvasInStage2);
+    expect(screen.getByRole("button", { name: /View Final Model/i })).toBeInTheDocument();
+
+    // Click Back to Step 2 -> returns to editable Stage 2 with placed panels intact
+    fireEvent.click(screen.getAllByRole("button", { name: /Back to Step 2/i })[0]);
+    expect(document.querySelector("canvas")).toBe(canvasInStage2);
+    expect(getPlacedCountText()).toBe(countBeforeValidate);
+
+    // Return to Stage 3 and open Final Model -> canvas still identical
+    fireEvent.click(screen.getByRole("button", { name: /Continue to Validate/i }));
+    fireEvent.click(screen.getByRole("button", { name: /View Final Model/i }));
+    expect(document.querySelector("canvas")).toBe(canvasInStage2);
+    expect(screen.getByRole("region", { name: /Final model presentation controls/i })).toBeInTheDocument();
+
+    // Return from Final Model to editable Step 2 design -> canvas and placed panels still intact
+    fireEvent.click(screen.getByRole("button", { name: /Back to Design/i }));
+    expect(document.querySelector("canvas")).toBe(canvasInStage2);
+    expect(getPlacedCountText()).toBe(countBeforeValidate);
   });
 });

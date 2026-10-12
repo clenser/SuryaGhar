@@ -212,7 +212,8 @@ export default function App() {
   // Sidebar stage navigation. The map stays clean: progress is communicated
   // through the current stage panel, section headings and primary actions.
   const stageOrder: Stage[] = ["select", "model", "validate"];
-  const inDesignWorkspace = stage === "model" && designMode;
+  const has3DWorkspace = (stage === "model" || stage === "validate") && selection.vertices.length >= 3;
+  const inDesignWorkspace = has3DWorkspace && (designMode || stage === "validate" || finalView);
 
   return (
     <div className="app" data-sheet={sheetCtl.sheet}>
@@ -300,9 +301,14 @@ export default function App() {
             }))}
             currentId={stage}
             onSelect={(id) => {
-              setStage(id as Stage);
-              setDesignMode(false);
+              const nextStage = id as Stage;
+              setStage(nextStage);
               setFinalView(false);
+              if (nextStage === "select") {
+                setDesignMode(false);
+              } else if (nextStage === "validate") {
+                setDesignMode(true);
+              }
             }}
             backendLocked={!backendReady}
           />
@@ -314,7 +320,7 @@ export default function App() {
               backendReady={backendReady}
             />
           )}
-          {stage === "model" && selection.vertices.length >= 3 && (
+          {has3DWorkspace && (
             <Suspense
               fallback={
                 <div className="stage-card">
@@ -332,7 +338,11 @@ export default function App() {
                 onSetParapetHeight={setParapetHeight}
                 parapetClearance={parapetClearance}
                 onSetParapetClearance={setParapetClearance}
-                onContinue={() => setStage("validate")}
+                onContinue={() => {
+                  setDesignMode(true);
+                  setFinalView(false);
+                  setStage("validate");
+                }}
                 backendReady={backendReady}
                 siteCountry={place?.country}
                 obstacles={obstacleStore.obstacles}
@@ -351,28 +361,33 @@ export default function App() {
                 }}
                 onReset={handleReset}
                 hasAnalysisData={hasAnalysisData}
+                stage={stage === "validate" ? "validate" : "model"}
+                validationPanel={
+                  <ValidatePanel
+                    snapshot={validation.snapshot}
+                    elapsed={validation.elapsed}
+                    segmentationModel={segmentationModel}
+                    onSegmentationModelChange={setSegmentationModel}
+                    onProceed={(model) => validation.proceed(selection.vertices, model)}
+                    onContinue={() => {
+                      setStage("model");
+                      setDesignMode(true);
+                      setFinalView(true);
+                    }}
+                    onRedraw={() => {
+                      setFinalView(false);
+                      setDesignMode(false);
+                      setStage("select");
+                    }}
+                    onBackToModel={() => {
+                      setStage("model");
+                      setFinalView(false);
+                    }}
+                    backendReady={backendReady}
+                  />
+                }
               />
             </Suspense>
-          )}
-          {stage === "validate" && selection.vertices.length >= 3 && (
-            <ValidatePanel
-              snapshot={validation.snapshot}
-              elapsed={validation.elapsed}
-              segmentationModel={segmentationModel}
-              onSegmentationModelChange={setSegmentationModel}
-              onProceed={(model) => validation.proceed(selection.vertices, model)}
-              onContinue={() => {
-                setStage("model");
-                setDesignMode(true);
-                setFinalView(true);
-              }}
-              onRedraw={() => setStage("select")}
-              onBackToModel={() => {
-                setStage("model");
-                setFinalView(false);
-              }}
-              backendReady={backendReady}
-            />
           )}
           {selection.mode === "confirmed" && stage !== "select" && selection.vertices.length < 3 && (
             <div className="stage-card">

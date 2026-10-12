@@ -4457,12 +4457,21 @@
    Surface Assessment (Stage 3) Scrolling & Responsive Layout (Task 2)
    ========================================================================== */
 
-.stage-card--validate {
+.stage-card--validate,
+.workspace.design-mode .stage-card.stage-card--validate {
   display: flex;
   flex-direction: column;
   flex: 0 0 auto;
+  height: auto;
   min-height: min-content;
   overflow: visible;
+}
+
+.workspace.design-mode .inspector-panel--validate .stage-card--validate {
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
 }
 
 .stage-card--validate > * {
