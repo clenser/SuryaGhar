@@ -136,7 +136,7 @@ export function rotateOffsets(points: Point2[], rotationDeg: number): Point2[] {
   const radians = (rotationDeg * Math.PI) / 180;
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
-  return points.map((p) => ({ x: p.x * cos - p.y * sin, y: p.y * cos }));
+  return points.map((p) => ({ x: p.x * cos - p.y * sin, y: p.x * sin + p.y * cos }));
 }
 
 /** Footprint corners in local metres, clockwise from the local -X/-Y corner, already rotated around `position`. Rectangular footprints use canopyWidth; drawn polygons use their stored offsets. */

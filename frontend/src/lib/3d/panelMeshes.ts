@@ -346,6 +346,7 @@ export function createPanelGroup(
   mountHeightM: number = DEFAULT_MOUNT_HEIGHT_M,
   legRows = 2,
   legCols = 2,
+  shadingSeverities?: Array<"none" | "moderate" | "severe">,
 ): THREE.Group {
   const group = new THREE.Group();
   group.name = "SolarPanels";
@@ -366,6 +367,8 @@ export function createPanelGroup(
   const matrix = new THREE.Matrix4();
   const quaternion = new THREE.Quaternion();
   const scale = new THREE.Vector3(1, 1, 1);
+  const color = new THREE.Color();
+
   for (let i = 0; i < panels.length; i++) {
     const panel = panels[i];
     quaternion.setFromAxisAngle(
@@ -374,8 +377,23 @@ export function createPanelGroup(
     );
     matrix.compose(new THREE.Vector3(panel.x, panel.y, roofZ), quaternion, scale);
     mesh.setMatrixAt(i, matrix);
+
+    if (shadingSeverities && shadingSeverities[i]) {
+      const sev = shadingSeverities[i];
+      if (sev === "severe") {
+        color.setHex(0xd94b4b); // Red: severe shading
+      } else if (sev === "moderate") {
+        color.setHex(0xe5a93c); // Amber: moderate shading
+      } else {
+        color.setHex(0x28a745); // Green: little or no shading
+      }
+      mesh.setColorAt(i, color);
+    }
   }
   mesh.instanceMatrix.needsUpdate = true;
+  if (shadingSeverities && mesh.instanceColor) {
+    mesh.instanceColor.needsUpdate = true;
+  }
   group.add(mesh);
   return group;
 }

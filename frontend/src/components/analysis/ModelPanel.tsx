@@ -15,7 +15,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { RotateCcw, ArrowRight, Plus, Pencil, Trash2, AlertTriangle, Sun, TreePine, Eye, Moon, Grid3x3, X } from "lucide-react";
+import { RotateCcw, ArrowRight, Plus, Pencil, Trash2, AlertTriangle, Sun, TreePine, Eye, Moon, Grid3x3, X, Sparkles } from "lucide-react";
 import { BACKEND_WAITING_LABEL } from "../../hooks/useBackendStatus";
 import type { LngLat, PolygonMetrics } from "../../lib/geo";
 import { formatArea } from "../../lib/geo";
@@ -99,6 +99,9 @@ import {
   validatePanelConfig,
   type PanelLayoutConfig,
 } from "../../lib/3d/panels";
+import { ShadingAnalysisSection } from "../3d/ShadingAnalysisSection";
+import { runAnnualShadingAnalysis, type AnnualShadingResult } from "../../lib/3d/shadingAnalysis";
+import { optimizeSolarLayout, type OptimizationCandidate, type OptimizationResult } from "../../lib/3d/layoutOptimization";
 
 interface ModelPanelProps {
   vertices: LngLat[];
@@ -237,6 +240,14 @@ export function ModelPanel({
   const [lastSetCommit, setLastSetCommit] = useState<{ setId: string; indices: number[] } | null>(null);
   const [panelRevision, setPanelRevision] = useState(0);
   const [manualStatus, setManualStatus] = useState<string | null>(null);
+
+  // M4 State: Shading analysis visualization and layout optimization
+  const [shadingVisualizationActive, setShadingVisualizationActive] = useState(false);
+  const [selectedPanelId, setSelectedPanelId] = useState<string | null>(null);
+  const [optimizationResult, setOptimizationResult] = useState<OptimizationResult | null>(null);
+  const [isOptimizing, setIsOptimizing] = useState(false);
+  const [previewCandidate, setPreviewCandidate] = useState<OptimizationCandidate | null>(null);
+
   // Active viewport tool (for contextual toolbar)
   const [activeTool, setActiveTool] = useState<ViewportTool | null>("select");
   // Escape cancels the active transient tool: drawing first, then manual
@@ -500,30 +511,18 @@ export function ModelPanel({
   // a slider change updates exactly that set's meshes - tilt, azimuth, height
   // and dimensions flow into geometry - and never touches another set's.
   // Stable shape (null while disabled) so the viewer effect cleans up any
-  // previous groups and renders no panels.
-  const panelLayers = useMemo(() => {
-    if (!panelsEnabled) return null;
-    return panelSets.map((set) => ({
-      config: set.config,
-      panels: set.panels.map(
-        (p) => ({ index: 0, x: p.x, y: p.y, rotationDeg: p.rotationDeg }) as PlacedPanel,
-      ),
-    }));
-  }, [panelsEnabled, panelSets]);
-
   /**
    * One sun sample per clock hour, in local wall-clock order.
    *
    * Derived from the same real solar-position model the 3D viewport uses
    * (`sampleSolarDay`), so the sun direction in the simulation matches the
-   * sun the user sees â€” and changing the date in SunControls re-samples both.
+   * sun the user sees — and changing the date in SunControls re-samples both.
    */
   const hourlySun = useMemo(() => {
     if (!sun.samples) return [];
     const byHour = new Map<number, SunSample>();
     for (const sample of sun.samples) {
       const hour = Math.floor(sample.minutes / 60);
-      // Keep the sample closest to each hour's midpoint (more representative).
       const existing = byHour.get(hour);
       if (!existing || Math.abs(sample.minutes - (hour * 60 + 30)) < Math.abs(existing.minutes - (hour * 60 + 30))) {
         byHour.set(hour, sample);
@@ -533,6 +532,82 @@ export function ModelPanel({
       .sort((a, b) => a[0] - b[0])
       .map(([hour, sample]) => ({ hour, azimuthDeg: sample.azimuthDeg, elevationDeg: sample.elevationDeg }));
   }, [sun.samples]);
+
+  // M4 Annual Shading Analysis: Evaluates individual modules across representative seasons
+  const annualShading = useMemo<AnnualShadingResult | null>(() => {
+    if (!panelsEnabled || allPanels.panels.length === 0 || !metrics?.centroid) return null;
+    const simPanels = allPanels.panels.map((p, idx) => ({
+      id: `p-${idx}`,
+      setId: activeSetId,
+      index: idx,
+      x: p.x,
+      y: p.y,
+      rotationDeg: p.rotationDeg,
+      config: activeSet?.config ?? DEFAULT_PANEL_CONFIG,
+    }));
+
+    return runAnnualShadingAnalysis({
+      panels: simPanels,
+      terraceRing,
+      roofZ: buildingHeight ?? 0,
+      latitude: metrics.centroid.lat,
+      longitude: metrics.centroid.lng,
+      obstacles,
+      trees,
+      parapetHeightM,
+      parapetClearanceM,
+    });
+  }, [
+    panelsEnabled,
+    allPanels.panels,
+    metrics?.centroid,
+    activeSetId,
+    activeSet?.config,
+    terraceRing,
+    buildingHeight,
+    obstacles,
+    trees,
+    parapetHeightM,
+    parapetClearanceM,
+  ]);
+
+  // Per-set viewport layers: each set renders with its OWN configuration.
+  // When an optimization candidate is being previewed, the candidate panels
+  // and config are rendered instead of the active set, without mutating state!
+  const panelLayers = useMemo(() => {
+    if (!panelsEnabled) return null;
+
+    if (previewCandidate) {
+      return [
+        {
+          config: previewCandidate.config,
+          panels: previewCandidate.panels.map(
+            (p) => ({ index: p.index, x: p.x, y: p.y, rotationDeg: p.rotationDeg }) as PlacedPanel,
+          ),
+          shadingSeverities: shadingVisualizationActive
+            ? previewCandidate.shadingSummary.panels.map((p) => p.severity)
+            : undefined,
+        },
+      ];
+    }
+
+    return panelSets.map((set) => {
+      let severities: Array<"none" | "moderate" | "severe"> | undefined = undefined;
+      if (shadingVisualizationActive && annualShading) {
+        severities = set.panels.map((_, idx) => {
+          const match = annualShading.panels[idx];
+          return match ? match.severity : "none";
+        });
+      }
+      return {
+        config: set.config,
+        panels: set.panels.map(
+          (p) => ({ index: 0, x: p.x, y: p.y, rotationDeg: p.rotationDeg }) as PlacedPanel,
+        ),
+        shadingSeverities: severities,
+      };
+    });
+  }, [panelsEnabled, panelSets, previewCandidate, shadingVisualizationActive, annualShading]);
 
   const energy = useMemo(() => {
     if (!panelsEnabled || !activeSet || allPanels.panels.length === 0 || hourlySun.length === 0) return null;
@@ -545,7 +620,50 @@ export function ModelPanel({
     return computePanelEnergy(simulated, weather, obstacles, DEFAULT_PARAPET_THICKNESS_M, terraceRing);
   }, [panelsEnabled, activeSet, allPanels.panels, hourlySun, obstacles, terraceRing]);
 
-  // Mounting is Flat Roof only for now: any non-flat patch (stale state,
+  // M4 Handler: Runs layout optimization engine
+  const handleRunOptimization = () => {
+    if (!activeSet || activeSet.panels.length === 0 || !metrics?.centroid) return;
+    setIsOptimizing(true);
+    // Yield execution to allow UI spinner
+    setTimeout(() => {
+      try {
+        const result = optimizeSolarLayout({
+          currentPanels: activeSet.panels,
+          currentConfig: activeSet.config,
+          setId: activeSetId,
+          terraceRing,
+          roofZ: buildingHeight ?? 0,
+          latitude: metrics.centroid.lat,
+          longitude: metrics.centroid.lng,
+          obstacles,
+          trees,
+          parapetHeightM,
+          parapetClearanceM,
+        });
+        setOptimizationResult(result);
+      } catch (err) {
+        console.error("[ModelPanel] Optimization error:", err);
+      } finally {
+        setIsOptimizing(false);
+      }
+    }, 50);
+  };
+
+  // M4 Handler: Atomically applies the chosen optimization candidate
+  const handleApplyCandidate = (cand: OptimizationCandidate) => {
+    setPanelSets((sets) =>
+      sets.map((set) => {
+        if (set.id !== activeSetId) return set;
+        return {
+          ...set,
+          config: cand.config,
+          panels: cand.panels,
+          userModified: true,
+        };
+      }),
+    );
+    setPreviewCandidate(null);
+  };
   // future callers) is normalised back to flat; the engine keeps supporting
   // other types internally for later milestones.
   const handlePanelConfigChange = (patch: Partial<PanelLayoutConfig>) => {
@@ -1857,6 +1975,28 @@ export function ModelPanel({
                 </div>
               </div>
             )}
+          </CollapsibleSection>
+
+          {/* M4: Annual Shading Analysis & Optimization */}
+          <CollapsibleSection
+            id="shading-optimization"
+            title="Annual Shading & Optimization"
+            defaultOpen={false}
+            icon={<Sparkles size={14} strokeWidth={1.75} aria-hidden="true" />}
+          >
+            <ShadingAnalysisSection
+              shadingResult={annualShading}
+              shadingVisualizationActive={shadingVisualizationActive}
+              onToggleShadingVisualization={() => setShadingVisualizationActive((v) => !v)}
+              selectedPanelId={selectedPanelId}
+              onSelectPanelId={setSelectedPanelId}
+              onRunOptimization={handleRunOptimization}
+              optimizationResult={optimizationResult}
+              isOptimizing={isOptimizing}
+              previewCandidate={previewCandidate}
+              onPreviewCandidate={setPreviewCandidate}
+              onApplyCandidate={handleApplyCandidate}
+            />
           </CollapsibleSection>
 
           </div>

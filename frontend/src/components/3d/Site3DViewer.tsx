@@ -162,7 +162,11 @@ export interface Site3DViewerProps {
    * update exactly that set's meshes. Rebuilt (old geometry disposed)
    * whenever this array changes.
    */
-  panelLayers?: Array<{ config: PanelLayoutConfig; panels: PlacedPanel[] }> | null;
+  panelLayers?: Array<{
+    config: PanelLayoutConfig;
+    panels: PlacedPanel[];
+    shadingSeverities?: Array<"none" | "moderate" | "severe">;
+  }> | null;
   /**
    * Manual panel placement session: while true, a press-and-release click on
    * the roof plane reports through onRoofPlace instead of selecting an
@@ -816,6 +820,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
             layer.config.mountHeightM,
             layer.config.legRows,
             layer.config.legCols,
+            layer.shadingSeverities,
           );
           groups.push(group);
           scene.add(group);
