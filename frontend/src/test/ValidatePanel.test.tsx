@@ -169,7 +169,7 @@ describe("ValidatePanel surface assessment", () => {
     const { onBackToModel } = renderPanel({ kind: "ok", result: resultBody() as never, model: "sam2_base_plus" as SegmentationModel });
 
     expect(screen.getByRole("button", { name: "Review selection" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Continue to design" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "View Final Model" })).toBeInTheDocument();
     const backBtns = screen.getAllByRole("button", { name: /Back to Step 2/i });
     expect(backBtns.length).toBeGreaterThanOrEqual(1);
 

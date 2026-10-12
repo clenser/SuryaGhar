@@ -93,7 +93,7 @@ export function ValidatePanel({
   const selectedModelStatus = modelStatuses[draft];
 
   return (
-    <div className="stage-card">
+    <div className="stage-card stage-card--validate">
       <div className="stage-card__header-row">
         <p className="stage-card__eyebrow" style={{ margin: 0 }}>Stage 3 of 3</p>
         {onBackToModel && (
@@ -151,7 +151,7 @@ export function ValidatePanel({
         </p>
       )}
 
-      <div className="stage-card__actions">
+      <div className="stage-card__actions stage-card__actions--inline">
         <button
           type="button"
           className="btn btn--primary btn--block"
@@ -172,7 +172,7 @@ export function ValidatePanel({
       {state.kind === "error" && (
         <>
           <p className="stage-card__warning" role="alert">{state.message}</p>
-          <div className="stage-card__actions">
+          <div className="stage-card__actions stage-card__actions--inline">
             <button
               type="button"
               className="btn"
@@ -319,7 +319,7 @@ export function ValidatePanel({
             <p className="stage-card__warning" key={w}>{w}</p>
           ))}
 
-          <div className="stage-card__actions">
+          <div className="stage-card__actions stage-card__actions--footer">
             {onBackToModel && (
               <button
                 type="button"
@@ -336,10 +336,10 @@ export function ValidatePanel({
               type="button"
               className="btn btn--primary"
               onClick={onContinue}
-              disabled={!backendReady}
-              title={backendReady ? "Proceed to 3D solar design workspace" : BACKEND_WAITING_LABEL}
+              disabled={!backendReady || state.kind !== "ok"}
+              title={backendReady ? "View final 3D solar model" : BACKEND_WAITING_LABEL}
             >
-              Continue to design
+              View Final Model
             </button>
           </div>
         </>

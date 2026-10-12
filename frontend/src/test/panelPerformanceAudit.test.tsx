@@ -80,14 +80,21 @@ describe("Panel Performance Audit: Regression Suite", () => {
     clearPlacementCache();
   });
 
-  it("1. Enabling panels produces one valid initial layout", () => {
+  it("1. Enabling panels enables configuration without populating roof until user triggers placement", () => {
     renderModelPanel();
     const enableBtn = screen.getByRole("button", { name: "Enable solar panels" });
     expect(enableBtn).toBeInTheDocument();
 
     fireEvent.click(enableBtn);
 
-    // Initial layout generated on enable
+    // Initial state after enabling: 0 panels placed, explicit action prompt shown
+    expect(screen.getByText("No panels placed yet")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Auto-Place Panels" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add Panel Manually" })).toBeInTheDocument();
+
+    // User explicitly triggers auto-placement
+    fireEvent.click(screen.getByRole("button", { name: "Auto-Place Panels" }));
+
     const countEl = Array.from(document.querySelectorAll(".obstacle-count")).find((el) =>
       /^\d+ panels/.test(el.textContent ?? ""),
     );
@@ -100,6 +107,9 @@ describe("Panel Performance Audit: Regression Suite", () => {
     renderModelPanel();
     const enableBtn = screen.getByRole("button", { name: "Enable solar panels" });
     fireEvent.click(enableBtn);
+
+    // Explicitly place panels first
+    fireEvent.click(screen.getByRole("button", { name: "Auto-Place Panels" }));
 
     const getCount = (): number => {
       const el = Array.from(document.querySelectorAll(".obstacle-count")).find((node) =>

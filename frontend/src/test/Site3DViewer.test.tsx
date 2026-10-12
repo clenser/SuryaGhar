@@ -631,7 +631,9 @@ describe("Site3DViewer obstacle interaction", () => {
     stepFrames(1);
     const group = capture.lastScene!.getObjectByName("PanelSetPreview") as THREE.Group | undefined;
     expect(group).toBeTruthy();
-    expect(group!.children).toHaveLength(9);
+    const panelChildren = group!.children.filter((c) => c.name !== "PanelSetFramePreview");
+    expect(panelChildren).toHaveLength(9);
+    expect(group!.getObjectByName("PanelSetFramePreview")).toBeTruthy();
   });
 
   it("previews a 1 x 4 configuration as four panels", () => {
@@ -647,7 +649,10 @@ describe("Site3DViewer obstacle interaction", () => {
 
     stepFrames(1);
     const group = capture.lastScene!.getObjectByName("PanelSetPreview") as THREE.Group | undefined;
-    expect(group!.children).toHaveLength(4);
+    expect(group).toBeTruthy();
+    const panelChildren = group!.children.filter((c) => c.name !== "PanelSetFramePreview");
+    expect(panelChildren).toHaveLength(4);
+    expect(group!.getObjectByName("PanelSetFramePreview")).toBeTruthy();
   });
 
   it("moves every previewed panel to the block the cursor anchors", () => {
@@ -672,9 +677,11 @@ describe("Site3DViewer obstacle interaction", () => {
     stepFrames(1);
 
     const group = capture.lastScene!.getObjectByName("PanelSetPreview") as THREE.Group;
-    expect(group.children).toHaveLength(10);
+    const panelChildren = group.children.filter((c) => c.name !== "PanelSetFramePreview");
+    expect(panelChildren).toHaveLength(10);
+    expect(group.getObjectByName("PanelSetFramePreview")).toBeTruthy();
     const expected = setBlockPanels(config, 4, -3, 0);
-    group.children.forEach((child, index) => {
+    panelChildren.forEach((child, index) => {
       expect(child.position.x).toBeCloseTo(expected[index].x, 6);
       expect(child.position.y).toBeCloseTo(expected[index].y, 6);
       expect(child.position.z).toBeCloseTo(MOCK_LOCAL_COORDS.height, 6);

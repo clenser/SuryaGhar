@@ -33,6 +33,14 @@ export interface PanelTypeDefinition {
   lengthM: number;
   /** Module thickness (frame depth). */
   thicknessM: number;
+  /** Maximum power voltage (V) under Standard Test Conditions (STC: 1000 W/m², 25°C). */
+  vmpV?: number;
+  /** Maximum power current (A) under Standard Test Conditions (STC). */
+  impA?: number;
+  /** Open-circuit voltage (V) under Standard Test Conditions (STC). */
+  vocV?: number;
+  /** Short-circuit current (A) under Standard Test Conditions (STC). */
+  iscA?: number;
 }
 
 /**
@@ -40,9 +48,9 @@ export interface PanelTypeDefinition {
  * configurable; these defaults are plausible values, not a catalogue.
  */
 export const PANEL_TYPES: PanelTypeDefinition[] = [
-  { id: "panel-450w", label: "450 W", watts: 450, widthM: 1.13, lengthM: 1.72, thicknessM: 0.03 },
-  { id: "panel-550w", label: "550 W", watts: 550, widthM: 1.13, lengthM: 2.28, thicknessM: 0.035 },
-  { id: "panel-600w", label: "600 W", watts: 600, widthM: 1.13, lengthM: 2.38, thicknessM: 0.04 },
+  { id: "panel-450w", label: "450 W", watts: 450, widthM: 1.13, lengthM: 1.72, thicknessM: 0.03, vmpV: 41.5, impA: 10.85, vocV: 49.8, iscA: 11.5 },
+  { id: "panel-550w", label: "550 W", watts: 550, widthM: 1.13, lengthM: 2.28, thicknessM: 0.035, vmpV: 42.0, impA: 13.1, vocV: 50.0, iscA: 14.0 },
+  { id: "panel-600w", label: "600 W", watts: 600, widthM: 1.13, lengthM: 2.38, thicknessM: 0.04, vmpV: 45.5, impA: 13.2, vocV: 54.5, iscA: 14.1 },
 ];
 
 /** Mounting-type catalogue for the selector. */

@@ -104,6 +104,8 @@ interface SolarPanelSectionProps {
   /** Site-optimal orientation recommended by solar resource engine */
   optimalOrientation?: { tiltDeg: number; azimuthDeg: number } | null;
   onApplyOptimalOrientation?: () => void;
+  /** True while automatic placement computation is actively running. */
+  isPlacing?: boolean;
 }
 
 /**
@@ -296,7 +298,9 @@ export function SolarPanelSection({
   targetStatus = null,
   optimalOrientation = null,
   onApplyOptimalOrientation,
+  isPlacing = false,
 }: SolarPanelSectionProps) {
+  const [confirmReplace, setConfirmReplace] = useState<"set" | "all" | null>(null);
   const selected = panelTypeDefinition(config.panelTypeId);
   const tiltLabel = config.mounting === "tilted" ? "Roof slope" : "Tilt";
   // Optional props default to their empty/absent values so a caller that does
@@ -304,6 +308,23 @@ export function SolarPanelSection({
   const setsList = sets ?? [];
   const activeId = activeSetId ?? setsList[0]?.id ?? "";
   const activeSet = setsList.find((s) => s.id === activeId) ?? setsList[0] ?? null;
+
+  const handleRequestAutoPlace = () => {
+    if (activeSet && activeSet.panels.length > 0) {
+      setConfirmReplace("set");
+    } else {
+      onAutoPlace?.();
+    }
+  };
+
+  const handleRequestAutoPlaceAll = () => {
+    if (setsList.some((s) => s.panels.length > 0)) {
+      setConfirmReplace("all");
+    } else {
+      onAutoPlaceAll?.();
+    }
+  };
+
   // Set size, guarded for display: a cleared or fractional entry shows 0 until
   // the domain validator reports it, never a bogus total.
   const setRowsValue = Number.isInteger(config.setRows) && config.setRows > 0 ? config.setRows : 0;
@@ -433,6 +454,75 @@ export function SolarPanelSection({
             )}
           </div>
 
+      {/* Feature 2: Explicit Placement Options when no panels placed */}
+      {panelCount === 0 && (
+        <div className="panel-placement-prompt" role="region" aria-label="Solar panel placement options">
+          <h4 className="panel-placement-prompt__title">Place Solar Panels</h4>
+          <p className="panel-placement-prompt__body">
+            No panels placed yet. Choose how you would like to arrange modules on this roof:
+          </p>
+          <div className="panel-placement-prompt__actions">
+            <button
+              type="button"
+              className="btn btn--primary"
+              onClick={handleRequestAutoPlace}
+              disabled={isPlacing}
+              title="Automatically arrange solar panels within the usable roof area"
+            >
+              <Wand2 size={14} strokeWidth={2} aria-hidden="true" />
+              {isPlacing ? "Placing..." : "Auto-Place Panels"}
+            </button>
+            <button
+              type="button"
+              className={`btn ${manualPlaceActive ? "btn--primary" : "btn--secondary"}`}
+              onClick={onToggleManualPlace}
+              disabled={isPlacing}
+              title="Click directly on the 3D roof to position panels individually or in sets"
+            >
+              <Plus size={14} strokeWidth={2} aria-hidden="true" />
+              {manualPlaceActive ? "Placement Active" : "Add Panel Manually"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Dialog before overwriting existing layout */}
+      {confirmReplace && (
+        <div className="panel-replace-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-replace-title">
+          <h4 id="confirm-replace-title" className="panel-replace-dialog__title">
+            <AlertTriangle size={15} aria-hidden="true" /> Replace Existing Layout?
+          </h4>
+          <p className="panel-replace-dialog__message">
+            {confirmReplace === "set"
+              ? `Auto-placing will replace all ${activeSet?.panels.length ?? 0} existing panels in "${activeSet?.name ?? "this set"}". Any custom layout adjustments will be overwritten.`
+              : `Auto-placing will regenerate all panel sets, replacing all existing placed panels across the roof. This action cannot be undone.`}
+          </p>
+          <div className="panel-replace-dialog__actions">
+            <button
+              type="button"
+              className="btn btn--secondary"
+              onClick={() => setConfirmReplace(null)}
+              disabled={isPlacing}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn--primary"
+              onClick={() => {
+                const target = confirmReplace;
+                setConfirmReplace(null);
+                if (target === "set") onAutoPlace?.();
+                else if (target === "all") onAutoPlaceAll?.();
+              }}
+              disabled={isPlacing}
+            >
+              {isPlacing ? "Placing..." : "Confirm Auto-Place"}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* A manually edited set keeps its stored positions when the configuration
           changes — the new tilt/height/dimensions apply to rendering, but the
           arrangement is no longer the lattice output. Auto-place regenerates it
@@ -450,16 +540,17 @@ export function SolarPanelSection({
         <button
           type="button"
           className="btn btn--secondary"
-          onClick={onAutoPlace}
+          onClick={handleRequestAutoPlace}
+          disabled={isPlacing}
           title="Automatically arrange this set inside the usable roof"
         >
-          <Wand2 size={14} strokeWidth={2} aria-hidden="true" /> Auto-place set
+          <Wand2 size={14} strokeWidth={2} aria-hidden="true" /> {isPlacing ? "Placing..." : "Auto-place set"}
         </button>
         <button
           type="button"
           className="btn btn--secondary"
-          onClick={onAutoPlaceAll}
-          disabled={setsList.length < 2}
+          onClick={handleRequestAutoPlaceAll}
+          disabled={isPlacing || setsList.length < 2}
           title="Auto-place every set (sets may then overlap if the roof is crowded)"
         >
           <Wand2 size={14} strokeWidth={2} aria-hidden="true" /> Auto-place all
@@ -468,7 +559,7 @@ export function SolarPanelSection({
           type="button"
           className="btn btn--secondary"
           onClick={onUndoLast}
-          disabled={!activeSet || activeSet.panels.length === 0}
+          disabled={isPlacing || !activeSet || activeSet.panels.length === 0}
           title="Undo the most recent manual placement"
         >
           Undo last panel
@@ -485,6 +576,7 @@ export function SolarPanelSection({
           type="button"
           className={`btn${manualPlaceActive ? " btn--primary" : " btn--secondary"}`}
           onClick={onToggleManualPlace}
+          disabled={isPlacing}
           aria-pressed={manualPlaceActive}
           title={
             manualPlaceMode === "set"
@@ -922,13 +1014,13 @@ export function SolarPanelSection({
           />
         </div>
         <span className="panel-group__label" id="panel-legs-label" style={{ marginTop: "var(--space-2)" }}>
-          Structure Legs
+          Structure Legs (Table)
         </span>
         <div className="field-grid" role="group" aria-labelledby="panel-legs-label">
           <IntStepperField
             id="panel-leg-rows"
             label="Rows"
-            title="Legs along the panel length axis (panel rows): each one carries the row of panels above it"
+            title="Shared support legs along the table slope axis"
             value={config.legRows}
             min={PANEL_LEGS_MIN}
             max={PANEL_LEGS_MAX}
@@ -937,7 +1029,7 @@ export function SolarPanelSection({
           <IntStepperField
             id="panel-leg-cols"
             label="Columns"
-            title="Legs along the panel width axis (panel columns): each one carries the column of panels beside it"
+            title="Shared support legs across the table width axis"
             value={config.legCols}
             min={PANEL_LEGS_MIN}
             max={PANEL_LEGS_MAX}
@@ -945,9 +1037,7 @@ export function SolarPanelSection({
           />
         </div>
         <p className="panel-group__hint">
-          Each set places as one rows-by-columns group; only complete groups
-          that fit are placed. Legs change only the rendered supports, never
-          structural engineering.
+          Panel Sets share continuous rails and structural table legs (Rows × Columns). Single panel mode retains individual module legs.
         </p>
       </div>
 

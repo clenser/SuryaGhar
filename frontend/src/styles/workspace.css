@@ -4453,3 +4453,647 @@
   outline-offset: 2px;
 }
 
+/* ==========================================================================
+   Surface Assessment (Stage 3) Scrolling & Responsive Layout (Task 2)
+   ========================================================================== */
+
+.stage-card--validate {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.stage-card__header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
+}
+
+.stage-card__actions--inline {
+  position: static !important;
+  bottom: auto !important;
+  background: transparent !important;
+  padding: var(--space-1) 0 !important;
+}
+
+.stage-card__actions--footer {
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+
+.vis-preview {
+  width: 100%;
+  max-height: 280px;
+  object-fit: contain;
+  background: var(--color-surface-sunken, #111);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  margin-top: var(--space-2);
+  display: block;
+}
+
+/* ==========================================================================
+   Inspector Actions & Reclaimed Reset Area (Task 4)
+   ========================================================================== */
+
+.inspector-actions__reset {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+  padding-top: var(--space-1);
+}
+
+.inspector-actions__reset .reset-row {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+}
+
+.inspector-actions__reset .reset-row .btn {
+  width: 100%;
+  justify-content: center;
+  color: var(--color-text-muted);
+}
+
+.inspector-actions__reset .reset-confirm {
+  width: 100%;
+}
+
+/* ==========================================================================
+   Final Model Read-Only Presentation View (Task 3)
+   ========================================================================== */
+
+.stage-card--final-view {
+  flex: 1 1 0;
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+  min-width: 0;
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  overflow: hidden !important;
+  position: relative;
+}
+
+.design-layout--final {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.design-view--full {
+  flex: 1 1 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.stage-3d-viewport--full {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.model-viewport--final {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* Floating Executive Controls Overlay */
+.final-model-overlay {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  width: 320px;
+  max-width: calc(100vw - 2 * var(--space-3));
+  max-height: calc(100% - 2 * var(--space-3));
+  overflow-y: auto;
+  z-index: 10;
+  background: var(--color-surface);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
+  display: flex;
+  flex-direction: column;
+  transition: all var(--transition-fast) ease;
+}
+
+.final-model-overlay--collapsed {
+  width: auto;
+  min-width: 240px;
+}
+
+.final-model-overlay__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-elevated, var(--color-surface));
+  border-top-left-radius: inherit;
+  border-top-right-radius: inherit;
+}
+
+.final-model-overlay__title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.final-model-overlay__badge {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-primary);
+}
+
+.final-model-overlay__heading {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  margin: 0;
+  color: var(--color-text);
+}
+
+.final-model-overlay__collapse-btn {
+  padding: 4px;
+  height: auto;
+  border-radius: var(--radius-sm);
+}
+
+.final-model-overlay__body {
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.final-model-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.final-model-section__label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.final-model-section__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.final-model-time-readout {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-primary);
+  background: var(--color-surface-sunken, rgba(0, 0, 0, 0.1));
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.final-model-btn-group {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.final-model-btn-group .btn {
+  flex: 1 1 0;
+  justify-content: center;
+  font-size: var(--text-xs);
+  padding: 0 8px;
+  height: 30px;
+}
+
+.final-model-sun-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.final-model-slider {
+  flex: 1 1 0;
+  height: 6px;
+  border-radius: 3px;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}
+
+.final-model-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.final-model-toggle-row .btn {
+  font-size: var(--text-xs);
+  height: 30px;
+  padding: 0 10px;
+}
+
+.final-model-nav {
+  margin-top: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.final-model-nav .btn {
+  font-size: var(--text-xs);
+  height: 34px;
+  justify-content: center;
+}
+
+@media (max-width: 600px) {
+  .final-model-overlay {
+    top: auto;
+    bottom: var(--space-3);
+    right: var(--space-3);
+    left: var(--space-3);
+    width: auto;
+    max-width: none;
+    max-height: 50vh;
+  }
+}
+
+/* ==========================================================================
+   Cable Specification Advisor UI (Feature 1)
+   ========================================================================== */
+
+.cable-advisor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.cable-advisor__summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-2);
+  background: var(--color-surface-sunken, rgba(0, 0, 0, 0.04));
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+}
+
+.cable-advisor__summary-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cable-advisor__summary-label {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cable-advisor__summary-value {
+  font-weight: 600;
+  color: var(--color-primary);
+  font-size: var(--text-sm);
+}
+
+.cable-advisor__note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-bg-subtle, rgba(0, 0, 0, 0.02));
+  border-left: 3px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}
+
+.cable-advisor__circuits {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.cable-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  overflow: hidden;
+  transition: border-color var(--transition-fast);
+}
+
+.cable-card:hover {
+  border-color: var(--color-border-strong);
+}
+
+.cable-card--provisional {
+  border-left: 3px solid var(--color-warning, #f59e0b);
+}
+
+.cable-card__header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+}
+
+.cable-card__header:hover {
+  background: var(--color-bg-hover, rgba(0, 0, 0, 0.02));
+}
+
+.cable-card__title-wrap {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cable-card__tag-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.cable-card__badge-type {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+}
+
+.cable-card__badge-warn {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--color-warning, #d97706);
+  background: rgba(217, 119, 6, 0.12);
+  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+  text-transform: uppercase;
+}
+
+.cable-card__title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.cable-card__endpoints {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cable-card__size-badge {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  padding: 4px 8px;
+  background: var(--color-surface-sunken, rgba(0, 0, 0, 0.05));
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+}
+
+.cable-card__size-num {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--color-primary);
+  font-family: var(--font-mono, monospace);
+}
+
+.cable-card__size-mat {
+  font-size: 10px;
+  color: var(--color-text-muted);
+}
+
+.cable-card__toggle-icon {
+  color: var(--color-text-muted);
+  display: flex;
+  align-items: center;
+}
+
+.cable-card__body {
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: var(--color-surface-elevated, var(--color-surface));
+}
+
+.cable-card__grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.cable-card__cell {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.cable-card__cell-label {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+}
+
+.cable-card__cell-val {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  font-family: var(--font-mono, monospace);
+}
+
+.cable-card__cell-sub {
+  font-size: 9px;
+  color: var(--color-text-muted);
+}
+
+.cable-card__spec-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.cable-card__spec-title {
+  font-weight: 600;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+.cable-card__spec-text {
+  color: var(--color-text);
+}
+
+.cable-card__assumptions {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: var(--text-xs);
+}
+
+.cable-card__assumptions-title {
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.cable-card__list {
+  margin: 0;
+  padding-left: var(--space-3);
+  color: var(--color-text-muted);
+}
+
+.cable-card__list li {
+  margin-bottom: 2px;
+}
+
+.cable-card__missing-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  font-size: var(--text-xs);
+}
+
+.cable-advisor__disclaimer {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface-sunken, rgba(0, 0, 0, 0.03));
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.cable-advisor__disclaimer p {
+  margin: 0;
+}
+
+/* ==========================================================================
+   Explicit Panel Placement Prompt (Feature 2)
+   ========================================================================== */
+
+.panel-placement-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--color-surface-sunken, rgba(0, 0, 0, 0.03));
+  border: 1px dashed var(--color-primary);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-3);
+}
+
+.panel-placement-prompt__title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-primary);
+}
+
+.panel-placement-prompt__body {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}
+
+.panel-placement-prompt__actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.panel-placement-prompt__actions .btn {
+  flex: 1 1 0;
+  justify-content: center;
+  font-size: var(--text-xs);
+}
+
+/* Panel Replacement Confirmation Dialog */
+.panel-replace-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--color-surface, #ffffff);
+  border: 1px solid var(--color-warning, #f59e0b);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-3);
+  box-shadow: var(--shadow-md, 0 4px 6px -1px rgba(0, 0, 0, 0.1));
+}
+
+.panel-replace-dialog__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-warning, #f59e0b);
+}
+
+.panel-replace-dialog__message {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}
+
+.panel-replace-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+
+

@@ -9,11 +9,12 @@ import * as THREE from "three";
 import {
   createPanelGroup,
   createPanelUnitGeometry,
+  createSharedPanelSetFrameGeometry,
   disposePanelGroup,
   PANEL_PART_COLORS,
   PANEL_ROOF_STANDOFF_M,
 } from "../lib/3d/panelMeshes";
-import { panelTypeDefinition } from "../lib/3d/panels";
+import { DEFAULT_PANEL_CONFIG, panelTypeDefinition } from "../lib/3d/panels";
 import type { PlacedPanel } from "../lib/3d/panelPlacement";
 import type { MountingType } from "../lib/3d/panels";
 
@@ -525,5 +526,100 @@ describe("panel instance transforms", () => {
     for (let i = 0; i < a.length; i++) expect(a[i]).toBeCloseTo(b[i], 9);
     committed.dispose();
     preview.dispose();
+  });
+
+  describe("Task 1: Shared Panel Set mounting structure", () => {
+    it("creates merged mounting table frame geometry with continuous rails, rafters, shared legs and diagonal struts", () => {
+      const config = {
+        ...DEFAULT_PANEL_CONFIG,
+        setRows: 2,
+        setCols: 5,
+        tiltDeg: 18,
+        legRows: 2,
+        legCols: 3,
+      };
+      const frameGeom = createSharedPanelSetFrameGeometry(config);
+      expect(frameGeom).toBeDefined();
+      const pos = frameGeom.getAttribute("position");
+      expect(pos.count).toBeGreaterThan(100);
+
+      for (let i = 0; i < pos.array.length; i++) {
+        expect(Number.isFinite(pos.array[i])).toBe(true);
+      }
+      frameGeom.computeBoundingBox();
+      const box = frameGeom.boundingBox!;
+      // Stands on the roof plane
+      expect(box.min.z).toBeGreaterThanOrEqual(-0.001);
+      expect(box.max.z).toBeGreaterThan(0.3);
+      frameGeom.dispose();
+    });
+
+    it("renders shared table frame when isPanelSet is true on a multi-panel set", () => {
+      const config = {
+        ...DEFAULT_PANEL_CONFIG,
+        setRows: 2,
+        setCols: 5,
+      };
+      const testPanels = Array.from({ length: 10 }, (_, i) => ({
+        index: i,
+        x: (i % 5) * 1.2,
+        y: Math.floor(i / 5) * 2.3,
+        rotationDeg: 180,
+      }));
+
+      const group = createPanelGroup(
+        testPanels,
+        config.panelTypeId,
+        config.mounting,
+        config.tiltDeg,
+        10.0,
+        config.mountHeightM,
+        config.legRows,
+        config.legCols,
+        undefined,
+        undefined,
+        { isPanelSet: true, config },
+      );
+
+      // Contains both the module instances AND the shared frame instance
+      expect(group.children.length).toBeGreaterThanOrEqual(2);
+      const sharedFrame = group.getObjectByName("SolarPanelSharedFrame") as THREE.InstancedMesh;
+      expect(sharedFrame).toBeDefined();
+      expect(sharedFrame.isInstancedMesh).toBe(true);
+      expect(sharedFrame.count).toBe(1);
+
+      disposePanelGroup(group);
+    });
+
+    it("strictly preserves individual module legs for Single Panel mode (isPanelSet: false or 1x1)", () => {
+      const config = {
+        ...DEFAULT_PANEL_CONFIG,
+        setRows: 1,
+        setCols: 1,
+      };
+      const testPanels = [
+        { index: 0, x: 0, y: 0, rotationDeg: 180 },
+      ];
+
+      const group = createPanelGroup(
+        testPanels,
+        config.panelTypeId,
+        config.mounting,
+        config.tiltDeg,
+        10.0,
+        config.mountHeightM,
+        config.legRows,
+        config.legCols,
+        undefined,
+        undefined,
+        { isPanelSet: false, config },
+      );
+
+      // Only module instances (no shared table frame)
+      expect(group.children.length).toBe(1);
+      expect(group.getObjectByName("SolarPanelSharedFrame")).toBeUndefined();
+
+      disposePanelGroup(group);
+    });
   });
 });

@@ -15,7 +15,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { RotateCcw, ArrowRight, Plus, Pencil, Trash2, AlertTriangle, Sun, TreePine, Eye, Moon, Grid3x3, X, Sparkles } from "lucide-react";
+import { RotateCcw, ArrowRight, Plus, Pencil, Trash2, AlertTriangle, Sun, TreePine, Eye, Moon, Grid3x3, X, Sparkles, Zap } from "lucide-react";
 import { BACKEND_WAITING_LABEL } from "../../hooks/useBackendStatus";
 import type { LngLat, PolygonMetrics } from "../../lib/geo";
 import { formatArea } from "../../lib/geo";
@@ -70,6 +70,8 @@ import { SolarPanelSection } from "../3d/SolarPanelSection";
 import { ViewportToolbar, type ViewportTool } from "../3d/ViewportToolbar";
 import { CollapsibleSection } from "../3d/CollapsibleSection";
 import { BuildingHeightPanel } from "./BuildingHeightPanel";
+import { FinalModelControls } from "../3d/FinalModelControls";
+import { ResetControl } from "../workspace/ResetControl";
 import { useSunSimulation } from "../../hooks/useSunSimulation";
 import { formatTimezoneLabel, formatSiteDateTime, localWallClockToUtc } from "../../lib/solar";
 import type { SunSample } from "../../lib/solar";
@@ -103,6 +105,10 @@ import { ShadingAnalysisSection, type HeatmapMode } from "../3d/ShadingAnalysisS
 import { runAnnualShadingAnalysis, computeInstantaneousShade, type AnnualShadingResult } from "../../lib/3d/shadingAnalysis";
 import { optimizeSolarLayout, type OptimizationCandidate, type OptimizationResult } from "../../lib/3d/layoutOptimization";
 import { analyzeSolar, type SolarResult } from "../../services/analysis";
+import { buildElectricalTopology, type ElectricalTopology, type PanelFlowData } from "../../lib/3d/electricityFlow";
+import { computeCableRecommendations, type CableSpecificationReport } from "../../lib/3d/cableAdvisor";
+import { CableAdvisorSection } from "../3d/CableAdvisorSection";
+import { Vector3 } from "three";
 
 interface ModelPanelProps {
   vertices: LngLat[];
@@ -139,6 +145,15 @@ interface ModelPanelProps {
   onExitDesign?: () => void;
   /** Optional viewport tool state */
   initialActiveTool?: ViewportTool;
+  /** Read-only presentation mode after Step 3 validation */
+  finalView?: boolean;
+  /** Navigate back to editable Step 2 3D workspace */
+  onBackToDesign?: () => void;
+  /** Navigate back to Step 1 / Map view */
+  onBackToMap?: () => void;
+  /** Reset action passed from parent to reclaim bottom space */
+  onReset?: () => void;
+  hasAnalysisData?: boolean;
 }
 
 export function ModelPanel({
@@ -160,6 +175,11 @@ export function ModelPanel({
   designMode = false,
   onEnterDesign,
   onExitDesign,
+  finalView = false,
+  onBackToDesign,
+  onBackToMap,
+  onReset,
+  hasAnalysisData = false,
 }: ModelPanelProps) {
   // True while the user is back-editing an existing height.
   const [editingHeight, setEditingHeight] = useState(false);
@@ -324,6 +344,7 @@ export function ModelPanel({
     }
   }, [panelSets, activeSetId]);
   const [panelsEnabled, setPanelsEnabled] = useState(false);
+  const [isPlacing, setIsPlacing] = useState(false);
   // Inspector collapsed state (mobile)
   const [inspectorCollapsed] = useState(false);
 
@@ -699,12 +720,14 @@ export function ModelPanel({
           }))
         : undefined;
 
+      const isSet = previewCandidate.config.setRows > 1 || previewCandidate.config.setCols > 1;
       return [
         {
           config: previewCandidate.config,
           panels: previewCandidate.panels.map(
             (p) => ({ index: p.index, x: p.x, y: p.y, rotationDeg: p.rotationDeg }) as PlacedPanel,
           ),
+          isPanelSet: isSet,
           shadingSeverities: shadingVisualizationActive
             ? previewCandidate.shadingSummary.panels.map((p) => p.severity)
             : undefined,
@@ -742,11 +765,15 @@ export function ModelPanel({
       }
 
       globalPanelOffset += set.panels.length;
+      const isSet = (set.config.setRows > 1 || set.config.setCols > 1) &&
+        (set.mode === "auto" || (set.panels.length % (set.config.setRows * set.config.setCols) === 0 && set.panels.length > 0));
+
       return {
         config: set.config,
         panels: set.panels.map(
           (p) => ({ index: p.index, x: p.x, y: p.y, rotationDeg: p.rotationDeg }) as PlacedPanel,
         ),
+        isPanelSet: isSet,
         shadingSeverities: severities,
         shadingMetrics: metrics,
       };
@@ -771,6 +798,61 @@ export function ModelPanel({
     );
     return computePanelEnergy(simulated, weather, obstacles, DEFAULT_PARAPET_THICKNESS_M, terraceRing);
   }, [panelsEnabled, activeSet, allPanels.panels, hourlySun, obstacles, terraceRing]);
+
+  // Panel flow data for electrical topology & cable specification advisor
+  const flowData = useMemo<PanelFlowData[]>(() => {
+    if (!panelsEnabled || !panelLayers) return [];
+    return panelLayers.map((l) => ({
+      config: l.config,
+      panels: l.panels,
+      shadingMetrics: l.shadingMetrics,
+    }));
+  }, [panelsEnabled, panelLayers]);
+
+  // Autorouted electrical topology across strings, combiner boxes, and inverter
+  const electricalTopology = useMemo<ElectricalTopology | null>(() => {
+    if (!panelsEnabled || terraceRing.length < 3) return null;
+    return buildElectricalTopology({
+      panelLayers: flowData,
+      roofZ: buildingHeight ?? 0,
+      terraceRing,
+      solarAzimuthDeg: sun.state?.azimuthDeg ?? 180,
+      solarElevationDeg: sun.state ? (sun.state.night ? 0 : sun.state.elevationDeg) : 45,
+      weatherPreset: "sunny",
+      obstacles,
+      trees,
+      parapetHeightM,
+      parapetThicknessM: DEFAULT_PARAPET_THICKNESS_M,
+    });
+  }, [
+    panelsEnabled,
+    flowData,
+    terraceRing,
+    buildingHeight,
+    sun.state,
+    obstacles,
+    trees,
+    parapetHeightM,
+  ]);
+
+  // Cable Specification Advisor: preliminary engineering sizing report
+  const cableReport = useMemo<CableSpecificationReport | null>(() => {
+    if (!panelsEnabled) return null;
+    const effectiveTopology: ElectricalTopology =
+      electricalTopology ?? {
+        strings: [],
+        combinerPositions: [],
+        mainJunctionPosition: new Vector3(0, 0, buildingHeight ?? 0),
+        endpointPosition: new Vector3(0, 0, buildingHeight ?? 0),
+        routes: [],
+        isValidRouting: true,
+      };
+    return computeCableRecommendations({
+      panelLayers: flowData,
+      topology: effectiveTopology,
+      buildingHeightM: buildingHeight,
+    });
+  }, [panelsEnabled, electricalTopology, flowData, buildingHeight]);
 
   // M4 Handler: Runs layout optimization engine
   const handleRunOptimization = () => {
@@ -961,7 +1043,7 @@ export function ModelPanel({
           return { ...updated, panels: rotatedPanels };
         }
 
-        if (set.mode !== "auto" || set.userModified) {
+        if (set.mode !== "auto" || set.userModified || set.panels.length === 0) {
           return updated;
         }
         const result = placePanels({ terrace: usableRing, obstacles, config: nextConfig });
@@ -1035,38 +1117,54 @@ export function ModelPanel({
    * named in the warning. Nothing from the other sets moves.
    */
   const handleAutoPlaceSet = () => {
-    if (!activeSet) return;
-    const dims = effectivePanelDims(activeSet.config);
-    const reserved = panelSets
-      .filter((s) => s.id !== activeSetId)
-      .flatMap((s) => {
-        const d = effectivePanelDims(s.config);
-        return s.panels.map((x) => ({ x: x.x, y: x.y, rotationDeg: x.rotationDeg, width: d.widthM, length: d.lengthM }));
-      });
-    const result = placePanels({ terrace: usableRing, obstacles, config: activeSet.config });
-    setTargetPlacementStatus(result.targetStatus ?? null);
-    const kept: Array<{ index: number; x: number; y: number; rotationDeg: number }> = [];
-    const seen = [...reserved];
-    for (const x of result.panels) {
-      const rect = rectangleCorners(x.x, x.y, dims.widthM, dims.lengthM, x.rotationDeg);
-      if (seen.some((peer) => footprintsOverlap(rect, rectangleCorners(peer.x, peer.y, peer.width, peer.length, peer.rotationDeg)))) continue;
-      seen.push({ x: x.x, y: x.y, rotationDeg: x.rotationDeg, width: dims.widthM, length: dims.lengthM });
-      kept.push({ index: kept.length, x: x.x, y: x.y, rotationDeg: x.rotationDeg });
+    if (!activeSet || isPlacing) return;
+    setIsPlacing(true);
+    try {
+      const dims = effectivePanelDims(activeSet.config);
+      const reserved = panelSets
+        .filter((s) => s.id !== activeSetId)
+        .flatMap((s) => {
+          const d = effectivePanelDims(s.config);
+          return s.panels.map((x) => ({ x: x.x, y: x.y, rotationDeg: x.rotationDeg, width: d.widthM, length: d.lengthM }));
+        });
+      const result = placePanels({ terrace: usableRing, obstacles, config: activeSet.config });
+      setTargetPlacementStatus(result.targetStatus ?? null);
+
+      if (result.panels.length === 0) {
+        setPlaceWarning(
+          result.reason ?? "No panels could be placed within the usable roof area (check setbacks or obstacles). Existing layout preserved.",
+        );
+        return;
+      }
+
+      const kept: Array<{ index: number; x: number; y: number; rotationDeg: number }> = [];
+      const seen = [...reserved];
+      for (const x of result.panels) {
+        const rect = rectangleCorners(x.x, x.y, dims.widthM, dims.lengthM, x.rotationDeg);
+        if (seen.some((peer) => footprintsOverlap(rect, rectangleCorners(peer.x, peer.y, peer.width, peer.length, peer.rotationDeg)))) continue;
+        seen.push({ x: x.x, y: x.y, rotationDeg: x.rotationDeg, width: dims.widthM, length: dims.lengthM });
+        kept.push({ index: kept.length, x: x.x, y: x.y, rotationDeg: x.rotationDeg });
+      }
+
+      if (kept.length === 0) {
+        setPlaceWarning("All candidate panel positions overlap with other panel sets. Existing layout preserved.");
+        return;
+      }
+
+      setPanelSets((sets) => sets.map((s) => (s.id !== activeSetId ? s : { ...s, mode: "auto", userModified: false, panels: kept })));
+      setPlaceWarning(kept.length < result.panels.length ? `${activeSet.name} placed ${kept.length} of ${result.panels.length} panels: the rest overlap other sets.` : null);
+    } finally {
+      setIsPlacing(false);
     }
-    setPanelSets((sets) => sets.map((s) => (s.id !== activeSetId ? s : { ...s, mode: "auto", userModified: false, panels: kept })));
-    setPlaceWarning(kept.length < result.panels.length ? `${activeSet.name} placed ${kept.length} of ${result.panels.length} panels: the rest overlap other sets.` : null);
   };
 
   /**
-   * Enables solar panel display and sets up the initial layout if empty.
-   * Idempotent: repeated toggles preserve existing placed panels without duplication.
+   * Enables solar panel feature and settings view.
+   * Explicit placement rule: enabling panels NEVER automatically populates the roof.
+   * Existing placed panels are preserved without modification.
    */
   const handleEnablePanels = () => {
     setPanelsEnabled(true);
-    // If active set has 0 panels, generate the initial layout from current settings
-    if (activeSet && activeSet.panels.length === 0) {
-      handleAutoPlaceSet();
-    }
   };
 
   /**
@@ -1101,14 +1199,26 @@ export function ModelPanel({
   /**
    * Auto-place every set into ONE shared collision space.
    *
-   * utoPlaceAllSets walks the sets in order, reserving each accepted
+   * autoPlaceAllSets walks the sets in order, reserving each accepted
    * panel so later sets cannot occupy it. Never silently overlaps: an
    * unplaceable set keeps its feasible subset and is named in the warning.
    */
   const handleAutoPlaceAll = () => {
-    const { sets, report } = autoPlaceAllSets(panelSets, usableRing, obstacles);
-    setPanelSets(sets);
-    setPlaceWarning(report);
+    if (isPlacing) return;
+    setIsPlacing(true);
+    try {
+      const { sets, report } = autoPlaceAllSets(panelSets, usableRing, obstacles);
+      const totalNew = sets.reduce((sum, s) => sum + s.panels.length, 0);
+      const totalOld = panelSets.reduce((sum, s) => sum + s.panels.length, 0);
+      if (totalNew === 0 && totalOld > 0) {
+        setPlaceWarning(report ?? "No panels could fit within usable roof areas. Existing layout preserved.");
+        return;
+      }
+      setPanelSets(sets);
+      setPlaceWarning(report);
+    } finally {
+      setIsPlacing(false);
+    }
   };
 
   /**
@@ -1569,6 +1679,53 @@ export function ModelPanel({
     setFootPoints(null);
     setFootError(null);
   };
+
+  if (finalView && model) {
+    return (
+      <div className="stage-card stage-card--final-view">
+        <div className="design-layout design-layout--final">
+          <div className="design-view design-view--full">
+            <div className="stage-3d-viewport stage-3d-viewport--full">
+              <Site3DViewer
+                ref={viewerRef}
+                localCoords={model.coords}
+                obstacles={obstacles}
+                selectedObstacleId={null}
+                hiddenObstacleId={null}
+                previewObstacle={null}
+                previewValid={true}
+                sun={sun.clock}
+                panelLayers={panelLayers}
+                siteAnchor={siteAnchor}
+                parapet={parapetModel}
+                xray={xray}
+                weatherPreset={weatherPreset}
+                trees={trees}
+                selectedTreeId={null}
+                layerVisibility={layerVisibility}
+                activeTool="select"
+                className="model-viewport model-viewport--final"
+              />
+              <FinalModelControls
+                weatherPreset={weatherPreset}
+                onWeatherPresetChange={setWeatherPreset}
+                sun={sun}
+                electricityFlowActive={layerVisibility.electricityFlow ?? false}
+                onToggleElectricityFlow={() => handleToggleLayer("electricityFlow")}
+                xray={xray}
+                onToggleXray={() => setXray((v) => !v)}
+                treesVisible={layerVisibility.trees ?? true}
+                onToggleTrees={() => handleToggleLayer("trees")}
+                onBackToDesign={onBackToDesign}
+                onBackToMap={onBackToMap}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="stage-card">
       <div className="design-layout">
@@ -2255,6 +2412,7 @@ export function ModelPanel({
                   onAutoPlace={handleAutoPlaceSet}
                   onAutoPlaceAll={handleAutoPlaceAll}
                   onUndoLast={handleUndoLastPanel}
+                  isPlacing={isPlacing}
                   manualPlaceActive={manualPlaceActive}
                   onToggleManualPlace={() => setManualPlaceActive((v) => !v)}
                   manualPlaceMode={manualPlaceMode}
@@ -2303,11 +2461,29 @@ export function ModelPanel({
                     type="button"
                     className="btn btn--secondary"
                     onClick={handleEnablePanels}
-                    title="Generate a panel layout from the current settings"
+                    title="Enable solar panel configuration and placement"
                   >
                     Enable solar panels
                   </button>
                 </div>
+              </div>
+            )}
+          </CollapsibleSection>
+
+          {/* Cable Specification Advisor */}
+          <CollapsibleSection
+            id="cable-recommendations"
+            title="Cable Recommendations"
+            defaultOpen={false}
+            icon={<Zap size={14} strokeWidth={1.75} aria-hidden="true" />}
+          >
+            {cableReport ? (
+              <CableAdvisorSection report={cableReport} hasPlacedPanels={panelCount > 0} />
+            ) : (
+              <div className="panel-group">
+                <p className="panel-group__hint">
+                  Enable solar panels to view electrical cable specifications and sizing recommendations.
+                </p>
               </div>
             )}
           </CollapsibleSection>
@@ -2383,6 +2559,12 @@ export function ModelPanel({
                 Continue to Validate
               </button>
             </div>
+
+            {onReset && (
+              <div className="inspector-actions__reset" style={{ marginTop: "var(--space-2)" }}>
+                <ResetControl hasData={hasAnalysisData} onReset={onReset} />
+              </div>
+            )}
           </div>
 
           {!backendReady && (

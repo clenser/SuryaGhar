@@ -63,6 +63,8 @@ export default function App() {
    * the stage/site changes.
    */
   const [designMode, setDesignMode] = useState(false);
+  /** Read-only Final Model presentation mode active after Step 3 validation */
+  const [finalView, setFinalView] = useState(false);
   // Rooftop obstacles: application state, cleared with the selection so a new
   // site never inherits another rooftop's objects (AGENTS.md §40).
   const obstacleStore = useObstacles();
@@ -102,6 +104,7 @@ export default function App() {
     if (selection.mode === "idle") {
       setStage("select");
       setDesignMode(false);
+      setFinalView(false);
       setBuildingHeight(null);
       setParapetHeight(null);
       obstacleStore.clear();
@@ -120,6 +123,8 @@ export default function App() {
     obstacleStore.clear();
     setSegmentationModel("sam2_tiny");
     setStage("select");
+    setDesignMode(false);
+    setFinalView(false);
     setPlace(KOLKATA_PLACE);
     updateLayers({ ...DEFAULT_LAYERS });
     mapRef.current?.flyToPlace(KOLKATA_PLACE.longitude, KOLKATA_PLACE.latitude, 13);
@@ -296,6 +301,7 @@ export default function App() {
             onSelect={(id) => {
               setStage(id as Stage);
               setDesignMode(false);
+              setFinalView(false);
             }}
             backendLocked={!backendReady}
           />
@@ -335,6 +341,15 @@ export default function App() {
                 designMode={designMode}
                 onEnterDesign={() => setDesignMode(true)}
                 onExitDesign={() => setDesignMode(false)}
+                finalView={finalView}
+                onBackToDesign={() => setFinalView(false)}
+                onBackToMap={() => {
+                  setFinalView(false);
+                  setDesignMode(false);
+                  setStage("select");
+                }}
+                onReset={handleReset}
+                hasAnalysisData={hasAnalysisData}
               />
             </Suspense>
           )}
@@ -348,9 +363,13 @@ export default function App() {
               onContinue={() => {
                 setStage("model");
                 setDesignMode(true);
+                setFinalView(true);
               }}
               onRedraw={() => setStage("select")}
-              onBackToModel={() => setStage("model")}
+              onBackToModel={() => {
+                setStage("model");
+                setFinalView(false);
+              }}
               backendReady={backendReady}
             />
           )}
@@ -362,7 +381,10 @@ export default function App() {
             </div>
           )}
 
-          <ResetControl hasData={hasAnalysisData} onReset={handleReset} />
+          {/* Bottom Reset control is hidden in Step 2 / design mode (reclaimed for 3D viewport height) */}
+          {stage !== "model" && !designMode && (
+            <ResetControl hasData={hasAnalysisData} onReset={handleReset} />
+          )}
           </div>
         </div>
 

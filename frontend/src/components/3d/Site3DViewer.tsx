@@ -35,10 +35,15 @@ import {
 import { createBuildingMeshes, disposeBuildingMeshes, createDesignBuildingMaterial, createDesignRoofMaterial, setShellTransparent, type BuildingMeshes } from "../../lib/3d/geometry";
 import { applySunToScene, applyWeatherPreset, shadowCameraExtent } from "../../lib/3d/lighting";
 import { pointInPolygon, type Obstacle } from "../../lib/3d/obstacles";
-import type { Tree } from "../../lib/3d/treeTypes";
-import { createPanelGroup, createPanelUnitGeometry, disposePanelGroup, updatePanelGroupShading } from "../../lib/3d/panelMeshes";
-import { type PlacedPanel } from "../../lib/3d/panelPlacement";
+import {
+  createPanelGroup,
+  createPanelUnitGeometry,
+  createSharedPanelSetFrameGeometry,
+  disposePanelGroup,
+  updatePanelGroupShading,
+} from "../../lib/3d/panelMeshes";
 import { effectivePanelDims, type PanelLayoutConfig } from "../../lib/3d/panels";
+import type { PlacedPanel } from "../../lib/3d/panelPlacement";
 import { setBlockPanels, validatePanelPlacement, validateSetPlacement } from "../../lib/3d/panelSets";
 import {
   applyObstacleSelection,
@@ -55,7 +60,7 @@ import {
   createTreePreviewMesh,
   preloadTreeModels,
 } from "../../lib/3d/treeMeshes";
-import { validateTree, type TreeType } from "../../lib/3d/treeTypes";
+import { validateTree, type Tree, type TreeType } from "../../lib/3d/treeTypes";
 import { fetchSatelliteGround } from "../../lib/3d/satelliteGround";
 import type { LngLat } from "../../lib/geo";
 import {
@@ -167,6 +172,7 @@ export interface Site3DViewerProps {
   panelLayers?: Array<{
     config: PanelLayoutConfig;
     panels: PlacedPanel[];
+    isPanelSet?: boolean;
     shadingSeverities?: Array<"none" | "moderate" | "severe">;
     shadingMetrics?: Array<{ annualLossPercent: number; severity?: "none" | "moderate" | "severe"; instantaneousShadeFraction?: number } | null | undefined>;
   }> | null;
@@ -1052,6 +1058,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       const groups: THREE.Group[] = [];
       try {
         for (const layer of panelLayers) {
+          const isLayerSet = layer.isPanelSet ?? (layer.config.setRows > 1 || layer.config.setCols > 1);
           const group = createPanelGroup(
             layer.panels,
             layer.config.panelTypeId,
@@ -1063,6 +1070,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
             layer.config.legCols,
             layer.shadingSeverities,
             layer.shadingMetrics,
+            { isPanelSet: isLayerSet, config: layer.config },
           );
           groups.push(group);
           scene.add(group);
@@ -1233,6 +1241,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       let root: THREE.Object3D;
       let material: THREE.MeshStandardMaterial;
       try {
+        const isSet = preview.mode === "set" && (config.setRows > 1 || config.setCols > 1);
         const geometry = createPanelUnitGeometry(
           config.panelTypeId,
           config.mounting,
@@ -1240,6 +1249,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           config.mountHeightM,
           config.legRows,
           config.legCols,
+          isSet,
         );
         material = new THREE.MeshStandardMaterial({
           vertexColors: true,
@@ -1266,6 +1276,15 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           group.name = "PanelSetPreview";
           const count = Math.max(1, config.setRows * config.setCols);
           for (let i = 0; i < count; i++) group.add(makePanelMesh());
+          if (isSet) {
+            const frameGeom = createSharedPanelSetFrameGeometry(config);
+            const frameMesh = new THREE.Mesh(frameGeom, material);
+            frameMesh.name = "PanelSetFramePreview";
+            frameMesh.castShadow = false;
+            frameMesh.receiveShadow = false;
+            frameMesh.rotation.z = (rotation * Math.PI) / 180;
+            group.add(frameMesh);
+          }
           root = group;
         } else {
           const mesh = makePanelMesh();
@@ -1325,9 +1344,13 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         if (preview.mode === "set") {
           const group = root as THREE.Group;
           const block = setBlockPanels(config, hit.x, hit.y, rotation);
-          group.children.forEach((child, i) => {
-            (child as THREE.Mesh).position.set(block[i].x, block[i].y, roofZ);
-          });
+          const count = Math.max(1, config.setRows * config.setCols);
+          for (let i = 0; i < count; i++) {
+            (group.children[i] as THREE.Mesh).position.set(block[i].x, block[i].y, roofZ);
+          }
+          if (group.children.length > count) {
+            (group.children[count] as THREE.Mesh).position.set(hit.x, hit.y, roofZ);
+          }
           root.visible = true;
           const result = validateSetPlacement(hit.x, hit.y, rotation, config, context);
           material.emissive.setHex(result.valid ? VALID_EMISSIVE : INVALID_EMISSIVE);
