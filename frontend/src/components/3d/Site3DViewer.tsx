@@ -36,7 +36,7 @@ import { createBuildingMeshes, disposeBuildingMeshes, createDesignBuildingMateri
 import { applySunToScene, applyWeatherPreset, shadowCameraExtent } from "../../lib/3d/lighting";
 import { pointInPolygon, type Obstacle } from "../../lib/3d/obstacles";
 import type { Tree } from "../../lib/3d/treeTypes";
-import { createPanelGroup, createPanelUnitGeometry, disposePanelGroup } from "../../lib/3d/panelMeshes";
+import { createPanelGroup, createPanelUnitGeometry, disposePanelGroup, updatePanelGroupShading } from "../../lib/3d/panelMeshes";
 import { type PlacedPanel } from "../../lib/3d/panelPlacement";
 import { effectivePanelDims, type PanelLayoutConfig } from "../../lib/3d/panels";
 import { setBlockPanels, validatePanelPlacement, validateSetPlacement } from "../../lib/3d/panelSets";
@@ -356,6 +356,8 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
     obstaclesRef.current = obstacles;
     const treesRef = useRef(trees);
     treesRef.current = trees;
+    const parapetRef = useRef(parapet);
+    parapetRef.current = parapet;
     const parapetHeightRef = useRef(parapet?.heightM ?? 0);
     parapetHeightRef.current = parapet?.heightM ?? 0;
     const panelLayersRef = useRef(panelLayers);
@@ -632,10 +634,13 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           sceneRef.current.add(mesh);
         }
         requestShadowUpdate();
-        // Re-focus the orbit target on the new building centre without
-        // teleporting the camera away from the user's current view.
+        // Update distance bounds for the new building dimensions without
+        // resetting the user's orbit camera target or orientation.
         if (controlsRef.current) {
-          frameControls(controlsRef.current, framingFromBox(buildingBounds(localCoords)));
+          const framing = framingFromBox(buildingBounds(localCoords));
+          const size = Math.max(framing.footprint, framing.height, 1);
+          controlsRef.current.minDistance = Math.max(size * 0.15, 2);
+          controlsRef.current.maxDistance = Math.max(size * 12, 100);
         }
       } catch (err) {
         console.error("[Site3DViewer] Mesh update failed:", err);
@@ -987,11 +992,60 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
 
     // Solar panel layers: one InstancedMesh per panel set, each rendered with
     // its own configuration, rebuilt from application state. The effect
-    // cleanup removes and disposes every previous group, so a configuration
-    // change can never leave duplicate scene objects behind.
+    // Track active panel layer fingerprint to distinguish geometry changes from color updates
+    const lastPanelFingerprintRef = useRef<string | null>(null);
+
+    // Solar panel layers: one InstancedMesh per panel set, each rendered with
+    // its own configuration. When only shading metrics / severities change (e.g. sun angle changes),
+    // update instance colors in-place to preserve smooth camera performance without mesh churn.
     useEffect(() => {
       if (!isInitialized || !sceneRef.current || !panelLayers) return;
       const scene = sceneRef.current;
+
+      // Fingerprint configuration and panel positions to detect structural/geometric changes
+      const currentFingerprint = JSON.stringify(
+        panelLayers.map((l) => ({
+          config: l.config,
+          count: l.panels.length,
+          first: l.panels[0],
+          last: l.panels[l.panels.length - 1],
+          roofZ: localCoords.height,
+        })),
+      );
+
+      // Fast in-place shading update if geometry hasn't changed and groups exist
+      if (
+        lastPanelFingerprintRef.current === currentFingerprint &&
+        panelGroupRef.current.length === panelLayers.length
+      ) {
+        let allUpdated = true;
+        for (let i = 0; i < panelLayers.length; i++) {
+          const layer = panelLayers[i];
+          const group = panelGroupRef.current[i];
+          const ok = updatePanelGroupShading(
+            group,
+            layer.panels,
+            layer.shadingSeverities,
+            layer.shadingMetrics,
+          );
+          if (!ok) {
+            allUpdated = false;
+            break;
+          }
+        }
+        if (allUpdated) {
+          return;
+        }
+      }
+
+      lastPanelFingerprintRef.current = currentFingerprint;
+
+      // Clean up previous groups before rebuilding
+      for (const group of panelGroupRef.current) {
+        scene.remove(group);
+        disposePanelGroup(group);
+      }
+      panelGroupRef.current = [];
 
       const groups: THREE.Group[] = [];
       try {
@@ -1032,22 +1086,49 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       };
     }, [panelLayers, localCoords, isInitialized]);
 
-    // Electricity Flow layer: cable conduits, string combiner junction boxes,
-    // and animated flow particles tracking real panel transforms.
-    // Cleanly mounted and torn down based on layerVisibility.electricityFlow.
+    const lastFlowFingerprintRef = useRef<string | null>(null);
+
+    // Electricity wiring & flow layer: cable conduits, string combiner junction boxes,
+    // and inverter remain permanently mounted whenever panels exist.
+    // Animated flow particles are toggled on/off via setFlowActive without rebuilding topology.
     useEffect(() => {
       if (!isInitialized || !sceneRef.current) return;
       const scene = sceneRef.current;
-      const isFlowActive = Boolean(layerVisibility?.electricityFlow);
 
-      // Tear down existing visualizer first
+      if (!panelLayers || panelLayers.length === 0 || layerVisibility?.panels === false) {
+        if (electricityFlowRef.current) {
+          scene.remove(electricityFlowRef.current.group);
+          electricityFlowRef.current.dispose();
+          electricityFlowRef.current = null;
+        }
+        lastFlowFingerprintRef.current = null;
+        return;
+      }
+
+      // Check structural geometry fingerprint (panels, counts, roof coords)
+      const currentFlowFingerprint = JSON.stringify(
+        panelLayers.map((l) => ({
+          config: l.config,
+          count: l.panels.length,
+          first: l.panels[0],
+          last: l.panels[l.panels.length - 1],
+          roofZ: localCoords.height,
+        })),
+      );
+
+      // If topology already exists and panel geometry has not changed, don't tear down routing
+      if (lastFlowFingerprintRef.current === currentFlowFingerprint && electricityFlowRef.current) {
+        return;
+      }
+
+      lastFlowFingerprintRef.current = currentFlowFingerprint;
+
+      // Tear down existing visualizer before rebuilding
       if (electricityFlowRef.current) {
         scene.remove(electricityFlowRef.current.group);
         electricityFlowRef.current.dispose();
         electricityFlowRef.current = null;
       }
-
-      if (!isFlowActive || !panelLayers || panelLayers.length === 0) return;
 
       const terraceRing = localCoords.vertices.map((v) => ({ x: v.x, y: v.y }));
       const flowData = panelLayers.map((l) => ({
@@ -1072,9 +1153,11 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         obstacles: obstaclesRef.current,
         trees: treesRef.current,
         parapetHeightM: parapetHeightRef.current,
+        parapetThicknessM: parapetRef.current?.thicknessM ?? 0.3,
       });
 
-      const handle = createElectricityFlowVisualizer(topology);
+      const isFlowActive = Boolean(layerVisibility?.electricityFlow);
+      const handle = createElectricityFlowVisualizer(topology, isFlowActive);
       electricityFlowRef.current = handle;
       scene.add(handle.group);
 
@@ -1085,7 +1168,14 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           electricityFlowRef.current = null;
         }
       };
-    }, [layerVisibility?.electricityFlow, panelLayers, localCoords, isInitialized]);
+    }, [panelLayers, localCoords, isInitialized, layerVisibility?.panels]);
+
+    // Fast toggle for flow animation without tearing down static cable routing:
+    useEffect(() => {
+      if (electricityFlowRef.current) {
+        electricityFlowRef.current.setFlowActive(Boolean(layerVisibility?.electricityFlow));
+      }
+    }, [layerVisibility?.electricityFlow]);
 
     // Manual panel placement preview: a translucent panel follows the pointer
     // on the roof plane, tinted green/red by the SAME validator a commit uses.
@@ -1902,11 +1992,16 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         }
 
         // Advance animated electricity flow particles along cable routes
+        // Advance animated electricity flow particles along cable routes when layer is visible
         if (electricityFlowRef.current) {
-          const dt = lastFlowTime === null ? 0.016 : Math.min(Math.max((now - lastFlowTime) / 1000, 0), 0.1);
-          electricityFlowRef.current.update(dt);
+          const isFlowActive = Boolean(layerVisibility?.electricityFlow);
+          if (isFlowActive) {
+            const dt = lastFlowTime === null ? 0.016 : Math.min(Math.max((now - lastFlowTime) / 1000, 0), 0.1);
+            electricityFlowRef.current.update(dt);
+          }
 
-          // Dynamically sync flow intensities to sun angle and shadow changes (throttled to ~5-10Hz)
+          // Dynamically sync flow particle intensities to sun angle and weather (throttled to ~5-10Hz)
+          // Uses fast scalar sun scaling without rebuilding topology or running pathfinding in rAF
           if (now - lastFlowIntensityCheck >= 150) {
             lastFlowIntensityCheck = now;
             const currentSun = sunRef.current;
@@ -1917,30 +2012,13 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
 
             const sunMoved =
               lastAppliedSunState === null ||
-              Math.abs(lastAppliedSunState.azimuthDeg - curAz) > 0.2 ||
-              Math.abs(lastAppliedSunState.elevationDeg - curEl) > 0.2 ||
+              Math.abs(lastAppliedSunState.azimuthDeg - curAz) > 0.5 ||
+              Math.abs(lastAppliedSunState.elevationDeg - curEl) > 0.5 ||
               lastAppliedSunState.weatherPreset !== curPreset;
 
-            if (sunMoved && panelLayersRef.current && panelLayersRef.current.length > 0) {
+            if (sunMoved) {
               lastAppliedSunState = { azimuthDeg: curAz, elevationDeg: curEl, weatherPreset: curPreset };
-              const tRing = localCoordsRef.current.vertices.map((v) => ({ x: v.x, y: v.y }));
-              const fData = panelLayersRef.current.map((l) => ({
-                config: l.config,
-                panels: l.panels,
-                shadingMetrics: l.shadingMetrics,
-              }));
-              const updatedTopology = buildElectricalTopology({
-                panelLayers: fData,
-                roofZ: localCoordsRef.current.height,
-                terraceRing: tRing,
-                solarAzimuthDeg: curAz,
-                solarElevationDeg: curEl,
-                weatherPreset: curPreset,
-                obstacles: obstaclesRef.current,
-                trees: treesRef.current,
-                parapetHeightM: parapetHeightRef.current,
-              });
-              electricityFlowRef.current.updateIntensities(updatedTopology);
+              electricityFlowRef.current.updateSunState(curAz, curEl, curPreset);
             }
           }
         }

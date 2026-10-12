@@ -282,7 +282,6 @@ export function ModelPanel({
     }
     if (tool === "flow") {
       setLayerVisibility((prev) => ({ ...prev, electricityFlow: !prev.electricityFlow }));
-      setActiveTool((cur) => (cur === "flow" ? "select" : "flow"));
       return;
     }
     setActiveTool(tool);
@@ -537,7 +536,7 @@ export function ModelPanel({
     return {
       config: first,
       panels: panelSets.flatMap((set) =>
-        set.panels.map((p) => ({ index: 0, x: p.x, y: p.y, rotationDeg: p.rotationDeg })),
+        set.panels.map((p) => ({ index: p.index, x: p.x, y: p.y, rotationDeg: p.rotationDeg })),
       ),
     };
   }, [panelsEnabled, panelSets]);
@@ -576,20 +575,28 @@ export function ModelPanel({
     if (
       !panelsEnabled ||
       (!shadingVisualizationActive && !shadingSectionOpen) ||
-      allPanels.panels.length === 0 ||
+      panelSets.length === 0 ||
       !metrics?.centroid
     ) {
       return null;
     }
-    const simPanels = allPanels.panels.map((p, idx) => ({
-      id: `p-${idx}`,
-      setId: activeSetId,
-      index: idx,
-      x: p.x,
-      y: p.y,
-      rotationDeg: p.rotationDeg,
-      config: activeSet?.config ?? DEFAULT_PANEL_CONFIG,
-    }));
+    let globalIdx = 0;
+    const simPanels = panelSets.flatMap((set) =>
+      set.panels.map((p) => {
+        const idx = globalIdx++;
+        return {
+          id: `p-${idx}`,
+          setId: set.id,
+          index: p.index,
+          x: p.x,
+          y: p.y,
+          rotationDeg: p.rotationDeg,
+          config: set.config,
+        };
+      }),
+    );
+
+    if (simPanels.length === 0) return null;
 
     return runAnnualShadingAnalysis({
       panels: simPanels,
@@ -606,10 +613,8 @@ export function ModelPanel({
     panelsEnabled,
     shadingVisualizationActive,
     shadingSectionOpen,
-    allPanels.panels,
+    panelSets,
     metrics?.centroid,
-    activeSetId,
-    activeSet?.config,
     terraceRing,
     buildingHeight,
     obstacles,
@@ -625,20 +630,29 @@ export function ModelPanel({
       !panelsEnabled ||
       !shadingVisualizationActive ||
       heatmapMode !== "instantaneous" ||
-      allPanels.panels.length === 0 ||
+      panelSets.length === 0 ||
       !sun.state
     ) {
       return new Map<string, number>();
     }
-    const simPanels = allPanels.panels.map((p, idx) => ({
-      id: `p-${idx}`,
-      setId: activeSetId,
-      index: idx,
-      x: p.x,
-      y: p.y,
-      rotationDeg: p.rotationDeg,
-      config: activeSet?.config ?? DEFAULT_PANEL_CONFIG,
-    }));
+    let globalIdx = 0;
+    const simPanels = panelSets.flatMap((set) =>
+      set.panels.map((p) => {
+        const idx = globalIdx++;
+        return {
+          id: `p-${idx}`,
+          setId: set.id,
+          index: p.index,
+          x: p.x,
+          y: p.y,
+          rotationDeg: p.rotationDeg,
+          config: set.config,
+        };
+      }),
+    );
+
+    if (simPanels.length === 0) return new Map<string, number>();
+
     const results = computeInstantaneousShade({
       panels: simPanels,
       terraceRing,
@@ -654,10 +668,8 @@ export function ModelPanel({
     panelsEnabled,
     shadingVisualizationActive,
     heatmapMode,
-    allPanels.panels,
+    panelSets,
     sun.state,
-    activeSetId,
-    activeSet?.config,
     terraceRing,
     buildingHeight,
     obstacles,
@@ -716,7 +728,7 @@ export function ModelPanel({
           return {
             annualLossPercent: match ? match.annualLossPercent : 0,
             severity: match ? match.severity : "none",
-            instantaneousShadeFraction: heatmapMode === "instantaneous" ? instantShade : undefined,
+            instantaneousShadeFraction: heatmapMode === "instantaneous" ? (instantShade ?? 0) : undefined,
           };
         });
       }
@@ -725,7 +737,7 @@ export function ModelPanel({
       return {
         config: set.config,
         panels: set.panels.map(
-          (p) => ({ index: 0, x: p.x, y: p.y, rotationDeg: p.rotationDeg }) as PlacedPanel,
+          (p) => ({ index: p.index, x: p.x, y: p.y, rotationDeg: p.rotationDeg }) as PlacedPanel,
         ),
         shadingSeverities: severities,
         shadingMetrics: metrics,

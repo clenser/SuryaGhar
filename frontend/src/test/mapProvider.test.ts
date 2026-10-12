@@ -65,6 +65,17 @@ describe("map provider state machine", () => {
     expect(getMapProviderError()).toMatch(/API key/);
   });
 
+  it("surfaces a blocked-request error without mislabeling as invalid key", () => {
+    beginGoogleWatch();
+    vi.advanceTimersByTime(100);
+    const blockedReason = "Google Maps script was blocked by the browser or an extension (ERR_BLOCKED_BY_CLIENT).";
+    failGoogleWatch(blockedReason);
+    expect(getMapProviderState()).toBe("fallback-countdown");
+    expect(getMapProviderCountdown()).toBe(FALLBACK_COUNTDOWN_S);
+    expect(getMapProviderError()).toBe(blockedReason);
+    expect(getMapProviderError()).not.toMatch(/API key rejected|invalid key/i);
+  });
+
   it("StrictMode double-mount keeps a single watch (one countdown, right phase)", () => {
     beginGoogleWatch();
     beginGoogleWatch(); // second mount: idempotent

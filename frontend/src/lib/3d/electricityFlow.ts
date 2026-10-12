@@ -27,8 +27,8 @@
 import * as THREE from "three";
 import type { PlacedPanel } from "./panelPlacement";
 import { panelTypeDefinition, type PanelLayoutConfig } from "./panels";
-import { pointInPolygon, type Obstacle, type Point2 } from "./obstacles";
-import type { Tree } from "./treeTypes";
+import { pointInPolygon, obstacleFootprint, type Obstacle, type Point2 } from "./obstacles";
+import { properSegmentsCross, distanceToRing, type Tree } from "./treeTypes";
 import { offsetPolygonInward } from "./geometry";
 import { computeInstantaneousShade } from "./shadingAnalysis";
 
@@ -180,9 +180,11 @@ export function samplePointAlongPolyline(
   cumulativeDistances: number[],
   totalLength: number,
   distance: number,
+  target?: THREE.Vector3,
 ): THREE.Vector3 {
-  if (points.length === 0) return new THREE.Vector3();
-  if (points.length === 1 || totalLength <= 1e-6) return points[0].clone();
+  const result = target ?? new THREE.Vector3();
+  if (points.length === 0) return result.set(0, 0, 0);
+  if (points.length === 1 || totalLength <= 1e-6) return result.copy(points[0]);
 
   const d = ((distance % totalLength) + totalLength) % totalLength;
 
@@ -203,17 +205,310 @@ export function samplePointAlongPolyline(
   const segLen = segEnd - segStart;
   const t = segLen > 1e-6 ? (d - segStart) / segLen : 0;
 
-  return new THREE.Vector3().lerpVectors(points[segmentIdx], points[segmentIdx + 1], t);
+  return result.lerpVectors(points[segmentIdx], points[segmentIdx + 1], t);
+}
+
+/**
+ * Checks whether a 2D line segment between p1 and p2 stays strictly inside
+ * the polygon and does not cross polygon boundary edges or obstacles.
+ */
+export function isSegmentInsidePolygon(
+  p1: Point2,
+  p2: Point2,
+  polygon: Point2[],
+  obstacles: Obstacle[] = [],
+  sampleStepM = 0.35,
+): boolean {
+  if (polygon.length < 3) return false;
+  // 1. Both endpoints must be inside polygon
+  if (!pointInPolygon(p1, polygon) || !pointInPolygon(p2, polygon)) return false;
+
+  // 2. The segment must not cross any polygon boundary edge strictly in its interior
+  const n = polygon.length;
+  for (let i = 0; i < n; i++) {
+    const v1 = polygon[i];
+    const v2 = polygon[(i + 1) % n];
+    if (properSegmentsCross(p1, p2, v1, v2)) {
+      return false;
+    }
+  }
+
+  // 3. Dense point sampling: all intermediate points must be inside the polygon
+  const dx = p2.x - p1.x;
+  const dy = p2.y - p1.y;
+  const dist = Math.hypot(dx, dy);
+  const steps = Math.max(3, Math.ceil(dist / sampleStepM));
+  for (let s = 1; s < steps; s++) {
+    const t = s / steps;
+    const mid = { x: p1.x + t * dx, y: p1.y + t * dy };
+    if (!pointInPolygon(mid, polygon)) {
+      return false;
+    }
+  }
+
+  // 4. Obstacle footprint exclusion (wires should not pass through rooftop obstacles)
+  for (const obs of obstacles) {
+    const fp = obstacleFootprint(obs);
+    if (fp.length < 3) continue;
+    for (let i = 0; i < fp.length; i++) {
+      if (properSegmentsCross(p1, p2, fp[i], fp[(i + 1) % fp.length])) {
+        return false;
+      }
+    }
+    const mid = { x: p1.x + 0.5 * dx, y: p1.y + 0.5 * dy };
+    if (pointInPolygon(mid, fp)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Ensures a point is strictly inside the polygon with safety clearance.
+ * If the point is outside or too close to an edge, projects it inward towards
+ * the polygon interior/centroid.
+ */
+export function clampPointToInterior(
+  point: Point2,
+  polygon: Point2[],
+  minClearanceM = 0.2,
+): Point2 {
+  if (polygon.length < 3) return point;
+
+  let cx = 0;
+  let cy = 0;
+  for (const v of polygon) {
+    cx += v.x;
+    cy += v.y;
+  }
+  cx /= polygon.length;
+  cy /= polygon.length;
+  const centroid = { x: cx, y: cy };
+
+  if (pointInPolygon(point, polygon)) {
+    const distToEdge = distanceToRing(point, polygon);
+    if (distToEdge >= minClearanceM) {
+      return point;
+    }
+    const dx = centroid.x - point.x;
+    const dy = centroid.y - point.y;
+    const d = Math.hypot(dx, dy);
+    if (d > 1e-4) {
+      const shift = Math.min(minClearanceM, d * 0.5);
+      const cand = { x: point.x + (dx / d) * shift, y: point.y + (dy / d) * shift };
+      if (pointInPolygon(cand, polygon)) {
+        return cand;
+      }
+    }
+    return point;
+  }
+
+  let safeInside: Point2 = centroid;
+  if (!pointInPolygon(centroid, polygon)) {
+    safeInside = polygon[0];
+  }
+
+  let lo = 0;
+  let hi = 1;
+  for (let iter = 0; iter < 12; iter++) {
+    const mid = (lo + hi) / 2;
+    const testPt = {
+      x: safeInside.x + mid * (point.x - safeInside.x),
+      y: safeInside.y + mid * (point.y - safeInside.y),
+    };
+    if (pointInPolygon(testPt, polygon)) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+
+  const edgePt = {
+    x: safeInside.x + lo * (point.x - safeInside.x),
+    y: safeInside.y + lo * (point.y - safeInside.y),
+  };
+  const dToSafe = Math.hypot(safeInside.x - edgePt.x, safeInside.y - edgePt.y);
+  if (dToSafe > 1e-4) {
+    const t = Math.max(0, 1 - minClearanceM / dToSafe);
+    return {
+      x: safeInside.x + t * (edgePt.x - safeInside.x),
+      y: safeInside.y + t * (edgePt.y - safeInside.y),
+    };
+  }
+
+  return safeInside;
+}
+
+/**
+ * Routes a clean, physically plausible cable tray path from start to goal
+ * that is 100% contained within the usable roof polygon.
+ *
+ * Preference hierarchy:
+ * 1. Clean orthogonal (Manhattan) route if all segments stay inside polygon.
+ * 2. Direct line-of-sight route if segment stays inside polygon.
+ * 3. Shortest path along interior corridor / visibility graph of polygon vertices.
+ */
+export function routeInteriorPath(
+  start: Point2,
+  goal: Point2,
+  polygon: Point2[],
+  obstacles: Obstacle[] = [],
+): Point2[] {
+  if (polygon.length < 3) return [start, goal];
+
+  const pStart = clampPointToInterior(start, polygon, 0.1);
+  const pGoal = clampPointToInterior(goal, polygon, 0.1);
+
+  if (Math.hypot(pGoal.x - pStart.x, pGoal.y - pStart.y) < 0.05) {
+    return [pStart, pGoal];
+  }
+
+  // 1. Try Orthogonal / Manhattan routes:
+  // Candidate M1: X then Y
+  const candM1 = [pStart, { x: pGoal.x, y: pStart.y }, pGoal];
+  if (
+    isSegmentInsidePolygon(candM1[0], candM1[1], polygon, obstacles) &&
+    isSegmentInsidePolygon(candM1[1], candM1[2], polygon, obstacles)
+  ) {
+    return candM1;
+  }
+
+  // Candidate M2: Y then X
+  const candM2 = [pStart, { x: pStart.x, y: pGoal.y }, pGoal];
+  if (
+    isSegmentInsidePolygon(candM2[0], candM2[1], polygon, obstacles) &&
+    isSegmentInsidePolygon(candM2[1], candM2[2], polygon, obstacles)
+  ) {
+    return candM2;
+  }
+
+  // Candidate M3: 3-segment orthogonal (mid-Y)
+  const midY = (pStart.y + pGoal.y) / 2;
+  const candM3 = [pStart, { x: pStart.x, y: midY }, { x: pGoal.x, y: midY }, pGoal];
+  if (
+    isSegmentInsidePolygon(candM3[0], candM3[1], polygon, obstacles) &&
+    isSegmentInsidePolygon(candM3[1], candM3[2], polygon, obstacles) &&
+    isSegmentInsidePolygon(candM3[2], candM3[3], polygon, obstacles)
+  ) {
+    return candM3;
+  }
+
+  // Candidate M4: 3-segment orthogonal (mid-X)
+  const midX = (pStart.x + pGoal.x) / 2;
+  const candM4 = [pStart, { x: midX, y: pStart.y }, { x: midX, y: pGoal.y }, pGoal];
+  if (
+    isSegmentInsidePolygon(candM4[0], candM4[1], polygon, obstacles) &&
+    isSegmentInsidePolygon(candM4[1], candM4[2], polygon, obstacles) &&
+    isSegmentInsidePolygon(candM4[2], candM4[3], polygon, obstacles)
+  ) {
+    return candM4;
+  }
+
+  // 2. Try Direct Straight Line
+  if (isSegmentInsidePolygon(pStart, pGoal, polygon, obstacles)) {
+    return [pStart, pGoal];
+  }
+
+  // 3. Fallback: Interior Visibility Graph / Corridor Navigation
+  const waypoints: Point2[] = [pStart];
+  for (let i = 0; i < polygon.length; i++) {
+    const v = polygon[i];
+    const clampedV = clampPointToInterior(v, polygon, 0.15);
+    waypoints.push(clampedV);
+
+    const vNext = polygon[(i + 1) % polygon.length];
+    const mid = { x: (v.x + vNext.x) / 2, y: (v.y + vNext.y) / 2 };
+    const clampedMid = clampPointToInterior(mid, polygon, 0.15);
+    waypoints.push(clampedMid);
+  }
+  waypoints.push(pGoal);
+
+  const nNodes = waypoints.length;
+  const startIdx = 0;
+  const goalIdx = nNodes - 1;
+
+  const adj: Array<Array<{ to: number; weight: number }>> = Array.from({ length: nNodes }, () => []);
+  for (let i = 0; i < nNodes; i++) {
+    for (let j = i + 1; j < nNodes; j++) {
+      const u = waypoints[i];
+      const v = waypoints[j];
+      if (isSegmentInsidePolygon(u, v, polygon, obstacles)) {
+        const d = Math.hypot(v.x - u.x, v.y - u.y);
+        adj[i].push({ to: j, weight: d });
+        adj[j].push({ to: i, weight: d });
+      }
+    }
+  }
+
+  const dist = new Array(nNodes).fill(Number.POSITIVE_INFINITY);
+  const prev = new Array(nNodes).fill(-1);
+  const visited = new Array(nNodes).fill(false);
+  dist[startIdx] = 0;
+
+  for (let count = 0; count < nNodes; count++) {
+    let u = -1;
+    let minDist = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < nNodes; i++) {
+      if (!visited[i] && dist[i] < minDist) {
+        minDist = dist[i];
+        u = i;
+      }
+    }
+    if (u === -1 || u === goalIdx) break;
+    visited[u] = true;
+
+    for (const edge of adj[u]) {
+      if (!visited[edge.to]) {
+        const alt = dist[u] + edge.weight;
+        if (alt < dist[edge.to]) {
+          dist[edge.to] = alt;
+          prev[edge.to] = u;
+        }
+      }
+    }
+  }
+
+  if (dist[goalIdx] < Number.POSITIVE_INFINITY) {
+    const path: Point2[] = [];
+    let curr = goalIdx;
+    while (curr !== -1) {
+      path.push(waypoints[curr]);
+      curr = prev[curr];
+    }
+    path.reverse();
+
+    let i = 0;
+    while (i < path.length - 2) {
+      if (isSegmentInsidePolygon(path[i], path[i + 2], polygon, obstacles)) {
+        path.splice(i + 1, 1);
+      } else {
+        i++;
+      }
+    }
+    return path;
+  }
+
+  // Fallback linear sample points clamped strictly inside
+  const fallbackPoints: Point2[] = [];
+  const samples = 8;
+  for (let s = 0; s <= samples; s++) {
+    const t = s / samples;
+    const pt = { x: pStart.x + t * (pGoal.x - pStart.x), y: pStart.y + t * (pGoal.y - pStart.y) };
+    fallbackPoints.push(clampPointToInterior(pt, polygon, 0.1));
+  }
+  return fallbackPoints;
 }
 
 /**
  * Validates a route segment or polyline against the usable roof polygon.
- * Ensures all points and intermediate segment samples stay inside the usable roof.
+ * Ensures all points and intermediate segment samples stay inside the usable roof
+ * and do not cross polygon boundaries.
  */
 export function validateRouteWithinPolygon(
   points: THREE.Vector3[],
   polygon: Point2[],
-  sampleIntervalM = 1.0,
+  sampleIntervalM = 0.35,
 ): boolean {
   if (points.length === 0 || polygon.length < 3) return false;
 
@@ -223,6 +518,12 @@ export function validateRouteWithinPolygon(
 
     if (i < points.length - 1) {
       const pNext = points[i + 1];
+      const ptNext = { x: pNext.x, y: pNext.y };
+      for (let e = 0; e < polygon.length; e++) {
+        if (properSegmentsCross(pt, ptNext, polygon[e], polygon[(e + 1) % polygon.length])) {
+          return false;
+        }
+      }
       const dist = Math.hypot(pNext.x - points[i].x, pNext.y - points[i].y);
       const steps = Math.ceil(dist / sampleIntervalM);
       for (let s = 1; s < steps; s++) {
@@ -240,48 +541,77 @@ export function validateRouteWithinPolygon(
 
 /**
  * Finds a safe, designated rooftop electrical collection and inverter endpoint.
- * Placed within the usable roof boundary, offset safely inward from the perimeter edge.
+ * Placed within the usable roof boundary, safely inset from perimeter edge and parapet wall.
  */
 export function findDesignatedInverterPosition(
   terraceRing: Point2[],
   usableRing: Point2[],
   roofZ: number,
   panels: PlacedPanel[],
+  obstacles: Obstacle[] = [],
 ): THREE.Vector3 {
   const boundary = usableRing.length >= 3 ? usableRing : terraceRing;
   if (boundary.length < 3) {
     return new THREE.Vector3(0, 0, roofZ + 0.35);
   }
 
-  // Find southern-most segment or vertex of usable roof
-  let bestPt = boundary[0];
-  for (const pt of boundary) {
-    if (pt.y < bestPt.y) {
-      bestPt = pt;
-    }
-  }
-
-  // If panels exist, find southern array perimeter
-  let minPanelY = Number.POSITIVE_INFINITY;
-  let meanPanelX = 0;
+  let meanX = 0;
+  let meanY = 0;
+  let minY = Number.POSITIVE_INFINITY;
   if (panels.length > 0) {
     for (const p of panels) {
-      if (p.y < minPanelY) minPanelY = p.y;
-      meanPanelX += p.x;
+      meanX += p.x;
+      meanY += p.y;
+      if (p.y < minY) minY = p.y;
     }
-    meanPanelX /= panels.length;
+    meanX /= panels.length;
+    meanY /= panels.length;
   } else {
-    meanPanelX = bestPt.x;
+    for (const pt of boundary) {
+      meanX += pt.x;
+      meanY += pt.y;
+    }
+    meanX /= boundary.length;
+    meanY /= boundary.length;
+    minY = meanY;
   }
 
-  // Test candidate position along southern usable boundary
-  const candPt = { x: (bestPt.x + meanPanelX) / 2, y: bestPt.y + CABLE_TRAY_EDGE_CLEARANCE_M };
-  if (pointInPolygon(candPt, boundary)) {
-    return new THREE.Vector3(candPt.x, candPt.y, roofZ + 0.35);
+  const candidates: Array<{ pt: Point2; score: number }> = [];
+
+  for (let i = 0; i < boundary.length; i++) {
+    const a = boundary[i];
+    const b = boundary[(i + 1) % boundary.length];
+    for (const t of [0.25, 0.5, 0.75]) {
+      const edgePt = { x: a.x + t * (b.x - a.x), y: a.y + t * (b.y - a.y) };
+      const cand = clampPointToInterior(edgePt, boundary, CABLE_TRAY_EDGE_CLEARANCE_M);
+
+      if (!pointInPolygon(cand, boundary)) continue;
+      if (distanceToRing(cand, terraceRing) < CABLE_TRAY_EDGE_CLEARANCE_M * 0.8) continue;
+
+      let insideObstacle = false;
+      for (const obs of obstacles) {
+        const fp = obstacleFootprint(obs);
+        if (pointInPolygon(cand, fp)) {
+          insideObstacle = true;
+          break;
+        }
+      }
+      if (insideObstacle) continue;
+
+      const distToArray = Math.hypot(cand.x - meanX, cand.y - minY);
+      const score = distToArray + (cand.y - minY) * 0.5;
+      candidates.push({ pt: cand, score });
+    }
   }
 
-  // Fallback: guaranteed interior point (first vertex of usable ring with inward offset)
-  return new THREE.Vector3(bestPt.x, bestPt.y + 0.5, roofZ + 0.35);
+  if (candidates.length > 0) {
+    candidates.sort((a, b) => a.score - b.score);
+    const best = candidates[0].pt;
+    return new THREE.Vector3(best.x, best.y, roofZ + 0.35);
+  }
+
+  const safePt = clampPointToInterior({ x: meanX, y: meanY }, boundary, 0.5);
+  return new THREE.Vector3(safePt.x, safePt.y, roofZ + 0.35);
 }
 
 /**
@@ -368,6 +698,7 @@ export function buildElectricalTopology(params: {
   obstacles?: Obstacle[];
   trees?: Tree[];
   parapetHeightM?: number;
+  parapetThicknessM?: number;
 }): ElectricalTopology {
   const {
     panelLayers,
@@ -379,14 +710,26 @@ export function buildElectricalTopology(params: {
     obstacles = [],
     trees = [],
     parapetHeightM = 0,
+    parapetThicknessM = 0.3,
   } = params;
 
   const routes: CableRoute[] = [];
   const combinerPositions: THREE.Vector3[] = [];
   const stringRecords: ElectricalTopology["strings"] = [];
 
-  // Usable interior ring for cable routing with clearance
-  const usableRing = offsetPolygonInward(terraceRing, CABLE_TRAY_EDGE_CLEARANCE_M) ?? terraceRing;
+  // Usable interior ring for cable routing with clearance from parapet wall & exterior
+  const hasParapet = Number.isFinite(parapetHeightM) && (parapetHeightM ?? 0) > 0;
+  const parapetThickness = Number.isFinite(parapetThicknessM) && (parapetThicknessM ?? 0) > 0
+    ? (parapetThicknessM ?? 0.3)
+    : 0.3;
+  const parapetInset = hasParapet ? parapetThickness : 0;
+  const totalClearance = parapetInset + CABLE_TRAY_EDGE_CLEARANCE_M;
+
+  const usableRing =
+    offsetPolygonInward(terraceRing, totalClearance) ??
+    (hasParapet ? offsetPolygonInward(terraceRing, parapetInset + 0.1) : null) ??
+    offsetPolygonInward(terraceRing, 0.15) ??
+    terraceRing;
 
   // Flatten all placed panels across layers
   const allPanels: Array<{ panel: PlacedPanel; config: PanelLayoutConfig; layerIdx: number }> = [];
@@ -402,6 +745,7 @@ export function buildElectricalTopology(params: {
     usableRing,
     roofZ,
     allPanels.map((a) => a.panel),
+    obstacles,
   );
 
   if (allPanels.length === 0) {
@@ -484,18 +828,30 @@ export function buildElectricalTopology(params: {
         branchPoints.push(connectors[i].clone());
       }
 
-      // String combiner junction box: located at the end of the string row on the roof plane
+      // String combiner junction box: located safely inside usable roof plane
       const lastConnector = connectors[connectors.length - 1];
-      const combinerPos = new THREE.Vector3(lastConnector.x, lastConnector.y, roofZ + 0.05);
+      const rawCombiner = { x: lastConnector.x, y: lastConnector.y };
+      const safeCombiner = clampPointToInterior(rawCombiner, usableRing, 0.15);
+      const combinerPos = new THREE.Vector3(safeCombiner.x, safeCombiner.y, roofZ + 0.04);
 
-      // If combiner lies outside usable roof, pull it towards the roof centroid
-      if (!pointInPolygon({ x: combinerPos.x, y: combinerPos.y }, usableRing)) {
-        combinerPos.x = combinerPos.x * 0.95;
-        combinerPos.y = combinerPos.y * 0.95;
+      // Drop down at last connector location to roof level
+      const dropDownPt = clampPointToInterior(rawCombiner, usableRing, 0.05);
+      branchPoints.push(new THREE.Vector3(dropDownPt.x, dropDownPt.y, roofZ + 0.04));
+
+      // If combiner is offset from dropDownPt, route along roof surface to combiner
+      if (Math.hypot(combinerPos.x - dropDownPt.x, combinerPos.y - dropDownPt.y) > 0.05) {
+        const leadPoints = routeInteriorPath(
+          dropDownPt,
+          { x: combinerPos.x, y: combinerPos.y },
+          usableRing,
+          obstacles,
+        );
+        for (let k = 1; k < leadPoints.length; k++) {
+          branchPoints.push(new THREE.Vector3(leadPoints[k].x, leadPoints[k].y, roofZ + 0.04));
+        }
+      } else {
+        branchPoints.push(combinerPos.clone());
       }
-
-      branchPoints.push(new THREE.Vector3(lastConnector.x, lastConnector.y, roofZ + 0.05));
-      branchPoints.push(combinerPos);
 
       const branchDist = computeCumulativeDistances(branchPoints);
       routes.push({
@@ -519,26 +875,34 @@ export function buildElectricalTopology(params: {
   }
 
   // Level 3: Consolidated DC Collection
-  // Rather than drawing individual trunks from every string to the inverter,
-  // we merge string combiner outputs into a shared main DC cable trunk.
-  const mainJunction = new THREE.Vector3();
-  for (const c of stringCombiners) mainJunction.add(c);
-  mainJunction.multiplyScalar(1 / (stringCombiners.length || 1));
-  mainJunction.z = roofZ + 0.04;
+  // Average combiner positions and clamp safely inside usableRing
+  let avgCombX = 0;
+  let avgCombY = 0;
+  for (const c of stringCombiners) {
+    avgCombX += c.x;
+    avgCombY += c.y;
+  }
+  avgCombX /= stringCombiners.length || 1;
+  avgCombY /= stringCombiners.length || 1;
+
+  const safeJunction2D = clampPointToInterior({ x: avgCombX, y: avgCombY }, usableRing, 0.2);
+  const mainJunction = new THREE.Vector3(safeJunction2D.x, safeJunction2D.y, roofZ + 0.04);
 
   // Route string combiners to the main collection junction
   for (let i = 0; i < stringCombiners.length; i++) {
     const cPos = stringCombiners[i];
     const stringInt = stringIntensities[i] ?? 0.5;
 
-    // Manhattan orthogonal routing on roof surface
-    const midY = (cPos.y + mainJunction.y) / 2;
-    const trunkPoints: THREE.Vector3[] = [
-      cPos.clone(),
-      new THREE.Vector3(cPos.x, midY, roofZ + 0.04),
-      new THREE.Vector3(mainJunction.x, midY, roofZ + 0.04),
-      mainJunction.clone(),
-    ];
+    const path2D = routeInteriorPath(
+      { x: cPos.x, y: cPos.y },
+      { x: mainJunction.x, y: mainJunction.y },
+      usableRing,
+      obstacles,
+    );
+
+    const trunkPoints: THREE.Vector3[] = path2D.map(
+      (pt) => new THREE.Vector3(pt.x, pt.y, roofZ + 0.04),
+    );
 
     const trunkDist = computeCumulativeDistances(trunkPoints);
     routes.push({
@@ -555,11 +919,18 @@ export function buildElectricalTopology(params: {
   const avgArrayIntensity =
     stringIntensities.reduce((a, b) => a + b, 0) / (stringIntensities.length || 1);
 
-  const mainTrunkPoints: THREE.Vector3[] = [
-    mainJunction.clone(),
-    new THREE.Vector3(mainJunction.x, endpointPosition.y, roofZ + 0.04),
-    endpointPosition.clone(),
-  ];
+  const mainPath2D = routeInteriorPath(
+    { x: mainJunction.x, y: mainJunction.y },
+    { x: endpointPosition.x, y: endpointPosition.y },
+    usableRing,
+    obstacles,
+  );
+
+  const mainTrunkPoints: THREE.Vector3[] = mainPath2D.map(
+    (pt) => new THREE.Vector3(pt.x, pt.y, roofZ + 0.04),
+  );
+  // Final segment rises into the inverter enclosure
+  mainTrunkPoints.push(endpointPosition.clone());
 
   const mainTrunkDist = computeCumulativeDistances(mainTrunkPoints);
   routes.push({
@@ -574,14 +945,23 @@ export function buildElectricalTopology(params: {
   // Comprehensive routing validation: ensure every rooftop segment stays within usable roof boundary
   let isValidRouting = true;
   for (const r of routes) {
-    // Only roof-surface segments need 2D polygon containment checks
     const roofPoints = r.points.filter((pt) => Math.abs(pt.z - (roofZ + 0.04)) < 0.1);
     if (roofPoints.length >= 2) {
       if (!validateRouteWithinPolygon(roofPoints, usableRing)) {
         isValidRouting = false;
-        break;
       }
     }
+    // Fail-safe: ensure every roof-level point is clamped strictly inside usableRing
+    for (let i = 0; i < r.points.length; i++) {
+      const p = r.points[i];
+      if (Math.abs(p.z - (roofZ + 0.04)) < 0.1 && !pointInPolygon({ x: p.x, y: p.y }, usableRing)) {
+        const clamped = clampPointToInterior({ x: p.x, y: p.y }, usableRing, 0.1);
+        r.points[i] = new THREE.Vector3(clamped.x, clamped.y, p.z);
+      }
+    }
+    const updatedDist = computeCumulativeDistances(r.points);
+    r.cumulativeDistances = updatedDist.cumulative;
+    r.totalLength = updatedDist.total;
   }
 
   return {

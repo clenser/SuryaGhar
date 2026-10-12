@@ -24,7 +24,6 @@ import type { Tree } from "./treeTypes";
 import { treeFootprint } from "./treeTypes";
 import { effectivePanelDims, panelTypeDefinition, type PanelLayoutConfig } from "./panels";
 import { rectangleCorners } from "./panelPlacement";
-import { offsetPolygonInward } from "./geometry";
 import { solarPosition } from "../solar/solarPosition";
 
 /** Point in 3D local metric coordinates (X = East, Y = North, Z = Up). */
@@ -282,6 +281,61 @@ export function projectObstacleShadowToRoof(
 }
 
 /**
+ * Projects parapet wall shadows onto the roof surface along the sun ray.
+ * 
+ * Unlike solid obstacles whose entire footprint casts a single shadow hull,
+ * a rooftop parapet is a thin perimeter wall standing on the outer edge of the roof.
+ * Each wall edge (from A to B) only casts a shadow inward onto the roof plane
+ * when the sun shines over that wall towards the roof interior.
+ * The shadow cast by that wall edge is the narrow band/parallelogram
+ * formed by [A, B, B + d, A + d] where d is the shadow displacement vector.
+ * Walls where the sun shines from inside outward cast shadows away from the building
+ * onto the exterior ground/facade, producing 0 shadow on the roof.
+ */
+export function computeParapetShadowPolygons(
+  terraceRing: Point2[],
+  parapetHeightM: number,
+  solarAzimuthDeg: number,
+  solarElevationDeg: number,
+): Point2[][] {
+  if (parapetHeightM <= 0 || solarElevationDeg <= 1.0 || terraceRing.length < 3) return [];
+
+  const elRad = (solarElevationDeg * Math.PI) / 180;
+  const azRad = (solarAzimuthDeg * Math.PI) / 180;
+  const tanEl = Math.tan(elRad);
+  if (tanEl <= 1e-4) return [];
+
+  const shadowLen = parapetHeightM / tanEl;
+  const dxTop = -Math.sin(azRad) * shadowLen;
+  const dyTop = -Math.cos(azRad) * shadowLen;
+
+  const cw = ensureClockwise(terraceRing);
+  const shadowQuads: Point2[][] = [];
+
+  for (let i = 0; i < cw.length; i++) {
+    const a = cw[i];
+    const b = cw[(i + 1) % cw.length];
+    // Check if shadow displacement points inward into the clockwise polygon:
+    // For clockwise winding, (B - A) x d < 0 indicates inward displacement.
+    const cross = (b.x - a.x) * dyTop - (b.y - a.y) * dxTop;
+    if (cross < -1e-4) {
+      const quad = ensureClockwise([
+        a,
+        b,
+        { x: b.x + dxTop, y: b.y + dyTop },
+        { x: a.x + dxTop, y: a.y + dyTop },
+      ]);
+      if (quad.length >= 3) {
+        shadowQuads.push(quad);
+      }
+    }
+  }
+
+  return shadowQuads;
+}
+
+
+/**
  * Computes fraction of a panel's rectangle covered by a set of shadow polygons.
  */
 export function computePanelShadeFraction(
@@ -289,31 +343,66 @@ export function computePanelShadeFraction(
   shadowPolygons: Point2[][],
 ): number {
   const panelArea = Math.abs(polygonArea2(panelCorners)) / 2;
-  if (panelArea <= 1e-6) return 0;
+  if (panelArea <= 1e-6 || shadowPolygons.length === 0) return 0;
 
-  // Union area calculation by iterative polygon clipping
-  let coveredArea = 0;
-  let remaining: Point2[][] = [panelCorners];
-
-  for (const shadow of shadowPolygons) {
-    if (shadow.length < 3) continue;
-    const nextRemaining: Point2[][] = [];
-    for (const piece of remaining) {
-      const clipped = clipPolygonConvex(piece, shadow);
-      if (clipped.length >= 3) {
-        coveredArea += Math.abs(polygonArea2(clipped)) / 2;
-      }
-      // Outside half-planes (reverse clockwise ring to get invert/outside half-planes)
-      const reversedShadow = [...ensureClockwise(shadow)].reverse();
-      const outside = clipPolygonConvex(piece, reversedShadow);
-      if (outside.length >= 3) {
-        nextRemaining.push(outside);
-      }
-    }
-    if (nextRemaining.length === 0) break;
-    remaining = nextRemaining;
+  // 1. Fast bounding box rejection:
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of panelCorners) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
   }
 
+  // Find candidate shadow polygons that intersect the panel bounding box
+  const overlappingShadows: Point2[][] = [];
+  for (const shadow of shadowPolygons) {
+    if (shadow.length < 3) continue;
+    let sMinX = Infinity, sMaxX = -Infinity, sMinY = Infinity, sMaxY = -Infinity;
+    for (const p of shadow) {
+      if (p.x < sMinX) sMinX = p.x;
+      if (p.x > sMaxX) sMaxX = p.x;
+      if (p.y < sMinY) sMinY = p.y;
+      if (p.y > sMaxY) sMaxY = p.y;
+    }
+    if (sMaxX < minX || sMinX > maxX || sMaxY < minY || sMinY > maxY) {
+      continue;
+    }
+    const clipped = clipPolygonConvex(panelCorners, shadow);
+    if (clipped.length >= 3) {
+      overlappingShadows.push(shadow);
+    }
+  }
+
+  if (overlappingShadows.length === 0) return 0;
+  if (overlappingShadows.length === 1) {
+    const clipped = clipPolygonConvex(panelCorners, overlappingShadows[0]);
+    const area = Math.abs(polygonArea2(clipped)) / 2;
+    return Math.min(1, Math.max(0, area / panelArea));
+  }
+
+  // For 2 overlapping shadows: A(P ∩ S1) + A(P ∩ S2) - A(P ∩ S1 ∩ S2)
+  if (overlappingShadows.length === 2) {
+    const p1 = clipPolygonConvex(panelCorners, overlappingShadows[0]);
+    const p2 = clipPolygonConvex(panelCorners, overlappingShadows[1]);
+    const a1 = Math.abs(polygonArea2(p1)) / 2;
+    const a2 = Math.abs(polygonArea2(p2)) / 2;
+    const p12 = clipPolygonConvex(p1, overlappingShadows[1]);
+    const a12 = Math.abs(polygonArea2(p12)) / 2;
+    const coveredArea = a1 + a2 - a12;
+    return Math.min(1, Math.max(0, coveredArea / panelArea));
+  }
+
+  // For 3+ overlapping shadows: inclusion-exclusion up to pairwise overlap
+  let coveredArea = 0;
+  for (let i = 0; i < overlappingShadows.length; i++) {
+    const pi = clipPolygonConvex(panelCorners, overlappingShadows[i]);
+    coveredArea += Math.abs(polygonArea2(pi)) / 2;
+    for (let j = i + 1; j < overlappingShadows.length; j++) {
+      const pij = clipPolygonConvex(pi, overlappingShadows[j]);
+      coveredArea -= Math.abs(polygonArea2(pij)) / 2;
+    }
+  }
   return Math.min(1, Math.max(0, coveredArea / panelArea));
 }
 
@@ -476,9 +565,6 @@ export function runAnnualShadingAnalysis(params: {
     };
   });
 
-  // Parapet shadow polygon source: inner ring of the parapet wall
-  const parapetInner = parapetHeightM > 0 ? offsetPolygonInward(terraceRing, 0.25) : null;
-
   // Initialize panel statistics collectors
   const panelMap = new Map<
     string,
@@ -556,16 +642,14 @@ export function runAnnualShadingAnalysis(params: {
         }
       }
 
-      if (parapetInner && parapetHeightM > 0) {
-        const parapetShadow = projectObstacleShadowToRoof(
-          parapetInner,
-          roofZ,
-          roofZ + parapetHeightM,
-          roofZ,
+      if (parapetHeightM > 0) {
+        const parapetShadows = computeParapetShadowPolygons(
+          terraceRing,
+          parapetHeightM,
           sun.azimuthDeg,
           sun.apparentElevationDeg,
         );
-        if (parapetShadow.length >= 3) shadowPolygons.push(parapetShadow);
+        for (const s of parapetShadows) shadowPolygons.push(s);
       }
 
       // Check each panel against the shadow polygons
@@ -634,10 +718,10 @@ export function runAnnualShadingAnalysis(params: {
       entry.annualUnshadedKwh > 0 ? (lossKwh / entry.annualUnshadedKwh) * 100 : 0;
 
     let severity: AnalyzedPanel["severity"] = "none";
-    if (lossPct >= 12.0 || entry.peakShade > 0.45) {
+    if (lossPct >= 12.0) {
       severity = "severe";
       severitySevere++;
-    } else if (lossPct >= 3.5 || entry.peakShade > 0.15) {
+    } else if (lossPct >= 3.5) {
       severity = "moderate";
       severityModerate++;
     } else {
@@ -790,18 +874,13 @@ export function computeInstantaneousShade(params: {
 
   // 3. Parapet shadows
   if (parapetHeightM > 0) {
-    const parapetInner = offsetPolygonInward(terraceRing, 0.25);
-    if (parapetInner) {
-      const shadow = projectObstacleShadowToRoof(
-        parapetInner,
-        roofZ,
-        roofZ + parapetHeightM,
-        roofZ,
-        solarAzimuthDeg,
-        solarElevationDeg,
-      );
-      if (shadow.length >= 3) shadowPolygons.push(shadow);
-    }
+    const parapetShadows = computeParapetShadowPolygons(
+      terraceRing,
+      parapetHeightM,
+      solarAzimuthDeg,
+      solarElevationDeg,
+    );
+    for (const s of parapetShadows) shadowPolygons.push(s);
   }
 
   // 4. Panel geometric shade evaluation

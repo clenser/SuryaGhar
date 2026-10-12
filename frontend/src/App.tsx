@@ -45,6 +45,7 @@ export default function App() {
   const [place, setPlace] = useState<LocationResult | null>(KOLKATA_PLACE);
   const [measureOn, setMeasureOn] = useState(true);
   const [imageryFailed, setImageryFailed] = useState(false);
+  const [bannerMessage, setBannerMessage] = useState<string | null>(null);
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const selection = useSelection();
   const [stage, setStage] = useState<Stage>("select");
@@ -211,6 +212,7 @@ export default function App() {
       recordError(entry);
       if (entry.kind === "imagery") {
         setImageryFailed(true);
+        setBannerMessage(entry.message);
         setBannerDismissed(false);
       }
     },
@@ -249,7 +251,10 @@ export default function App() {
           layers={layers}
           onViewChange={setView}
           onMapError={handleMapError}
-          onReady={() => setImageryFailed(false)}
+          onReady={() => {
+            setImageryFailed(false);
+            setBannerMessage(null);
+          }}
           selectionMode={selection.mode}
           vertices={selection.vertices}
           panelFootprints={panelFootprints}
@@ -430,8 +435,11 @@ export default function App() {
         {showBanner && (
           <div className="map-banner" role="status">
             <div>
-              <strong>Satellite imagery could not be loaded.</strong>
-              <span> Check your connection or try another location. Analysis accuracy may differ on any fallback source.</span>
+              <strong>Primary map could not be loaded.</strong>
+              <span>
+                {bannerMessage ||
+                  " Check your connection, privacy shields or ad blockers. The backup MapLibre map will be used automatically."}
+              </span>
             </div>
             <button type="button" className="map-banner__dismiss" onClick={() => setBannerDismissed(true)}>
               Dismiss

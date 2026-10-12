@@ -230,6 +230,27 @@ export function ViewportToolbar({
       );
     }
 
+    if (tool === "flow") {
+      const isFlowActive = Boolean(layerVisibility?.electricityFlow);
+      return (
+        <button
+          key={tool}
+          type="button"
+          className={`viewport-tool${isFlowActive ? " is-active" : ""}`}
+          onClick={() => {
+            if (onToggleLayer) onToggleLayer("electricityFlow");
+            else onToolChange(activeTool === "flow" ? null : "flow");
+          }}
+          title={isFlowActive ? "Disable electricity flow" : "Enable electricity flow"}
+          aria-pressed={isFlowActive}
+          aria-label={isFlowActive ? "Disable electricity flow" : "Enable electricity flow"}
+        >
+          <span className="viewport-tool__icon"><Zap size={16} strokeWidth={2} /></span>
+          <span className="viewport-tool__label">Electricity Flow</span>
+        </button>
+      );
+    }
+
     const config = TOOL_CONFIG[tool];
     return (
       <button

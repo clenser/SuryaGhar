@@ -27,6 +27,7 @@ import {
 } from "../lib/3d/electricityFlowMeshes";
 import { DEFAULT_PANEL_CONFIG } from "../lib/3d/panels";
 import type { PlacedPanel } from "../lib/3d/panelPlacement";
+import { pointInPolygon, type Obstacle } from "../lib/3d/obstacles";
 
 describe("Electrical Flow Topology & Routing", () => {
   const mockConfig = {
@@ -332,6 +333,165 @@ describe("Electrical Flow Topology & Routing", () => {
       expect(visualizer.group.children.length).toBe(initialMeshCount);
 
       visualizer.dispose();
+    });
+
+    it("guarantees 100% of cable routes and inverter stay inside a tapered roof", () => {
+      // Tapered roof narrowing from south to north (triangle/trapezoid)
+      const taperedTerrace = [
+        { x: -15, y: -10 },
+        { x: 15, y: -10 },
+        { x: 2, y: 15 },
+        { x: -2, y: 15 },
+      ];
+      // Strings placed at wide southern base and narrow northern apex
+      const panels: PlacedPanel[] = [
+        { index: 0, x: -8, y: -6, rotationDeg: 0 },
+        { index: 1, x: -6, y: -6, rotationDeg: 0 },
+        { index: 2, x: 6, y: -6, rotationDeg: 0 },
+        { index: 3, x: 8, y: -6, rotationDeg: 0 },
+        { index: 4, x: 0, y: 10, rotationDeg: 0 },
+      ];
+
+      const topo = buildElectricalTopology({
+        panelLayers: [{ config: mockConfig, panels }],
+        roofZ: 14,
+        terraceRing: taperedTerrace,
+      });
+
+      expect(topo.isValidRouting).toBe(true);
+
+      // Verify inverter is strictly inside
+      expect(pointInPolygon({ x: topo.endpointPosition.x, y: topo.endpointPosition.y }, taperedTerrace)).toBe(true);
+      expect(topo.endpointPosition.z).toBeGreaterThanOrEqual(14);
+
+      // Verify every single point of every route is strictly inside taperedTerrace
+      for (const route of topo.routes) {
+        expect(route.points.length).toBeGreaterThanOrEqual(2);
+        for (const pt of route.points) {
+          expect(pointInPolygon({ x: pt.x, y: pt.y }, taperedTerrace)).toBe(true);
+          expect(pt.z).toBeGreaterThanOrEqual(14); // no cable drops to ground (Z=0)
+        }
+      }
+    });
+
+    it("prevents cables from crossing the exterior notch of an L-shaped concave roof", () => {
+      // L-shaped roof with an exterior notch in the bottom-right quadrant:
+      // (0,0) to (12,0) to (12,6) to (6,6) to (6,12) to (0,12)
+      // Notch is between (6,6) and (12,12)
+      const lShapedTerrace = [
+        { x: 0, y: 0 },
+        { x: 12, y: 0 },
+        { x: 12, y: 6 },
+        { x: 6, y: 6 },
+        { x: 6, y: 12 },
+        { x: 0, y: 12 },
+      ];
+
+      // Panels in the top-left wing and bottom-right wing
+      const panels: PlacedPanel[] = [
+        { index: 0, x: 2, y: 9, rotationDeg: 0 },
+        { index: 1, x: 2, y: 7, rotationDeg: 0 },
+        { index: 2, x: 8, y: 2, rotationDeg: 0 },
+        { index: 3, x: 10, y: 2, rotationDeg: 0 },
+      ];
+
+      const topo = buildElectricalTopology({
+        panelLayers: [{ config: mockConfig, panels }],
+        roofZ: 10,
+        terraceRing: lShapedTerrace,
+      });
+
+      expect(topo.isValidRouting).toBe(true);
+      expect(pointInPolygon({ x: topo.endpointPosition.x, y: topo.endpointPosition.y }, lShapedTerrace)).toBe(true);
+
+      // Test that NO route crosses through the exterior notch (x > 6 and y > 6 is outside)
+      for (const route of topo.routes) {
+        for (const pt of route.points) {
+          expect(pointInPolygon({ x: pt.x, y: pt.y }, lShapedTerrace)).toBe(true);
+          const inNotch = pt.x > 6.01 && pt.y > 6.01;
+          expect(inNotch).toBe(false);
+        }
+      }
+    });
+
+    it("keeps all wiring inside the parapet inner face when a parapet wall is present", () => {
+      const terraceRing = [
+        { x: -10, y: -10 },
+        { x: 10, y: -10 },
+        { x: 10, y: 10 },
+        { x: -10, y: 10 },
+      ];
+      const panels: PlacedPanel[] = [
+        { index: 0, x: -5, y: -2, rotationDeg: 0 },
+        { index: 1, x: 0, y: -2, rotationDeg: 0 },
+        { index: 2, x: 5, y: -2, rotationDeg: 0 },
+      ];
+
+      const parapetThicknessM = 0.3;
+      const parapetHeightM = 1.0;
+
+      const topo = buildElectricalTopology({
+        panelLayers: [{ config: mockConfig, panels }],
+        roofZ: 12,
+        terraceRing,
+        parapetHeightM,
+        parapetThicknessM,
+      });
+
+      expect(topo.isValidRouting).toBe(true);
+
+      // All rooftop route points must maintain clearance from outer boundary >= parapetThicknessM
+      for (const route of topo.routes) {
+        for (const pt of route.points) {
+          if (Math.abs(pt.z - (12 + 0.04)) < 0.1) {
+            const minX = Math.min(Math.abs(pt.x - 10), Math.abs(pt.x - (-10)));
+            const minY = Math.min(Math.abs(pt.y - 10), Math.abs(pt.y - (-10)));
+            const distToOuterEdge = Math.min(minX, minY);
+            expect(distToOuterEdge).toBeGreaterThanOrEqual(parapetThicknessM - 0.05);
+          }
+        }
+      }
+    });
+
+    it("ensures cable conduits do not penetrate rooftop obstacles", () => {
+      const terraceRing = [
+        { x: -10, y: -10 },
+        { x: 10, y: -10 },
+        { x: 10, y: 10 },
+        { x: -10, y: 10 },
+      ];
+      const panels: PlacedPanel[] = [
+        { index: 0, x: -5, y: 5, rotationDeg: 0 },
+        { index: 1, x: 5, y: -5, rotationDeg: 0 },
+      ];
+      const waterTank: Obstacle = {
+        id: "tank-1",
+        type: "water-tank",
+        length: 3.0,
+        width: 3.0,
+        height: 2.0,
+        rotation: 0,
+        position: { x: 0, y: 0 },
+      };
+
+      const topo = buildElectricalTopology({
+        panelLayers: [{ config: mockConfig, panels }],
+        roofZ: 15,
+        terraceRing,
+        obstacles: [waterTank],
+      });
+
+      expect(topo.isValidRouting).toBe(true);
+
+      // Verify no rooftop cable point is inside the center water tank [-1.4, 1.4] x [-1.4, 1.4]
+      for (const route of topo.routes) {
+        for (const pt of route.points) {
+          if (Math.abs(pt.z - (15 + 0.04)) < 0.1) {
+            const insideTank = Math.abs(pt.x) < 1.3 && Math.abs(pt.y) < 1.3;
+            expect(insideTank).toBe(false);
+          }
+        }
+      }
     });
   });
 });

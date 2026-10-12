@@ -22,6 +22,8 @@ export interface ElectricityFlowHandle {
   group: THREE.Group;
   update: (deltaSeconds: number) => void;
   updateIntensities: (newTopology: ElectricalTopology) => void;
+  updateSunState: (solarAzimuthDeg: number, solarElevationDeg: number, weatherPreset?: "sunny" | "cloudy" | "rainy") => void;
+  setFlowActive: (active: boolean) => void;
   dispose: () => void;
 }
 
@@ -55,6 +57,7 @@ export function getFlowParticleColor(intensity: number): THREE.Color {
  */
 export function createElectricityFlowVisualizer(
   topology: ElectricalTopology,
+  initialFlowActive: boolean = true,
 ): ElectricityFlowHandle {
   const group = new THREE.Group();
   group.name = "ElectricityFlowVisualization";
@@ -223,13 +226,22 @@ export function createElectricityFlowVisualizer(
     if (particleMesh.instanceColor) {
       particleMesh.instanceColor.needsUpdate = true;
     }
+    particleMesh.visible = initialFlowActive;
     group.add(particleMesh);
   }
+
+  let flowActive = initialFlowActive;
+  const setFlowActive = (active: boolean) => {
+    flowActive = active;
+    if (particleMesh) {
+      particleMesh.visible = active;
+    }
+  };
 
   const dummyMatrix = new THREE.Object3D();
 
   const update = (deltaSeconds: number) => {
-    if (!particleMesh || particleCount === 0) return;
+    if (!flowActive || !particleMesh || particleCount === 0) return;
     const dt = Math.max(0.001, Math.min(0.1, deltaSeconds));
 
     for (let i = 0; i < particleCount; i++) {
@@ -237,14 +249,13 @@ export function createElectricityFlowVisualizer(
       const speed = trk.baseSpeed * Math.max(0.2, trk.intensity);
       trk.distance = (trk.distance + speed * dt) % trk.route.totalLength;
 
-      const pos = samplePointAlongPolyline(
+      samplePointAlongPolyline(
         trk.route.points,
         trk.route.cumulativeDistances,
         trk.route.totalLength,
         trk.distance,
+        dummyMatrix.position,
       );
-
-      dummyMatrix.position.copy(pos);
 
       // Hide particle completely if power is zero (night-time)
       if (trk.intensity <= 0.001) {
@@ -279,6 +290,33 @@ export function createElectricityFlowVisualizer(
     }
   };
 
+  const updateSunState = (
+    _solarAzimuthDeg: number,
+    solarElevationDeg: number,
+    weatherPreset: "sunny" | "cloudy" | "rainy" = "sunny",
+  ) => {
+    if (!particleMesh) return;
+    // Fast scalar sun scaling for particles when sun moves during animation loop:
+    // Avoids running full Dijkstra and polygon clipping every frame.
+    const elevRad = Math.max(0, (solarElevationDeg * Math.PI) / 180);
+    const sunFactor = Math.sin(elevRad);
+    let weatherScale = 1.0;
+    if (weatherPreset === "cloudy") weatherScale = 0.55;
+    else if (weatherPreset === "rainy") weatherScale = 0.28;
+
+    for (let i = 0; i < trackers.length; i++) {
+      const trk = trackers[i];
+      // Scale base route flowIntensity with instantaneous sun factor
+      const baseIntensity = trk.route.flowIntensity;
+      const updatedInt = solarElevationDeg <= 0 ? 0.0 : Math.max(0, Math.min(1, baseIntensity * sunFactor * weatherScale));
+      trk.intensity = updatedInt;
+      particleMesh.setColorAt(i, getFlowParticleColor(updatedInt));
+    }
+    if (particleMesh.instanceColor) {
+      particleMesh.instanceColor.needsUpdate = true;
+    }
+  };
+
   const dispose = () => {
     group.clear();
     for (const d of disposables) {
@@ -290,6 +328,8 @@ export function createElectricityFlowVisualizer(
     group,
     update,
     updateIntensities,
+    updateSunState,
+    setFlowActive,
     dispose,
   };
 }

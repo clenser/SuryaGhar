@@ -583,6 +583,66 @@ export function createPanelGroup(
   return group;
 }
 
+/**
+ * Fast in-place update of panel shading colors on an existing panel group.
+ * Modifies heatmap InstancedMesh colors directly without destroying/recreating geometries or meshes.
+ * Returns true if an existing heatmap mesh was updated, or false if geometry needs rebuild.
+ */
+export function updatePanelGroupShading(
+  group: THREE.Group,
+  panels: PlacedPanel[],
+  shadingSeverities?: Array<"none" | "moderate" | "severe">,
+  shadingMetrics?: Array<PanelShadingMetric | null | undefined>,
+): boolean {
+  const heatmapMesh = group.getObjectByName("SolarPanelHeatmapInstances") as THREE.InstancedMesh | null;
+  const hasShadingData = Boolean(
+    (shadingMetrics && shadingMetrics.length > 0) ||
+    (shadingSeverities && shadingSeverities.length > 0)
+  );
+
+  if (!heatmapMesh) {
+    // If there is shading data but no heatmap mesh exists, or vice versa, caller must rebuild
+    return !hasShadingData;
+  }
+
+  if (!hasShadingData) {
+    heatmapMesh.visible = false;
+    return true;
+  }
+
+  if (heatmapMesh.count !== panels.length) {
+    return false; // count mismatch requires full rebuild
+  }
+
+  heatmapMesh.visible = true;
+  for (let i = 0; i < panels.length; i++) {
+    let color: THREE.Color;
+    const metric = shadingMetrics ? shadingMetrics[i] : undefined;
+    if (metric && Number.isFinite(metric.instantaneousShadeFraction)) {
+      color = getInstantaneousShadeColor(metric.instantaneousShadeFraction);
+    } else if (metric && Number.isFinite(metric.annualLossPercent)) {
+      color = getShadingHeatmapColor(metric.annualLossPercent);
+    } else if (shadingSeverities && shadingSeverities[i]) {
+      const sev = shadingSeverities[i];
+      if (sev === "severe") {
+        color = getShadingHeatmapColor(15);
+      } else if (sev === "moderate") {
+        color = getShadingHeatmapColor(7.5);
+      } else {
+        color = getShadingHeatmapColor(1.0);
+      }
+    } else {
+      color = new THREE.Color(0x64748b);
+    }
+    heatmapMesh.setColorAt(i, color);
+  }
+
+  if (heatmapMesh.instanceColor) {
+    heatmapMesh.instanceColor.needsUpdate = true;
+  }
+  return true;
+}
+
 /** Dispose every geometry and material a panel group owns. */
 export function disposePanelGroup(group: THREE.Group): void {
   group.traverse((object) => {

@@ -157,9 +157,10 @@ export const GoogleMapView = forwardRef<GoogleMapViewHandle, MapViewProps>(funct
       })
       .catch((err: Error) => {
         if (!active) return;
+        const msg = err.message || "Failed to load Google Maps JavaScript API.";
         callbacks.current.onMapError({
           kind: "imagery",
-          message: err.message || "Failed to load Google Maps JavaScript API.",
+          message: msg,
         });
       });
 
