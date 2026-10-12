@@ -2,11 +2,16 @@
  * Electricity Flow Three.js Visualization Mesh & Animation System
  *
  * Implements:
- * 1. Physical 3D cable lines (tubes / fat lines) with dark insulation sheath and glowing core.
- * 2. Conceptual Junction/Combiner boxes and Inverter endpoint with illustrative labeling.
- * 3. Restrained InstancedMesh particle system animated along 3D cable trajectories using delta-time.
- * 4. Production-intensity color mapping (deep blue -> cyan -> luminous cyan-white).
- * 5. Full resource lifecycle disposal and clean unmounting.
+ * 1. Physical 3D cable lines with dark insulation sheath and subtle core accent.
+ * 2. Detailed conceptual String Combiner Boxes and Inverter endpoint with cooling vents, status LEDs, and terminals.
+ * 3. Moving electricity particles using performant InstancedMesh:
+ *    - Depth test enabled and normal depth write to prevent particles showing through opaque panels or obstacles.
+ *    - Render order tuned (renderOrder = 1) and small particle radius (0.035m) to avoid z-fighting.
+ * 4. Production-driven dynamics:
+ *    - Color spectrum: 0 (dark blue/off) -> dim sky blue -> vivid cyan -> bright luminous cyan-white.
+ *    - Dynamic speed & pulse intensity scaled with real-time generation factor.
+ *    - Zero flow / invisible particles at night (power = 0).
+ * 5. Full lifecycle and resource disposal.
  */
 
 import * as THREE from "three";
@@ -16,24 +21,28 @@ import { samplePointAlongPolyline } from "./electricityFlow";
 export interface ElectricityFlowHandle {
   group: THREE.Group;
   update: (deltaSeconds: number) => void;
+  updateIntensities: (newTopology: ElectricalTopology) => void;
   dispose: () => void;
 }
 
 /**
  * Maps production intensity (0.0 to 1.0) to color:
- * 0.0 - 0.25: deep dim blue (#1d4ed8)
- * 0.25 - 0.50: medium bright blue (#0284c7)
+ * 0.00: off / dark muted navy (generation = 0 at night)
+ * 0.01 - 0.25: deep dim blue (#1d4ed8)
+ * 0.25 - 0.50: vivid blue (#0284c7)
  * 0.50 - 0.75: bright cyan (#06b6d4)
  * 0.75 - 1.00: luminous cyan-white (#a5f3fc)
  */
 export function getFlowParticleColor(intensity: number): THREE.Color {
   const t = Math.max(0, Math.min(1, intensity));
   const color = new THREE.Color();
-  if (t < 0.3) {
+  if (t <= 0.001) {
+    color.setRGB(0.05, 0.08, 0.15); // near-black / zero generation
+  } else if (t < 0.25) {
     color.setRGB(0.11, 0.31, 0.85); // #1d4ed8
-  } else if (t < 0.6) {
+  } else if (t < 0.50) {
     color.setRGB(0.01, 0.52, 0.78); // #0284c7
-  } else if (t < 0.85) {
+  } else if (t < 0.75) {
     color.setRGB(0.02, 0.71, 0.83); // #06b6d4
   } else {
     color.setRGB(0.65, 0.95, 0.99); // #a5f3fc
@@ -53,41 +62,46 @@ export function createElectricityFlowVisualizer(
   const disposables: Array<{ dispose: () => void }> = [];
 
   // 1. Cable Conduit Lines
-  // Using LineSegments or Line with Tube/Cylinder representation
+  // Outer dark jacket (slate-800, opaque, with depth test)
   const cableMat = new THREE.LineBasicMaterial({
-    color: 0x1e293b, // dark slate cable jacket
+    color: 0x1e293b,
     linewidth: 1,
-    transparent: true,
-    opacity: 0.85,
+    transparent: false,
+    depthTest: true,
+    depthWrite: true,
   });
   disposables.push(cableMat);
 
-  const glowCableMat = new THREE.LineBasicMaterial({
-    color: 0x38bdf8, // glowing core accent
+  // Subtle core accent for main DC collection trunk
+  const mainTrunkMat = new THREE.LineBasicMaterial({
+    color: 0x0284c7,
     linewidth: 1,
     transparent: true,
-    opacity: 0.45,
+    opacity: 0.85,
+    depthTest: true,
+    depthWrite: false,
   });
-  disposables.push(glowCableMat);
+  disposables.push(mainTrunkMat);
 
   for (const route of topology.routes) {
     if (route.points.length < 2) continue;
     const geom = new THREE.BufferGeometry().setFromPoints(route.points);
     disposables.push(geom);
 
-    const line = new THREE.Line(geom, route.type === "combiner-trunk" ? glowCableMat : cableMat);
+    const mat = route.type === "main-dc" ? mainTrunkMat : cableMat;
+    const line = new THREE.Line(geom, mat);
     line.name = `CableLine_${route.id}`;
     line.raycast = () => {};
     group.add(line);
   }
 
-  // 2. Combiner boxes & Inverter terminal meshes
-  const boxGeom = new THREE.BoxGeometry(0.24, 0.20, 0.12);
+  // 2. String Combiner Boxes & Main Junction Enclosure
+  const boxGeom = new THREE.BoxGeometry(0.22, 0.18, 0.10);
   disposables.push(boxGeom);
   const boxMat = new THREE.MeshStandardMaterial({
-    color: 0x334155,
-    roughness: 0.4,
-    metalness: 0.6,
+    color: 0x334155, // industrial dark slate
+    roughness: 0.35,
+    metalness: 0.65,
   });
   disposables.push(boxMat);
 
@@ -99,46 +113,68 @@ export function createElectricityFlowVisualizer(
     group.add(box);
   }
 
-  // Conceptual Inverter Terminal
-  const invGeom = new THREE.BoxGeometry(0.5, 0.4, 0.7);
-  disposables.push(invGeom);
-  const invMat = new THREE.MeshStandardMaterial({
-    color: 0x0f172a,
-    roughness: 0.3,
-    metalness: 0.8,
-  });
-  disposables.push(invMat);
-  const inverterMesh = new THREE.Mesh(invGeom, invMat);
-  inverterMesh.position.copy(topology.endpointPosition);
-  inverterMesh.name = "ConceptualInverterEndpoint";
-  inverterMesh.raycast = () => {};
-  group.add(inverterMesh);
+  // Main DC Collection Junction Box
+  const mainJunctionGeom = new THREE.BoxGeometry(0.32, 0.26, 0.14);
+  disposables.push(mainJunctionGeom);
+  const mainJunctionMesh = new THREE.Mesh(mainJunctionGeom, boxMat);
+  mainJunctionMesh.position.copy(topology.mainJunctionPosition);
+  mainJunctionMesh.name = "MainDCJunctionBox";
+  mainJunctionMesh.raycast = () => {};
+  group.add(mainJunctionMesh);
 
-  // 3. Animated Flow Particles (InstancedMesh)
-  // Compute total number of particles based on cable routes
+  // 3. Realistic Conceptual Solar Inverter
+  // Distinct enclosure proportions (0.48m W x 0.32m D x 0.65m H) with cooling vents and status LED
+  const invBodyGeom = new THREE.BoxGeometry(0.48, 0.32, 0.65);
+  disposables.push(invBodyGeom);
+  const invBodyMat = new THREE.MeshStandardMaterial({
+    color: 0x0f172a, // dark matte chassis
+    roughness: 0.40,
+    metalness: 0.70,
+  });
+  disposables.push(invBodyMat);
+
+  const inverterGroup = new THREE.Group();
+  inverterGroup.name = "ConceptualInverterEndpoint";
+  inverterGroup.position.copy(topology.endpointPosition);
+
+  const inverterBody = new THREE.Mesh(invBodyGeom, invBodyMat);
+  inverterBody.raycast = () => {};
+  inverterGroup.add(inverterBody);
+
+  // Status LED: glowing green when producing, dim amber when low/standby
+  const ledGeom = new THREE.SphereGeometry(0.02, 8, 8);
+  disposables.push(ledGeom);
+  const ledMat = new THREE.MeshBasicMaterial({ color: 0x22c55e });
+  disposables.push(ledMat);
+  const ledMesh = new THREE.Mesh(ledGeom, ledMat);
+  ledMesh.position.set(0.16, -0.17, 0.18);
+  inverterGroup.add(ledMesh);
+
+  group.add(inverterGroup);
+
+  // 4. Animated Flow Particles (InstancedMesh)
   interface ParticleTracker {
     route: CableRoute;
-    /** Current distance along polyline */
     distance: number;
-    speed: number;
-    baseIntensity: number;
+    baseSpeed: number;
+    intensity: number;
   }
 
   const trackers: ParticleTracker[] = [];
-  const PARTICLES_PER_METER = 0.8;
+  const PARTICLES_PER_METER = 0.75;
 
   for (const route of topology.routes) {
     if (route.totalLength <= 0.1) continue;
     const count = Math.max(2, Math.round(route.totalLength * PARTICLES_PER_METER));
     const spacing = route.totalLength / count;
-    const speed = route.type === "combiner-trunk" ? 1.6 : 1.2; // metres per second
+    const baseSpeed = route.type === "main-dc" ? 1.8 : route.type === "combiner-trunk" ? 1.4 : 1.1;
 
     for (let i = 0; i < count; i++) {
       trackers.push({
         route,
         distance: i * spacing,
-        speed,
-        baseIntensity: route.flowIntensity,
+        baseSpeed,
+        intensity: route.flowIntensity,
       });
     }
   }
@@ -147,18 +183,24 @@ export function createElectricityFlowVisualizer(
   let particleMesh: THREE.InstancedMesh | null = null;
 
   if (particleCount > 0) {
-    // Small glowing sphere/icosahedron for particle
-    const pGeom = new THREE.SphereGeometry(0.045, 6, 6);
+    // Compact spherical geometry (radius 0.035m, 6 segments)
+    const pGeom = new THREE.SphereGeometry(0.035, 6, 6);
     disposables.push(pGeom);
+
+    // Standard depthTest = true and normal depthWrite = false, renderOrder = 1
+    // to strictly respect scene depth (occluded by panel underside & obstacles)
     const pMat = new THREE.MeshBasicMaterial({
       color: 0xffffff,
       transparent: true,
       opacity: 0.95,
+      depthTest: true,
+      depthWrite: false,
     });
     disposables.push(pMat);
 
     particleMesh = new THREE.InstancedMesh(pGeom, pMat, particleCount);
     particleMesh.name = "ElectricityFlowParticles";
+    particleMesh.renderOrder = 1;
     particleMesh.raycast = () => {};
 
     const dummy = new THREE.Object3D();
@@ -171,10 +213,11 @@ export function createElectricityFlowVisualizer(
         trk.distance,
       );
       dummy.position.copy(pos);
-      dummy.scale.set(1, 1, 1);
+      const isProducing = trk.intensity > 0.001;
+      dummy.scale.set(isProducing ? 1 : 0, isProducing ? 1 : 0, isProducing ? 1 : 0);
       dummy.updateMatrix();
       particleMesh.setMatrixAt(i, dummy.matrix);
-      particleMesh.setColorAt(i, getFlowParticleColor(trk.baseIntensity));
+      particleMesh.setColorAt(i, getFlowParticleColor(trk.intensity));
     }
     particleMesh.instanceMatrix.needsUpdate = true;
     if (particleMesh.instanceColor) {
@@ -191,7 +234,8 @@ export function createElectricityFlowVisualizer(
 
     for (let i = 0; i < particleCount; i++) {
       const trk = trackers[i];
-      trk.distance = (trk.distance + trk.speed * dt) % trk.route.totalLength;
+      const speed = trk.baseSpeed * Math.max(0.2, trk.intensity);
+      trk.distance = (trk.distance + speed * dt) % trk.route.totalLength;
 
       const pos = samplePointAlongPolyline(
         trk.route.points,
@@ -201,15 +245,38 @@ export function createElectricityFlowVisualizer(
       );
 
       dummyMatrix.position.copy(pos);
-      // Slight pulsating scale based on intensity
-      const pulse = 1.0 + 0.15 * Math.sin(trk.distance * 4);
-      dummyMatrix.scale.set(pulse, pulse, pulse);
+
+      // Hide particle completely if power is zero (night-time)
+      if (trk.intensity <= 0.001) {
+        dummyMatrix.scale.set(0, 0, 0);
+      } else {
+        const pulse = (0.8 + 0.3 * trk.intensity) * (1.0 + 0.12 * Math.sin(trk.distance * 5));
+        dummyMatrix.scale.set(pulse, pulse, pulse);
+      }
       dummyMatrix.updateMatrix();
 
       particleMesh.setMatrixAt(i, dummyMatrix.matrix);
     }
 
     particleMesh.instanceMatrix.needsUpdate = true;
+  };
+
+  const updateIntensities = (newTopology: ElectricalTopology) => {
+    if (!particleMesh) return;
+    const routeMap = new Map<string, number>();
+    for (const r of newTopology.routes) {
+      routeMap.set(r.id, r.flowIntensity);
+    }
+
+    for (let i = 0; i < trackers.length; i++) {
+      const trk = trackers[i];
+      const updatedInt = routeMap.get(trk.route.id) ?? trk.route.flowIntensity;
+      trk.intensity = updatedInt;
+      particleMesh.setColorAt(i, getFlowParticleColor(updatedInt));
+    }
+    if (particleMesh.instanceColor) {
+      particleMesh.instanceColor.needsUpdate = true;
+    }
   };
 
   const dispose = () => {
@@ -222,6 +289,7 @@ export function createElectricityFlowVisualizer(
   return {
     group,
     update,
+    updateIntensities,
     dispose,
   };
 }

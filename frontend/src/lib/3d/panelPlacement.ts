@@ -233,7 +233,7 @@ export function placementCacheKey(request: PlacementRequest): string {
         .join(";")
     : "";
   const c = config;
-  const cStr = `${c.panelTypeId}:${c.mounting}:${c.tiltDeg}:${c.azimuthDeg}:${c.spacingM}:${c.rowSpacingM ?? ""}:${c.colSpacingM ?? ""}:${c.setbackM}:${c.setRows}:${c.setCols}`;
+  const cStr = `${c.panelTypeId}:${c.mounting}:${c.tiltDeg}:${c.azimuthDeg}:${c.spacingM}:${c.rowSpacingM ?? ""}:${c.colSpacingM ?? ""}:${c.setbackM}:${c.setRows}:${c.setCols}:${c.orientation ?? "portrait"}:${c.customWidthM ?? ""}:${c.customLengthM ?? ""}`;
   return `${tStr}|${oStr}|${cStr}|${formatCoord(obstacleClearanceM)}`;
 }
 
@@ -349,13 +349,10 @@ function computePlacePanels(request: PlacementRequest): PlacementResult {
    * column. Sweeping deterministic phases and keeping the densest result
    * recovers those columns without changing the spacing rule: within any one
    * phase the step is still exactly one panel pitch per axis.
-   * In 1x1 mode, 4 canonical phases ([0, 0.5, 0.25, 0.75], 16 combinations) plus
-   * residual filling achieve optimal packing while executing in <100ms.
+   * Combined with boundary-aligned phases and residual tiling, 4 canonical phases
+   * ([0, 0.5, 0.25, 0.75], 16 combinations) achieve optimal packing within tens of milliseconds.
    */
-  const PHASES =
-    rows === 1 && cols === 1
-      ? [0, 0.5, 0.25, 0.75]
-      : [0, 0.5, 0.25, 0.75, 0.125, 0.375];
+  const PHASES = [0, 0.5, 0.25, 0.75];
 
   let best: PlacedPanel[] = [];
   for (const phaseU of PHASES) {
@@ -369,13 +366,19 @@ function computePlacePanels(request: PlacementRequest): PlacementResult {
     }
   }
 
-  // In Single Panel mode (1x1), perform a secondary residual filling pass.
-  // Irregular, concave, or L-shaped roofs may have narrow wings or pockets that
-  // fall between the primary lattice lines. We scan residual candidate slots
-  // at half-step sub-offsets to completely pack all disconnected pockets of the roof.
-  if (rows === 1 && cols === 1 && best.length > 0) {
-    best = fillResidualSlots(best);
+  // Also evaluate boundary-aligned candidate phases along the terrace boundary
+  // so tapered and slanted roof edges establish natural alignment lines.
+  const boundaryPhases = deriveBoundaryPhases();
+  for (const bp of boundaryPhases) {
+    const placed = latticeAt(bp.originU, bp.originV);
+    if (placed.length > best.length) best = placed;
   }
+
+  // Perform residual candidate tiling.
+  // In Single Panel mode (1x1), we systematically explore finer sub-steps and boundary-aligned
+  // residual positions to discover every feasible slot missed between grid lines and along tapered edges.
+  // In Panel Set mode, we also scan residual regions for complete, non-colliding sets.
+  best = fillResidualSlots(best);
 
   if (best.length === 0) {
     return {
@@ -389,24 +392,51 @@ function computePlacePanels(request: PlacementRequest): PlacementResult {
   return { panels: best, reason: null };
 
   /**
+   * Derive candidate grid origins aligned with the actual terrace boundary segments.
+   * For each vertex and edge of the terrace (projected into the panel frame),
+   * this computes the modulo phase (0..step) so candidate panels can sit flush against
+   * the boundary edges rather than being strictly tied to the global bounding box minimum.
+   */
+  function deriveBoundaryPhases(): Array<{ originU: number; originV: number }> {
+    const origins: Array<{ originU: number; originV: number }> = [];
+    const seen = new Set<string>();
+
+    for (const pt of terrace) {
+      const pu = pt.x * u.x + pt.y * u.y;
+      const pv = pt.x * v.x + pt.y * v.y;
+      // Inward offset from vertex by inset
+      for (const signU of [-1, 1]) {
+        for (const signV of [-1, 1]) {
+          const testU = pu + signU * insetU;
+          const testV = pv + signV * insetV;
+          // Normalize into base phase relative to uMin / vMin
+          const offU = ((testU - (uMin + insetU)) % stepU + stepU) % stepU;
+          const offV = ((testV - (vMin + insetV)) % stepV + stepV) % stepV;
+          const key = `${Math.round(offU * 100)},${Math.round(offV * 100)}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            origins.push({
+              originU: uMin + insetU + offU,
+              originV: vMin + insetV + offV,
+            });
+          }
+        }
+      }
+    }
+    // Limit boundary origins to avoid unbounded evaluation while keeping coverage broad
+    return origins.slice(0, 8);
+  }
+
+  /**
    * One lattice anchored at (originU, originV) in the panel frame. Each
    * lattice point is the centre of panel (0, 0) of a candidate rows x cols
    * block; the block is accepted only when EVERY panel in it passes the
    * roof, obstacle and peer checks (all-or-nothing: a set never straddles
    * an edge, an obstacle or another set). Block pitch equals the intra-set
    * panel pitch, so gaps stay uniform within and between sets.
-   *
-   * Crucially, candidate rows and columns are searched across the full
-   * bounding extent. A row or section that cannot fit a panel (e.g. Due to
-   * a courtyard, notch, obstacle, or setback) does NOT terminate the search,
-   * ensuring concave/L-shaped/U-shaped roofs and separated usable regions
-   * are fully packed to maximum feasible density.
    */
   function latticeAt(originU: number, originV: number): PlacedPanel[] {
     const placed: PlacedPanel[] = [];
-    // Hard bounds in the panel frame: the terrace bounding box guarantees no
-    // valid centre lies outside it, so the loops can never run away even if a
-    // phase starts completely off-roof (which `continue`s on every candidate).
     const uLimit = uMax;
     const vLimit = vMax;
     for (let bv = originV; bv <= vLimit + 1e-9; bv += stepV) {
@@ -456,8 +486,6 @@ function computePlacePanels(request: PlacementRequest): PlacementResult {
     // the per-axis clear gap between panel edges. Siblings inside this
     // block are exactly one pitch apart by construction, so only the
     // accepted set needs checking.
-    // Cheap circular bounding box distance check: panels with centre distance
-    // greater than the sum of circumscribed radii cannot possibly overlap.
     const maxDiag = (Math.hypot(width, length) + Math.hypot(width + inflateU, length + inflateV)) / 2;
     const maxDistSq = maxDiag * maxDiag;
 
@@ -487,41 +515,75 @@ function computePlacePanels(request: PlacementRequest): PlacementResult {
   }
 
   /**
-   * Deterministic residual filling for Single Panel mode.
-   * Tests fine candidate positions across the bounding box that don't collide
+   * Systematic geometry-based residual filling.
+   * Tests fine candidate positions across the usable roof area that don't collide
    * with existing placed panels, obstacles, or setbacks.
-   * Scans half-step and quarter-step sub-offsets to pack narrow corners and
-   * tapered roof wings that miss the primary coarse lattice.
+   *
+   * For Single Panel mode: scans half-step, quarter-step, and boundary-directed sub-offsets
+   * to systematically pack tapered roof wings, irregular corners, and remaining feasible gaps.
+   *
+   * For Panel Set mode: scans sub-offsets for complete set blocks, allowing sets to fit into
+   * residual roof regions without ever breaking set indivisibility.
    */
   function fillResidualSlots(current: PlacedPanel[]): PlacedPanel[] {
     let placed = [...current];
     const uLimit = uMax - insetU;
     const vLimit = vMax - insetV;
-    const subStepU = stepU / 2;
-    const subStepV = stepV / 2;
 
-    // Pass 1: Half-step grid
-    for (let pv = vMin + insetV; pv <= vLimit + 1e-9; pv += subStepV) {
-      for (let pu = uMin + insetU; pu <= uLimit + 1e-9; pu += subStepU) {
-        const block = blockAt(pu, pv, placed);
+    if (rows === 1 && cols === 1) {
+      // Single Panel mode: fine sub-step searches
+      const subStepU = stepU / 2;
+      const subStepV = stepV / 2;
+      const qStepU = stepU / 4;
+      const qStepV = stepV / 4;
+
+      // Pass 1: Half-step grid
+      for (let pv = vMin + insetV; pv <= vLimit + 1e-9; pv += subStepV) {
+        for (let pu = uMin + insetU; pu <= uLimit + 1e-9; pu += subStepU) {
+          const block = blockAt(pu, pv, placed);
+          if (block === null) continue;
+          for (const panel of block) placed.push({ ...panel, index: placed.length });
+        }
+      }
+
+      // Pass 2: Quarter-step offsets across both axes
+      const subOffsets = [
+        { du: qStepU, dv: 0 },
+        { du: 0, dv: qStepV },
+        { du: qStepU, dv: qStepV },
+        { du: 3 * qStepU, dv: qStepV },
+        { du: qStepU, dv: 3 * qStepV },
+        { du: 3 * qStepU, dv: 3 * qStepV },
+      ];
+
+      for (const off of subOffsets) {
+        for (let pv = vMin + insetV + off.dv; pv <= vLimit + 1e-9; pv += subStepV) {
+          for (let pu = uMin + insetU + off.du; pu <= uLimit + 1e-9; pu += subStepU) {
+            const block = blockAt(pu, pv, placed);
+            if (block === null) continue;
+            for (const panel of block) placed.push({ ...panel, index: placed.length });
+          }
+        }
+      }
+
+      // Pass 3: Edge-aligned residual candidate exploration
+      // For each edge of the terrace, test candidates offset perpendicularly inward
+      // from the boundary edge to recover tapered roof margins.
+      const edgeCandidates = deriveEdgeResidualCandidates(placed);
+      for (const cand of edgeCandidates) {
+        const block = blockAt(cand.u, cand.v, placed);
         if (block === null) continue;
         for (const panel of block) placed.push({ ...panel, index: placed.length });
       }
-    }
+    } else {
+      // Panel Set mode: search for additional complete set blocks in residual regions
+      const setBlockW = cols * width + (cols - 1) * colSpacing;
+      const setBlockL = rows * length + (rows - 1) * rowSpacing;
+      const subStepU = Math.max(stepU / 2, width);
+      const subStepV = Math.max(stepV / 2, length);
 
-    // Pass 2: Quarter-step offset grid to recover tapered edges and narrow margins
-    const qStepU = stepU / 4;
-    const qStepV = stepV / 4;
-    const offsets = [
-      { du: qStepU, dv: 0 },
-      { du: 0, dv: qStepV },
-      { du: qStepU, dv: qStepV },
-      { du: 3 * qStepU, dv: qStepV },
-    ];
-
-    for (const off of offsets) {
-      for (let pv = vMin + insetV + off.dv; pv <= vLimit + 1e-9; pv += subStepV) {
-        for (let pu = uMin + insetU + off.du; pu <= uLimit + 1e-9; pu += subStepU) {
+      for (let pv = vMin + insetV; pv <= vMax - setBlockL / 2 + 1e-9; pv += subStepV) {
+        for (let pu = uMin + insetU; pu <= uMax - setBlockW / 2 + 1e-9; pu += subStepU) {
           const block = blockAt(pu, pv, placed);
           if (block === null) continue;
           for (const panel of block) placed.push({ ...panel, index: placed.length });
@@ -530,5 +592,78 @@ function computePlacePanels(request: PlacementRequest): PlacementResult {
     }
 
     return placed;
+  }
+
+  /**
+   * Derive candidate coordinates placed near roof edges and existing panel bounds
+   * to catch remaining gaps along diagonal or tapered boundaries.
+   */
+  function deriveEdgeResidualCandidates(accepted: PlacedPanel[]): Array<{ u: number; v: number }> {
+    const candidates: Array<{ u: number; v: number }> = [];
+    const seen = new Set<string>();
+
+    // Test positions spaced along each terrace edge (inward by setback + panel half-extent)
+    for (let i = 0; i < terrace.length; i++) {
+      const p1 = terrace[i];
+      const p2 = terrace[(i + 1) % terrace.length];
+      const edgeLen = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+      if (edgeLen < Math.min(width, length)) continue;
+
+      const numSamples = Math.min(Math.ceil(edgeLen / Math.min(width, length)), 20);
+      for (let s = 1; s < numSamples; s++) {
+        const t = s / numSamples;
+        const worldX = p1.x + t * (p2.x - p1.x);
+        const worldY = p1.y + t * (p2.y - p1.y);
+
+        // Compute inward normal for this edge
+        const dx = p2.x - p1.x;
+        const dy = p2.y - p1.y;
+        const len = Math.hypot(dx, dy) || 1;
+        // Right hand normal
+        const nx = -dy / len;
+        const ny = dx / len;
+
+        // Try offsetting inward by inset distance
+        for (const dist of [insetU, insetV, Math.max(insetU, insetV)]) {
+          const candX = worldX + nx * dist;
+          const candY = worldY + ny * dist;
+          const candU = candX * u.x + candY * u.y;
+          const candV = candX * v.x + candY * v.y;
+
+          if (candU >= uMin + insetU && candU <= uMax - insetU && candV >= vMin + insetV && candV <= vMax - insetV) {
+            const key = `${Math.round(candU * 10)},${Math.round(candV * 10)}`;
+            if (!seen.has(key)) {
+              seen.add(key);
+              candidates.push({ u: candU, v: candV });
+            }
+          }
+        }
+      }
+    }
+
+    // Also test adjacent positions directly offset from accepted panel edges
+    for (const p of accepted) {
+      const pu = p.x * u.x + p.y * u.y;
+      const pv = p.x * v.x + p.y * v.y;
+      const adjOffsets = [
+        { du: stepU, dv: 0 },
+        { du: -stepU, dv: 0 },
+        { du: 0, dv: stepV },
+        { du: 0, dv: -stepV },
+      ];
+      for (const adj of adjOffsets) {
+        const candU = pu + adj.du;
+        const candV = pv + adj.dv;
+        if (candU >= uMin + insetU && candU <= uMax - insetU && candV >= vMin + insetV && candV <= vMax - insetV) {
+          const key = `${Math.round(candU * 10)},${Math.round(candV * 10)}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            candidates.push({ u: candU, v: candV });
+          }
+        }
+      }
+    }
+
+    return candidates;
   }
 }

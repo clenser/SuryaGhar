@@ -417,5 +417,193 @@ describe("placePanels", () => {
     expect(topSection.length).toBeGreaterThan(5);
     expect(bottomSection.length).toBeGreaterThan(10);
   });
+
+  describe("Geometry-based roof tiling regression suite (§7)", () => {
+    // Fixture A: Long tapered roof matching screenshot proportions
+    // Wide central base narrowing to a tapered point/wing
+    const longTaperedTerrace: Point2[] = [
+      { x: -25, y: -12 },
+      { x: 25, y: -12 },
+      { x: 8, y: 18 },
+      { x: -15, y: 18 },
+    ];
+
+    it("Fixture A (Tapered roof): systematically searches wide central region and narrow tapered wings", () => {
+      const config = { ...DEFAULT_PANEL_CONFIG, setRows: 1, setCols: 1, setbackM: 0.5 };
+      const { panels, reason } = placePanels({
+        terrace: longTaperedTerrace,
+        obstacles: [],
+        config,
+      });
+      expect(reason).toBeNull();
+      // Systematic tiling must densely populate the tapered structure
+      expect(panels.length).toBeGreaterThanOrEqual(100);
+
+      // Verify narrow top wing (y > 10) and wide base (y < -5) both receive valid panels
+      const topWing = panels.filter((p) => p.y > 10);
+      const centerRegion = panels.filter((p) => p.y >= -5 && p.y <= 10);
+      const baseRegion = panels.filter((p) => p.y < -5);
+
+      expect(topWing.length).toBeGreaterThan(10);
+      expect(centerRegion.length).toBeGreaterThan(40);
+      expect(baseRegion.length).toBeGreaterThan(30);
+
+      // Verify all panels satisfy setbacks and non-overlap
+      const type = panelTypeDefinition(config.panelTypeId);
+      for (let i = 0; i < panels.length; i++) {
+        const p = panels[i];
+        const inset = rectangleCorners(
+          p.x,
+          p.y,
+          type.widthM + 2 * config.setbackM,
+          type.lengthM + 2 * config.setbackM,
+          p.rotationDeg,
+        );
+        expect(footprintInsidePolygon(inset, longTaperedTerrace)).toBe(true);
+
+        const rectA = rectangleCorners(p.x, p.y, type.widthM + config.spacingM, type.lengthM + config.spacingM, p.rotationDeg);
+        for (let j = i + 1; j < panels.length; j++) {
+          const p2 = panels[j];
+          const rectB = rectangleCorners(p2.x, p2.y, type.widthM, type.lengthM, p2.rotationDeg);
+          expect(footprintsOverlap(rectA, rectB)).toBe(false);
+        }
+      }
+    });
+
+    it("Fixture B (Rectangular roof): preserves dense regular placement without regressions", () => {
+      const terrace = rectRing(40, 20);
+      const config = { ...DEFAULT_PANEL_CONFIG, setRows: 1, setCols: 1, setbackM: 0.5, spacingM: 0.2 };
+      const { panels, reason } = placePanels({
+        terrace,
+        obstacles: [],
+        config,
+      });
+      expect(reason).toBeNull();
+      // 40m x 20m roof with 1.13m x 2.28m panels: theoretical max ~ 28 x 7 = 196
+      expect(panels.length).toBeGreaterThanOrEqual(180);
+    });
+
+    it("Fixture C (Concave L-shaped roof): populates both wings independently across empty regions", () => {
+      const lTerrace: Point2[] = [
+        { x: -15, y: -15 },
+        { x: 15, y: -15 },
+        { x: 15, y: -2 },
+        { x: -2, y: -2 },
+        { x: -2, y: 15 },
+        { x: -15, y: 15 },
+      ];
+      const config = { ...DEFAULT_PANEL_CONFIG, setRows: 1, setCols: 1, setbackM: 0.5 };
+      const { panels, reason } = placePanels({
+        terrace: lTerrace,
+        obstacles: [],
+        config,
+      });
+      expect(reason).toBeNull();
+      expect(panels.length).toBeGreaterThan(60);
+
+      const verticalWing = panels.filter((p) => p.y > 0 && p.x < 0);
+      const horizontalWing = panels.filter((p) => p.x > 0 && p.y < 0);
+      expect(verticalWing.length).toBeGreaterThan(15);
+      expect(horizontalWing.length).toBeGreaterThan(20);
+    });
+
+    it("Fixture D (Obstacle-divided roof): populates both sides of the dividing obstacle", () => {
+      const terrace = rectRing(30, 20);
+      const divider: Obstacle = {
+        id: "long-wall",
+        type: "staircase-room",
+        position: { x: 0, y: 0 },
+        width: 2,
+        length: 18,
+        height: 2.5,
+        rotation: 0,
+      };
+      const config = { ...DEFAULT_PANEL_CONFIG, setRows: 1, setCols: 1, setbackM: 0.5 };
+      const { panels, reason } = placePanels({
+        terrace,
+        obstacles: [divider],
+        config,
+      });
+      expect(reason).toBeNull();
+      const westPanels = panels.filter((p) => p.x < -1.5);
+      const eastPanels = panels.filter((p) => p.x > 1.5);
+      expect(westPanels.length).toBeGreaterThan(30);
+      expect(eastPanels.length).toBeGreaterThan(30);
+    });
+
+    it("Fixture E (Panel Set mode): places complete, indivisible blocks in tapered and residual regions", () => {
+      const terrace = rectRing(30, 20);
+      const config = { ...DEFAULT_PANEL_CONFIG, setRows: 2, setCols: 4, setbackM: 0.5 };
+      const { panels, reason } = placePanels({
+        terrace,
+        obstacles: [],
+        config,
+      });
+      expect(reason).toBeNull();
+      // Block size = 2 * 4 = 8
+      expect(panels.length % 8).toBe(0);
+      expect(panels.length).toBeGreaterThanOrEqual(32);
+    });
+
+    it("Fixture G (Determinism and Caching): identical inputs return identical layouts and invalidate on changes", () => {
+      const terrace = rectRing(25, 20);
+      const req1 = request({ terrace, config: { ...DEFAULT_PANEL_CONFIG, setRows: 1, setCols: 1 } });
+      const req2 = request({ terrace, config: { ...DEFAULT_PANEL_CONFIG, setRows: 1, setCols: 1 } });
+      const res1 = placePanels(req1);
+      const res2 = placePanels(req2);
+      expect(res1.panels).toEqual(res2.panels);
+
+      // Invalidation on orientation change
+      const resLandscape = placePanels({
+        ...req1,
+        config: { ...req1.config, orientation: "landscape" },
+      });
+      expect(resLandscape.panels).not.toEqual(res1.panels);
+
+      // Invalidation on custom dimensions
+      const resCustom = placePanels({
+        ...req1,
+        config: { ...req1.config, customWidthM: 1.5, customLengthM: 2.0 },
+      });
+      expect(resCustom.panels).not.toEqual(res1.panels);
+    });
+
+    it("Fixture H (Independent gap validation): no large feasible gaps remain unexplored", () => {
+      const terrace = longTaperedTerrace;
+      const config = { ...DEFAULT_PANEL_CONFIG, setRows: 1, setCols: 1, setbackM: 0.5, spacingM: 0.2 };
+      const { panels } = placePanels({ terrace, obstacles: [], config });
+
+      const type = panelTypeDefinition(config.panelTypeId);
+      const candidateWidth = type.widthM;
+      const candidateLength = type.lengthM;
+
+      // Sample a test grid across the terrace interior
+      // If any grid location can accommodate a full panel (including setbacks and spacing from all existing panels),
+      // we check how many unplaced candidates exist. In our systematic search, there should be virtually 0 unplaced
+      // standard-aligned candidates.
+      let missedFeasibleSlots = 0;
+      const stepSample = 1.0;
+      for (let y = -11; y <= 17; y += stepSample) {
+        for (let x = -24; x <= 24; x += stepSample) {
+          const inset = rectangleCorners(x, y, candidateWidth + 2 * config.setbackM, candidateLength + 2 * config.setbackM, 0);
+          if (!footprintInsidePolygon(inset, terrace)) continue;
+
+          // Check if it collides with any placed panel (inflated by spacing)
+          const testRect = rectangleCorners(x, y, candidateWidth + config.spacingM, candidateLength + config.spacingM, 0);
+          const overlapsPlaced = panels.some((p) => {
+            const pRect = rectangleCorners(p.x, p.y, candidateWidth, candidateLength, p.rotationDeg);
+            return footprintsOverlap(testRect, pRect);
+          });
+
+          if (!overlapsPlaced) {
+            missedFeasibleSlots++;
+          }
+        }
+      }
+
+      // With systematic tiling, no major grid cluster of missed slots should be left open
+      expect(missedFeasibleSlots).toBe(0);
+    });
+  });
 });
 

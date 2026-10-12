@@ -352,6 +352,14 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
     const weatherPresetRef = useRef<WeatherPreset>(weatherPreset);
     weatherPresetRef.current = weatherPreset;
     const electricityFlowRef = useRef<ElectricityFlowHandle | null>(null);
+    const obstaclesRef = useRef(obstacles);
+    obstaclesRef.current = obstacles;
+    const treesRef = useRef(trees);
+    treesRef.current = trees;
+    const parapetHeightRef = useRef(parapet?.heightM ?? 0);
+    parapetHeightRef.current = parapet?.heightM ?? 0;
+    const panelLayersRef = useRef(panelLayers);
+    panelLayersRef.current = panelLayers;
 
     // Latest values for effects that must run exactly once per mount.
     const localCoordsRef = useRef(localCoords);
@@ -1048,10 +1056,22 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         shadingMetrics: l.shadingMetrics,
       }));
 
+      const sun = sunRef.current;
+      const sunState = sun ? sunStateAt(sun.samples, sun.timeMinutes) : null;
+      const solarAzimuthDeg = sunState ? sunState.azimuthDeg : 180;
+      const solarElevationDeg = sunState && !sunState.night ? sunState.elevationDeg : 0;
+      const weatherPreset = weatherPresetRef.current ?? "sunny";
+
       const topology = buildElectricalTopology({
         panelLayers: flowData,
         roofZ: localCoords.height,
         terraceRing,
+        solarAzimuthDeg,
+        solarElevationDeg,
+        weatherPreset,
+        obstacles: obstaclesRef.current,
+        trees: treesRef.current,
+        parapetHeightM: parapetHeightRef.current,
       });
 
       const handle = createElectricityFlowVisualizer(topology);
@@ -1816,6 +1836,8 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
 
       let lastRainTime: number | null = null;
       let lastFlowTime: number | null = null;
+      let lastFlowIntensityCheck = 0;
+      let lastAppliedSunState: { azimuthDeg: number; elevationDeg: number; weatherPreset: string } | null = null;
 
       const animate = (now: number) => {
         animationFrameRef.current = requestAnimationFrame(animate);
@@ -1883,6 +1905,44 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         if (electricityFlowRef.current) {
           const dt = lastFlowTime === null ? 0.016 : Math.min(Math.max((now - lastFlowTime) / 1000, 0), 0.1);
           electricityFlowRef.current.update(dt);
+
+          // Dynamically sync flow intensities to sun angle and shadow changes (throttled to ~5-10Hz)
+          if (now - lastFlowIntensityCheck >= 150) {
+            lastFlowIntensityCheck = now;
+            const currentSun = sunRef.current;
+            const sState = currentSun ? sunStateAt(currentSun.samples, currentSun.timeMinutes) : null;
+            const curAz = sState ? sState.azimuthDeg : 180;
+            const curEl = sState && !sState.night ? sState.elevationDeg : 0;
+            const curPreset = weatherPresetRef.current ?? "sunny";
+
+            const sunMoved =
+              lastAppliedSunState === null ||
+              Math.abs(lastAppliedSunState.azimuthDeg - curAz) > 0.2 ||
+              Math.abs(lastAppliedSunState.elevationDeg - curEl) > 0.2 ||
+              lastAppliedSunState.weatherPreset !== curPreset;
+
+            if (sunMoved && panelLayersRef.current && panelLayersRef.current.length > 0) {
+              lastAppliedSunState = { azimuthDeg: curAz, elevationDeg: curEl, weatherPreset: curPreset };
+              const tRing = localCoordsRef.current.vertices.map((v) => ({ x: v.x, y: v.y }));
+              const fData = panelLayersRef.current.map((l) => ({
+                config: l.config,
+                panels: l.panels,
+                shadingMetrics: l.shadingMetrics,
+              }));
+              const updatedTopology = buildElectricalTopology({
+                panelLayers: fData,
+                roofZ: localCoordsRef.current.height,
+                terraceRing: tRing,
+                solarAzimuthDeg: curAz,
+                solarElevationDeg: curEl,
+                weatherPreset: curPreset,
+                obstacles: obstaclesRef.current,
+                trees: treesRef.current,
+                parapetHeightM: parapetHeightRef.current,
+              });
+              electricityFlowRef.current.updateIntensities(updatedTopology);
+            }
+          }
         }
         lastFlowTime = now;
 

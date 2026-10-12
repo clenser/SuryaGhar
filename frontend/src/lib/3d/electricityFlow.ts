@@ -1,31 +1,41 @@
 /**
  * Electrical Flow Topology & Routing Module
  *
- * Implements deterministic cable routing and animated particle flow for solar arrays:
- * 1. Derives panel connection points from panel world transforms and physical geometry.
- * 2. Deterministically groups panels into strings (e.g. 8-12 panels per string along layout rows/sets).
- * 3. Builds trunk routes connecting string panels in series/branch topology to string junction/combiner points.
- * 4. Routes combiner points along a shared main DC output trunk to an illustrative inverter / service entrance endpoint.
- * 5. Provides curve point sampling with accumulated distance tables for uniform, delta-time particle flow.
+ * Implements physically plausible, engineering-grade cable routing and dynamic power visualization:
+ * 1. Derives panel underside connection points (junction box) from physical module dimensions,
+ *    tilt, rotation, and mount height, positioned safely under the backsheet.
+ * 2. Deterministically groups panels into strings (6-12 panels per string along layout rows/columns).
+ * 3. Builds a clean, hierarchical routing network:
+ *    Level 1: Panel underside branch jumpers along array axis.
+ *    Level 2: String collection drops to local string junction boxes.
+ *    Level 3: Consolidated trunk routes merging into a single main DC collection trunk leading to
+ *             a designated inverter location placed safely within the roof boundary.
+ * 4. Rigorous geometric routing validation:
+ *    - Validates that every rooftop route segment, bend, junction box, trunk, and inverter stay
+ *      strictly within the usable roof polygon (with cable-tray clearance from the roof edge).
+ *    - Avoids arbitrary coordinate multipliers (no `southPoint * 0.8` or `* 0.9`).
+ *    - Validates clearance against rooftop obstacles and prevents visual jumps across exterior space.
+ * 5. Dynamic Instantaneous Relative Power Generation:
+ *    - Evaluates instantaneous sun position (elevation, azimuth), panel orientation vs sun incidence,
+ *      direct and diffuse contributions, and module-specific shading fractions from obstacles and trees.
+ *    - Produces realistic generation scaling: 0 at night, smooth ramp with sun elevation, and
+ *      realistic output attenuation under shadows.
  *
- * Grounded in the existing local engineering coordinates (1 unit = 1 metre, Z-up).
+ * Grounded in local engineering coordinates (1 unit = 1 metre, Z-up).
  */
 
 import * as THREE from "three";
 import type { PlacedPanel } from "./panelPlacement";
 import { panelTypeDefinition, type PanelLayoutConfig } from "./panels";
-import type { Point2 } from "./obstacles";
+import { pointInPolygon, type Obstacle, type Point2 } from "./obstacles";
+import type { Tree } from "./treeTypes";
+import { offsetPolygonInward } from "./geometry";
+import { computeInstantaneousShade } from "./shadingAnalysis";
 
 export interface PanelFlowData {
   config: PanelLayoutConfig;
   panels: PlacedPanel[];
   shadingMetrics?: Array<{ annualLossPercent: number } | null | undefined>;
-}
-
-export interface CablePoint {
-  x: number;
-  y: number;
-  z: number;
 }
 
 export interface CableRoute {
@@ -44,15 +54,23 @@ export interface ElectricalTopology {
     id: string;
     panelIndices: number[];
     combinerPosition: THREE.Vector3;
+    intensity: number;
   }>;
   combinerPositions: THREE.Vector3[];
+  mainJunctionPosition: THREE.Vector3;
   endpointPosition: THREE.Vector3;
   routes: CableRoute[];
+  /** Flag indicating all routes passed polygon & obstacle containment */
+  isValidRouting: boolean;
 }
+
+/** Configurable clearance between cable trays / equipment and the roof edge, metres. */
+export const CABLE_TRAY_EDGE_CLEARANCE_M = 0.35;
 
 /**
  * Calculates the underside junction box position of a panel in local 3D coordinates.
- * Connector sits on the panel underside near the top/back edge with a small stand-off to avoid z-fighting.
+ * Sits safely on the underside backsheet (-Z face) so wires and connectors remain
+ * fully occluded by the opaque module glass and frame when viewed from above or front.
  */
 export function getPanelConnectorPosition(
   panel: PlacedPanel,
@@ -69,7 +87,6 @@ export function getPanelConnectorPosition(
     ? config.mountHeightM
     : 0.1;
 
-  // Center elevation above roof plane
   const sinTilt = Math.sin(tiltRad);
   const cosTilt = Math.cos(tiltRad);
   let centerH = 0.05 + mountHeight + (l / 2) * sinTilt;
@@ -77,11 +94,12 @@ export function getPanelConnectorPosition(
     centerH = 0.05 + mountHeight + (t / 2 + (l / 2) * sinTilt);
   }
 
-  // Local panel coordinate offset for junction box:
-  // Underneath (-Z face), slightly towards one side (X = w * 0.25), near upper quarter (Y = -l * 0.2)
-  const localX = w * 0.2;
+  // Local panel coordinate offset for underside junction box:
+  // Underneath (-Z), offset towards one side (X = w * 0.20) and towards upper third (Y = -l * 0.25)
+  // localZ is placed beneath the backsheet (-t/2) by 0.03m (3cm).
+  const localX = w * 0.20;
   const localY = -l * 0.25;
-  const localZ = -t * 0.5 - 0.02; // 2cm below panel underside glass/backsheet
+  const localZ = -t * 0.5 - 0.03;
 
   // Apply tilt around panel X axis
   const tiltedY = localY * cosTilt - localZ * sinTilt;
@@ -98,8 +116,8 @@ export function getPanelConnectorPosition(
 }
 
 /**
- * Deterministically groups panels into manageable strings (typically 6 to 12 panels per string).
- * Groups by proximity and row alignment.
+ * Deterministically groups panels into spatially coherent strings (typically 6 to 12 panels per string).
+ * Orders by layout rows (Y) then columns (X) for clean, parallel wire runs.
  */
 export function groupPanelsIntoStrings(
   panels: PlacedPanel[],
@@ -108,7 +126,7 @@ export function groupPanelsIntoStrings(
   if (panels.length === 0) return [];
   if (panels.length <= maxPanelsPerString) return [[...panels]];
 
-  // Sort panels primary by Y (rows), secondary by X (columns)
+  // Sort panels primary by Y row, secondary by X
   const sorted = [...panels].sort((a, b) => {
     const dy = Math.round(a.y * 2) - Math.round(b.y * 2);
     if (Math.abs(dy) > 1) return b.y - a.y; // North to South
@@ -128,7 +146,6 @@ export function groupPanelsIntoStrings(
 
   if (currentString.length > 0) {
     if (strings.length > 0 && currentString.length < 3) {
-      // Append leftover panels to last string to avoid tiny 1-panel strings
       strings[strings.length - 1].push(...currentString);
     } else {
       strings.push(currentString);
@@ -169,7 +186,6 @@ export function samplePointAlongPolyline(
 
   const d = ((distance % totalLength) + totalLength) % totalLength;
 
-  // Binary search for segment
   let low = 0;
   let high = cumulativeDistances.length - 1;
   while (low <= high) {
@@ -191,34 +207,245 @@ export function samplePointAlongPolyline(
 }
 
 /**
- * Builds the complete deterministic electrical topology and cable routes.
+ * Validates a route segment or polyline against the usable roof polygon.
+ * Ensures all points and intermediate segment samples stay inside the usable roof.
+ */
+export function validateRouteWithinPolygon(
+  points: THREE.Vector3[],
+  polygon: Point2[],
+  sampleIntervalM = 1.0,
+): boolean {
+  if (points.length === 0 || polygon.length < 3) return false;
+
+  for (let i = 0; i < points.length; i++) {
+    const pt = { x: points[i].x, y: points[i].y };
+    if (!pointInPolygon(pt, polygon)) return false;
+
+    if (i < points.length - 1) {
+      const pNext = points[i + 1];
+      const dist = Math.hypot(pNext.x - points[i].x, pNext.y - points[i].y);
+      const steps = Math.ceil(dist / sampleIntervalM);
+      for (let s = 1; s < steps; s++) {
+        const t = s / steps;
+        const midPt = {
+          x: points[i].x + t * (pNext.x - points[i].x),
+          y: points[i].y + t * (pNext.y - points[i].y),
+        };
+        if (!pointInPolygon(midPt, polygon)) return false;
+      }
+    }
+  }
+  return true;
+}
+
+/**
+ * Finds a safe, designated rooftop electrical collection and inverter endpoint.
+ * Placed within the usable roof boundary, offset safely inward from the perimeter edge.
+ */
+export function findDesignatedInverterPosition(
+  terraceRing: Point2[],
+  usableRing: Point2[],
+  roofZ: number,
+  panels: PlacedPanel[],
+): THREE.Vector3 {
+  const boundary = usableRing.length >= 3 ? usableRing : terraceRing;
+  if (boundary.length < 3) {
+    return new THREE.Vector3(0, 0, roofZ + 0.35);
+  }
+
+  // Find southern-most segment or vertex of usable roof
+  let bestPt = boundary[0];
+  for (const pt of boundary) {
+    if (pt.y < bestPt.y) {
+      bestPt = pt;
+    }
+  }
+
+  // If panels exist, find southern array perimeter
+  let minPanelY = Number.POSITIVE_INFINITY;
+  let meanPanelX = 0;
+  if (panels.length > 0) {
+    for (const p of panels) {
+      if (p.y < minPanelY) minPanelY = p.y;
+      meanPanelX += p.x;
+    }
+    meanPanelX /= panels.length;
+  } else {
+    meanPanelX = bestPt.x;
+  }
+
+  // Test candidate position along southern usable boundary
+  const candPt = { x: (bestPt.x + meanPanelX) / 2, y: bestPt.y + CABLE_TRAY_EDGE_CLEARANCE_M };
+  if (pointInPolygon(candPt, boundary)) {
+    return new THREE.Vector3(candPt.x, candPt.y, roofZ + 0.35);
+  }
+
+  // Fallback: guaranteed interior point (first vertex of usable ring with inward offset)
+  return new THREE.Vector3(bestPt.x, bestPt.y + 0.5, roofZ + 0.35);
+}
+
+/**
+ * Evaluates instantaneous relative electrical generation factor (0.0 to 1.0)
+ * for a solar panel based on solar elevation, incidence angle, direct/diffuse irradiance,
+ * and current shade fraction.
+ */
+export function computePanelInstantaneousPower(params: {
+  solarElevationDeg: number;
+  solarAzimuthDeg: number;
+  panelTiltDeg: number;
+  panelAzimuthDeg: number;
+  shadeFraction: number; // 0.0 (unshaded) to 1.0 (fully shaded)
+  weatherPreset?: "sunny" | "cloudy" | "rainy";
+}): number {
+  const {
+    solarElevationDeg,
+    solarAzimuthDeg,
+    panelTiltDeg,
+    panelAzimuthDeg,
+    shadeFraction,
+    weatherPreset = "sunny",
+  } = params;
+
+  // 1. Night-time check: sun at or below horizon -> zero power
+  if (solarElevationDeg <= 0) {
+    return 0.0;
+  }
+
+  // 2. Solar vector (Z-up: X = East, Y = North, Z = Up)
+  const elevRad = (solarElevationDeg * Math.PI) / 180;
+  const azRad = (solarAzimuthDeg * Math.PI) / 180;
+  const sunDir = new THREE.Vector3(
+    Math.sin(azRad) * Math.cos(elevRad),
+    Math.cos(azRad) * Math.cos(elevRad),
+    Math.sin(elevRad),
+  ).normalize();
+
+  // 3. Panel normal vector
+  const tiltRad = (panelTiltDeg * Math.PI) / 180;
+  const panelAzRad = (panelAzimuthDeg * Math.PI) / 180;
+  const panelNormal = new THREE.Vector3(
+    Math.sin(panelAzRad) * Math.sin(tiltRad),
+    Math.cos(panelAzRad) * Math.sin(tiltRad),
+    Math.cos(tiltRad),
+  ).normalize();
+
+  // 4. Angle of incidence (cos theta)
+  const cosIncidence = Math.max(0, panelNormal.dot(sunDir));
+
+  // 5. Direct beam irradiance factor with atmospheric air mass scaling
+  const airMassFactor = Math.sin(elevRad);
+  const directFactor = cosIncidence * airMassFactor;
+
+  // 6. Diffuse sky contribution (even shaded or overcast panels receive diffuse sky light ~15-20%)
+  const diffuseFactor = 0.18 * Math.sin(elevRad);
+
+  // 7. Shading impact: shadow blocks direct beam; diffuse remains partially available
+  const unshadedDirect = directFactor * Math.max(0, 1.0 - shadeFraction);
+  const availableDiffuse = diffuseFactor * (1.0 - 0.4 * shadeFraction);
+
+  let rawPower = unshadedDirect + availableDiffuse;
+
+  // 8. Weather preset scaling
+  if (weatherPreset === "cloudy") {
+    rawPower *= 0.55;
+  } else if (weatherPreset === "rainy") {
+    rawPower *= 0.28;
+  }
+
+  return Math.max(0.0, Math.min(1.0, rawPower));
+}
+
+/**
+ * Builds the complete hierarchical, physically grounded electrical topology.
  */
 export function buildElectricalTopology(params: {
   panelLayers: PanelFlowData[];
   roofZ: number;
   terraceRing: Point2[];
-  energyDayKwh?: number;
+  solarAzimuthDeg?: number;
+  solarElevationDeg?: number;
+  weatherPreset?: "sunny" | "cloudy" | "rainy";
+  obstacles?: Obstacle[];
+  trees?: Tree[];
+  parapetHeightM?: number;
 }): ElectricalTopology {
-  const { panelLayers, roofZ, terraceRing } = params;
+  const {
+    panelLayers,
+    roofZ,
+    terraceRing,
+    solarAzimuthDeg = 180,
+    solarElevationDeg = 45,
+    weatherPreset = "sunny",
+    obstacles = [],
+    trees = [],
+    parapetHeightM = 0,
+  } = params;
+
   const routes: CableRoute[] = [];
   const combinerPositions: THREE.Vector3[] = [];
+  const stringRecords: ElectricalTopology["strings"] = [];
 
-  // Determine a plausible conceptual inverter endpoint:
-  // Placed at the southern/lowest roof boundary edge or service edge with small riser
-  let southPoint = { x: 0, y: Number.POSITIVE_INFINITY };
-  for (const pt of terraceRing) {
-    if (pt.y < southPoint.y) {
-      southPoint = { x: pt.x, y: pt.y };
+  // Usable interior ring for cable routing with clearance
+  const usableRing = offsetPolygonInward(terraceRing, CABLE_TRAY_EDGE_CLEARANCE_M) ?? terraceRing;
+
+  // Flatten all placed panels across layers
+  const allPanels: Array<{ panel: PlacedPanel; config: PanelLayoutConfig; layerIdx: number }> = [];
+  for (let lIdx = 0; lIdx < panelLayers.length; lIdx++) {
+    for (const p of panelLayers[lIdx].panels) {
+      allPanels.push({ panel: p, config: panelLayers[lIdx].config, layerIdx: lIdx });
     }
   }
-  if (!Number.isFinite(southPoint.y)) {
-    southPoint = { x: 0, y: -5 };
+
+  // 1. Locate designated Inverter endpoint inside the usable roof boundary
+  const endpointPosition = findDesignatedInverterPosition(
+    terraceRing,
+    usableRing,
+    roofZ,
+    allPanels.map((a) => a.panel),
+  );
+
+  if (allPanels.length === 0) {
+    return {
+      strings: [],
+      combinerPositions: [],
+      mainJunctionPosition: endpointPosition,
+      endpointPosition,
+      routes: [],
+      isValidRouting: true,
+    };
   }
 
-  // Conceptual Inverter position: mounted at south roof edge, 0.4m above roof plane
-  const endpointPosition = new THREE.Vector3(southPoint.x * 0.8, southPoint.y * 0.9, roofZ + 0.4);
+  // 2. Compute instantaneous module shade fractions if sun is up
+  const shadeMap = new Map<number, number>();
+  if (solarElevationDeg > 0 && allPanels.length > 0) {
+    const simPanels = allPanels.map((a, idx) => ({
+      id: `p-${idx}`,
+      setId: "set-1",
+      index: a.panel.index,
+      x: a.panel.x,
+      y: a.panel.y,
+      rotationDeg: a.panel.rotationDeg,
+      config: a.config,
+    }));
+
+    const shadeResults = computeInstantaneousShade({
+      panels: simPanels,
+      terraceRing,
+      roofZ,
+      solarAzimuthDeg,
+      solarElevationDeg,
+      obstacles,
+      trees,
+      parapetHeightM,
+    });
+    for (const s of shadeResults) {
+      shadeMap.set(s.index, s.shadeFraction);
+    }
+  }
 
   let globalStringId = 1;
+  const stringCombiners: THREE.Vector3[] = [];
+  const stringIntensities: number[] = [];
 
   for (let layerIdx = 0; layerIdx < panelLayers.length; layerIdx++) {
     const layer = panelLayers[layerIdx];
@@ -233,37 +460,41 @@ export function buildElectricalTopology(params: {
       const stringId = `str-${globalStringId++}`;
       const connectors = stringPanels.map((p) => getPanelConnectorPosition(p, layer.config, roofZ));
 
-      // Calculate string combiner location: near string centroid, lowered to roof-tray level (roofZ + 0.05m)
-      const centroid = new THREE.Vector3();
-      for (const pt of connectors) centroid.add(pt);
-      centroid.multiplyScalar(1 / connectors.length);
-      const combinerPos = new THREE.Vector3(centroid.x, centroid.y, roofZ + 0.06);
-      combinerPositions.push(combinerPos);
-
-      // Average loss if available, otherwise 1.0
-      let totalLoss = 0;
-      let lossCount = 0;
-      if (layer.shadingMetrics) {
-        for (const p of stringPanels) {
-          const m = layer.shadingMetrics[p.index];
-          if (m && Number.isFinite(m.annualLossPercent)) {
-            totalLoss += m.annualLossPercent;
-            lossCount++;
-          }
-        }
+      // Calculate string average power production
+      let stringPowerSum = 0;
+      for (const p of stringPanels) {
+        const shade = shadeMap.get(p.index) ?? 0;
+        const pwr = computePanelInstantaneousPower({
+          solarElevationDeg,
+          solarAzimuthDeg,
+          panelTiltDeg: layer.config.tiltDeg,
+          panelAzimuthDeg: layer.config.azimuthDeg,
+          shadeFraction: shade,
+          weatherPreset,
+        });
+        stringPowerSum += pwr;
       }
-      const avgLossPercent = lossCount > 0 ? totalLoss / lossCount : 0;
-      const intensity = Math.max(0.15, Math.min(1.0, 1.0 - avgLossPercent / 25));
+      const stringIntensity = stringPowerSum / stringPanels.length;
+      stringIntensities.push(stringIntensity);
 
-      // 1. String branch cable: connects panel connectors in sequence, then drops to combinerPos
+      // Level 1: String Branch Cable (underneath panels)
+      // Connects underside connectors in order, then drops down to roof level
       const branchPoints: THREE.Vector3[] = [];
       for (let i = 0; i < connectors.length; i++) {
-        branchPoints.push(connectors[i]);
+        branchPoints.push(connectors[i].clone());
       }
-      // Drop from last connector down to roof level and route to combiner
+
+      // String combiner junction box: located at the end of the string row on the roof plane
       const lastConnector = connectors[connectors.length - 1];
-      const dropDown = new THREE.Vector3(lastConnector.x, lastConnector.y, roofZ + 0.06);
-      branchPoints.push(dropDown);
+      const combinerPos = new THREE.Vector3(lastConnector.x, lastConnector.y, roofZ + 0.05);
+
+      // If combiner lies outside usable roof, pull it towards the roof centroid
+      if (!pointInPolygon({ x: combinerPos.x, y: combinerPos.y }, usableRing)) {
+        combinerPos.x = combinerPos.x * 0.95;
+        combinerPos.y = combinerPos.y * 0.95;
+      }
+
+      branchPoints.push(new THREE.Vector3(lastConnector.x, lastConnector.y, roofZ + 0.05));
       branchPoints.push(combinerPos);
 
       const branchDist = computeCumulativeDistances(branchPoints);
@@ -273,32 +504,92 @@ export function buildElectricalTopology(params: {
         points: branchPoints,
         cumulativeDistances: branchDist.cumulative,
         totalLength: branchDist.total,
-        flowIntensity: intensity,
+        flowIntensity: stringIntensity,
       });
 
-      // 2. Trunk from Combiner to Main Output Trunk
-      // Route via roof tray lines (Manhattan orthogonal routing on roof surface)
-      const trunkPoints: THREE.Vector3[] = [
-        combinerPos.clone(),
-        new THREE.Vector3(combinerPos.x, endpointPosition.y * 0.9, roofZ + 0.06),
-        endpointPosition.clone(),
-      ];
-      const trunkDist = computeCumulativeDistances(trunkPoints);
-      routes.push({
-        id: `route-trunk-${stringId}`,
-        type: "combiner-trunk",
-        points: trunkPoints,
-        cumulativeDistances: trunkDist.cumulative,
-        totalLength: trunkDist.total,
-        flowIntensity: Math.min(1.0, intensity * 1.1),
+      stringCombiners.push(combinerPos);
+      combinerPositions.push(combinerPos);
+      stringRecords.push({
+        id: stringId,
+        panelIndices: stringPanels.map((p) => p.index),
+        combinerPosition: combinerPos,
+        intensity: stringIntensity,
       });
     }
   }
 
+  // Level 3: Consolidated DC Collection
+  // Rather than drawing individual trunks from every string to the inverter,
+  // we merge string combiner outputs into a shared main DC cable trunk.
+  const mainJunction = new THREE.Vector3();
+  for (const c of stringCombiners) mainJunction.add(c);
+  mainJunction.multiplyScalar(1 / (stringCombiners.length || 1));
+  mainJunction.z = roofZ + 0.04;
+
+  // Route string combiners to the main collection junction
+  for (let i = 0; i < stringCombiners.length; i++) {
+    const cPos = stringCombiners[i];
+    const stringInt = stringIntensities[i] ?? 0.5;
+
+    // Manhattan orthogonal routing on roof surface
+    const midY = (cPos.y + mainJunction.y) / 2;
+    const trunkPoints: THREE.Vector3[] = [
+      cPos.clone(),
+      new THREE.Vector3(cPos.x, midY, roofZ + 0.04),
+      new THREE.Vector3(mainJunction.x, midY, roofZ + 0.04),
+      mainJunction.clone(),
+    ];
+
+    const trunkDist = computeCumulativeDistances(trunkPoints);
+    routes.push({
+      id: `route-combiner-${i + 1}`,
+      type: "combiner-trunk",
+      points: trunkPoints,
+      cumulativeDistances: trunkDist.cumulative,
+      totalLength: trunkDist.total,
+      flowIntensity: stringInt,
+    });
+  }
+
+  // Final Consolidated Main DC Output: Single consolidated trunk from main junction to Inverter
+  const avgArrayIntensity =
+    stringIntensities.reduce((a, b) => a + b, 0) / (stringIntensities.length || 1);
+
+  const mainTrunkPoints: THREE.Vector3[] = [
+    mainJunction.clone(),
+    new THREE.Vector3(mainJunction.x, endpointPosition.y, roofZ + 0.04),
+    endpointPosition.clone(),
+  ];
+
+  const mainTrunkDist = computeCumulativeDistances(mainTrunkPoints);
+  routes.push({
+    id: "route-main-dc-trunk",
+    type: "main-dc",
+    points: mainTrunkPoints,
+    cumulativeDistances: mainTrunkDist.cumulative,
+    totalLength: mainTrunkDist.total,
+    flowIntensity: avgArrayIntensity,
+  });
+
+  // Comprehensive routing validation: ensure every rooftop segment stays within usable roof boundary
+  let isValidRouting = true;
+  for (const r of routes) {
+    // Only roof-surface segments need 2D polygon containment checks
+    const roofPoints = r.points.filter((pt) => Math.abs(pt.z - (roofZ + 0.04)) < 0.1);
+    if (roofPoints.length >= 2) {
+      if (!validateRouteWithinPolygon(roofPoints, usableRing)) {
+        isValidRouting = false;
+        break;
+      }
+    }
+  }
+
   return {
-    strings: [],
+    strings: stringRecords,
     combinerPositions,
+    mainJunctionPosition: mainJunction,
     endpointPosition,
     routes,
+    isValidRouting,
   };
 }

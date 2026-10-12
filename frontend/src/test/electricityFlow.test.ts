@@ -18,6 +18,7 @@ import {
   computeCumulativeDistances,
   samplePointAlongPolyline,
   buildElectricalTopology,
+  computePanelInstantaneousPower,
   type PanelFlowData,
 } from "../lib/3d/electricityFlow";
 import {
@@ -172,5 +173,165 @@ describe("Electrical Flow Topology & Routing", () => {
     // Dispose cleanly
     visualizer.dispose();
     expect(visualizer.group.children.length).toBe(0);
+  });
+
+  describe("Dynamic Instantaneous Power & Geometry Validation", () => {
+    it("returns zero power during night (solar elevation <= 0)", () => {
+      const nightPower = computePanelInstantaneousPower({
+        solarElevationDeg: -5,
+        solarAzimuthDeg: 180,
+        panelTiltDeg: 20,
+        panelAzimuthDeg: 180,
+        shadeFraction: 0,
+        weatherPreset: "sunny",
+      });
+      expect(nightPower).toBe(0.0);
+
+      const zeroElevPower = computePanelInstantaneousPower({
+        solarElevationDeg: 0,
+        solarAzimuthDeg: 180,
+        panelTiltDeg: 20,
+        panelAzimuthDeg: 180,
+        shadeFraction: 0,
+        weatherPreset: "sunny",
+      });
+      expect(zeroElevPower).toBe(0.0);
+    });
+
+    it("scales power with solar elevation and incidence angle", () => {
+      const highSunPower = computePanelInstantaneousPower({
+        solarElevationDeg: 60,
+        solarAzimuthDeg: 180,
+        panelTiltDeg: 20,
+        panelAzimuthDeg: 180,
+        shadeFraction: 0,
+        weatherPreset: "sunny",
+      });
+
+      const lowSunPower = computePanelInstantaneousPower({
+        solarElevationDeg: 15,
+        solarAzimuthDeg: 180,
+        panelTiltDeg: 20,
+        panelAzimuthDeg: 180,
+        shadeFraction: 0,
+        weatherPreset: "sunny",
+      });
+
+      expect(highSunPower).toBeGreaterThan(lowSunPower);
+      expect(highSunPower).toBeGreaterThan(0.5);
+    });
+
+    it("attenuates power under direct shading and weather conditions", () => {
+      const unshadedPower = computePanelInstantaneousPower({
+        solarElevationDeg: 50,
+        solarAzimuthDeg: 180,
+        panelTiltDeg: 20,
+        panelAzimuthDeg: 180,
+        shadeFraction: 0,
+        weatherPreset: "sunny",
+      });
+
+      const shadedPower = computePanelInstantaneousPower({
+        solarElevationDeg: 50,
+        solarAzimuthDeg: 180,
+        panelTiltDeg: 20,
+        panelAzimuthDeg: 180,
+        shadeFraction: 1.0, // full shadow
+        weatherPreset: "sunny",
+      });
+
+      const rainyPower = computePanelInstantaneousPower({
+        solarElevationDeg: 50,
+        solarAzimuthDeg: 180,
+        panelTiltDeg: 20,
+        panelAzimuthDeg: 180,
+        shadeFraction: 0,
+        weatherPreset: "rainy",
+      });
+
+      expect(shadedPower).toBeLessThan(unshadedPower);
+      expect(shadedPower).toBeGreaterThan(0.0); // retains partial diffuse light
+      expect(rainyPower).toBeLessThan(unshadedPower);
+    });
+
+    it("verifies designated inverter and routes stay strictly within usable roof polygon", () => {
+      const terraceRing = [
+        { x: -10, y: -8 },
+        { x: 10, y: -8 },
+        { x: 10, y: 8 },
+        { x: -10, y: 8 },
+      ];
+      const panels: PlacedPanel[] = [
+        { index: 0, x: -3, y: 0, rotationDeg: 0 },
+        { index: 1, x: 0, y: 0, rotationDeg: 0 },
+        { index: 2, x: 3, y: 0, rotationDeg: 0 },
+      ];
+
+      const topo = buildElectricalTopology({
+        panelLayers: [{ config: mockConfig, panels }],
+        roofZ: 15,
+        terraceRing,
+        solarElevationDeg: 45,
+        solarAzimuthDeg: 180,
+      });
+
+      expect(topo.isValidRouting).toBe(true);
+
+      // Verify designated inverter position is strictly inside terraceRing
+      const invPt = { x: topo.endpointPosition.x, y: topo.endpointPosition.y };
+      const insideTerrace =
+        invPt.x >= -10 && invPt.x <= 10 && invPt.y >= -8 && invPt.y <= 8;
+      expect(insideTerrace).toBe(true);
+
+      // Check all points of every route stay inside terrace bounds
+      for (const route of topo.routes) {
+        for (const pt of route.points) {
+          expect(pt.x).toBeGreaterThanOrEqual(-10);
+          expect(pt.x).toBeLessThanOrEqual(10);
+          expect(pt.y).toBeGreaterThanOrEqual(-8);
+          expect(pt.y).toBeLessThanOrEqual(8);
+        }
+      }
+    });
+
+    it("updates visualizer particle intensities dynamically without recreating meshes", () => {
+      const panels: PlacedPanel[] = [
+        { index: 0, x: -2, y: 0, rotationDeg: 0 },
+        { index: 1, x: 2, y: 0, rotationDeg: 0 },
+      ];
+      const terraceRing = [
+        { x: -5, y: -5 },
+        { x: 5, y: -5 },
+        { x: 5, y: 5 },
+        { x: -5, y: 5 },
+      ];
+
+      const daytimeTopo = buildElectricalTopology({
+        panelLayers: [{ config: mockConfig, panels }],
+        roofZ: 10,
+        terraceRing,
+        solarElevationDeg: 55,
+        solarAzimuthDeg: 180,
+      });
+
+      const visualizer = createElectricityFlowVisualizer(daytimeTopo);
+      const initialMeshCount = visualizer.group.children.length;
+
+      const nightTopo = buildElectricalTopology({
+        panelLayers: [{ config: mockConfig, panels }],
+        roofZ: 10,
+        terraceRing,
+        solarElevationDeg: 0,
+        solarAzimuthDeg: 180,
+      });
+
+      // Update intensities
+      visualizer.updateIntensities(nightTopo);
+
+      // Mesh count remains constant
+      expect(visualizer.group.children.length).toBe(initialMeshCount);
+
+      visualizer.dispose();
+    });
   });
 });
