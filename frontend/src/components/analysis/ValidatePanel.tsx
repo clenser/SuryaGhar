@@ -116,7 +116,7 @@ export function ValidatePanel({
 
   const bomSection = (
     <div
-      className="stage-card"
+      className="bom-card"
       style={{
         padding: "var(--space-3)",
         marginTop: "var(--space-3)",

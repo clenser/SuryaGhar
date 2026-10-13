@@ -355,6 +355,12 @@ export function ModelPanel({
       setLayerVisibility((prev) => ({ ...prev, electricityFlow: !prev.electricityFlow }));
       return;
     }
+    if (tool === "move") {
+      setSelectedObstacleId(null);
+      setSelectedTreeId(null);
+      setSelectedPanelInfo(null);
+      setSelectedBuilding(false);
+    }
     setActiveTool(tool ?? "select");
   };
   // Escape cancels the active transient tool: drawing first, then manual
@@ -1752,6 +1758,24 @@ export function ModelPanel({
     }
   };
 
+  const handleMovePanel = (setId: string, panelIndex: number, x: number, y: number) => {
+    const rx = Math.round(x * 100) / 100;
+    const ry = Math.round(y * 100) / 100;
+    setPanelSets((sets) =>
+      sets.map((s) => {
+        if (s.id !== setId) return s;
+        const updatedPanels = s.panels.map((p, idx) =>
+          idx === panelIndex ? { ...p, x: rx, y: ry } : p,
+        );
+        return {
+          ...s,
+          panels: updatedPanels,
+          userModified: true,
+        };
+      }),
+    );
+  };
+
   /**
    * Obstacle drag-to-move (viewer gesture).
    *
@@ -1912,6 +1936,7 @@ export function ModelPanel({
           onObstacleDragEnd={isReadOnlyViewport ? undefined : handleObstacleDragEnd}
           onTreeDragMove={isReadOnlyViewport ? undefined : handleTreeDragMove}
           onTreeDragEnd={isReadOnlyViewport ? undefined : handleTreeDragEnd}
+          onMovePanel={isReadOnlyViewport ? undefined : handleMovePanel}
           manualPanelPreview={
             !isReadOnlyViewport && manualPlaceActive && panelsEnabled && activeSet
               ? {
@@ -2010,7 +2035,7 @@ export function ModelPanel({
             onToggleNature={handleToggleNature}
           />
         )}
-        {!finalView && designMode && !isValidateStage && (
+        {!finalView && designMode && !isValidateStage && activeTool === "select" && (
           <ObjectDetailsHUD
             activeTool={activeTool}
             onToolChange={handleToolChange}

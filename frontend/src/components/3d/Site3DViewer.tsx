@@ -20,6 +20,7 @@
 
 import { forwardRef, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
+import { Move } from "lucide-react";
 import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { LocalCoords3D } from "../../lib/3d/coordinates";
 import {
@@ -266,6 +267,8 @@ export interface Site3DViewerProps {
   selectedPanelInfo?: { setId: string; panelIndex: number; panelId: string } | null;
   /** Callback when a panel is clicked */
   onPanelSelect?: (info: { setId: string; panelIndex: number; panelId: string } | null) => void;
+  /** Move solar panel callback */
+  onMovePanel?: (setId: string, panelIndex: number, newX: number, newY: number) => void;
   /** Whether the building terrace is selected */
   selectedBuilding?: boolean;
   /** Callback when the building rooftop is clicked */
@@ -336,6 +339,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       onDeleteTree,
       selectedPanelInfo: _selectedPanelInfo = null,
       onPanelSelect,
+      onMovePanel,
       selectedBuilding: _selectedBuilding = false,
       onBuildingSelect,
       installationType = "rooftop",
@@ -455,6 +459,9 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
     onPanelSelectRef.current = onPanelSelect;
     const onBuildingSelectRef = useRef(onBuildingSelect);
     onBuildingSelectRef.current = onBuildingSelect;
+    const onMovePanelRef = useRef(onMovePanel);
+    onMovePanelRef.current = onMovePanel;
+    const [movingBanner, setMovingBanner] = useState<string | null>(null);
 
     /**
      * The renderer renders shadow maps on demand (`autoUpdate` is false), so
@@ -1639,8 +1646,6 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       const canvas = canvasRef.current;
       if (!canvas) return;
 
-      let dragging: { type: "obstacle" | "tree"; id: string } | null = null;
-
       const toNdc = (event: PointerEvent) => {
         const rect = canvas.getBoundingClientRect();
         if (rect.width <= 0 || rect.height <= 0) return null;
@@ -1686,6 +1691,57 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         return (hitObj.userData.treeId ?? hitObj.parent?.userData.treeId) as string | null;
       };
 
+      const pickPanel = (ndc: THREE.Vector2): { setId: string; panelIndex: number; panelId: string; x: number; y: number } | null => {
+        const camera = cameraRef.current;
+        const panelGroups = panelGroupRef.current;
+        if (!camera || !panelGroups || panelGroups.length === 0) return null;
+        camera.updateMatrixWorld(true);
+        const raycaster = new THREE.Raycaster();
+        raycaster.setFromCamera(ndc, camera);
+        const panelTargets: THREE.Object3D[] = [];
+        for (const pGroup of panelGroups) {
+          pGroup.updateMatrixWorld(true);
+          pGroup.traverse((child) => {
+            if ((child as THREE.InstancedMesh).isInstancedMesh || (child as THREE.Mesh).isMesh) {
+              panelTargets.push(child);
+            }
+          });
+        }
+        if (panelTargets.length === 0) return null;
+        const pHits = raycaster.intersectObjects(panelTargets, false);
+        if (pHits.length === 0) return null;
+        const hit = pHits[0];
+        const hitMesh = hit.object;
+        let layerIdx = 0;
+        for (let i = 0; i < panelGroups.length; i++) {
+          let cur: THREE.Object3D | null = hitMesh;
+          let found = false;
+          while (cur) {
+            if (cur === panelGroups[i]) {
+              found = true;
+              break;
+            }
+            cur = cur.parent;
+          }
+          if (found) {
+            layerIdx = i;
+            break;
+          }
+        }
+        const layer = panelLayersRef.current ? panelLayersRef.current[layerIdx] : null;
+        const instanceIdx = hit.instanceId ?? 0;
+        const setId = (layer as any)?.setId ?? (layer?.config ? `panel-set-${layerIdx + 1}` : "panel-set-1");
+        const panelObj = layer?.panels[instanceIdx];
+        const panelId = (panelObj as any)?.id ?? `p-${instanceIdx}`;
+        return {
+          setId,
+          panelIndex: instanceIdx,
+          panelId,
+          x: panelObj?.x ?? 0,
+          y: panelObj?.y ?? 0,
+        };
+      };
+
       const roofHit = (ndc: THREE.Vector2): { x: number; y: number } | null => {
         const camera = cameraRef.current;
         if (!camera) return null;
@@ -1708,80 +1764,190 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         return raycaster.ray.intersectPlane(plane, hit) ? { x: hit.x, y: hit.y } : null;
       };
 
-      // Capture phase on the canvas: OrbitControls listens in the bubble
-      // phase, so disabling the controls here wins before it reads the event.
+      interface MovingEntity {
+        type: "obstacle" | "tree" | "panel";
+        id: string;
+        setId?: string;
+        panelIndex?: number;
+        origX: number;
+        origY: number;
+        currentX: number;
+        currentY: number;
+      }
+      let movingEntity: MovingEntity | null = null;
+
+      const cancelMove = () => {
+        if (!movingEntity) return;
+        const cur = movingEntity;
+        if (cur.type === "obstacle") {
+          onObstacleDragMoveRef.current?.(cur.id, cur.origX, cur.origY);
+          onObstacleDragEndRef.current?.(cur.id);
+        } else if (cur.type === "tree") {
+          onTreeDragMoveRef.current?.(cur.id, cur.origX, cur.origY);
+          onTreeDragEndRef.current?.(cur.id);
+        } else if (cur.type === "panel") {
+          onMovePanelRef.current?.(cur.setId!, cur.panelIndex!, cur.origX, cur.origY);
+        }
+        movingEntity = null;
+        setMovingBanner(null);
+        if (controlsRef.current) controlsRef.current.enabled = true;
+        canvas.style.cursor = "grab";
+      };
+
+      const handleContextMenu = (event: MouseEvent) => {
+        if (activeToolRef.current === "move") {
+          event.preventDefault();
+        }
+      };
+
       const handleDown = (event: PointerEvent) => {
-        if (event.button !== 0 || event.ctrlKey || event.metaKey) return;
-        // Objects can be moved ONLY when the Move tool is active in the collapsing viewport menu
+        if (event.ctrlKey || event.metaKey) return;
         if (activeToolRef.current !== "move") return;
-        if (!obstacleDragEnabledRef.current && !treeDragEnabledRef.current) return;
         if (manualPanelPreviewRef.current) return;
         if (previewActiveRef.current || onRoofFinishRef.current) return;
+
         const ndc = toNdc(event);
         if (!ndc) return;
 
-        if (obstacleDragEnabledRef.current) {
-          const id = pickObstacle(ndc);
-          if (id) {
-            dragging = { type: "obstacle", id };
-            if (controlsRef.current) controlsRef.current.enabled = false;
-            canvas.style.cursor = "grabbing";
-            event.preventDefault();
-            event.stopPropagation();
+        // Right-click: pick up object/panel or cancel moving
+        if (event.button === 2) {
+          event.preventDefault();
+          event.stopPropagation();
+
+          if (movingEntity) {
+            cancelMove();
             return;
           }
-        }
 
-        if (treeDragEnabledRef.current || obstacleDragEnabledRef.current) {
+          // Pick up obstacle
+          const obsId = pickObstacle(ndc);
+          if (obsId) {
+            const obs = obstaclesRef.current?.find((o) => o.id === obsId);
+            const ox = obs?.position.x ?? 0;
+            const oy = obs?.position.y ?? 0;
+            movingEntity = {
+              type: "obstacle",
+              id: obsId,
+              origX: ox,
+              origY: oy,
+              currentX: ox,
+              currentY: oy,
+            };
+            setMovingBanner(`Moving obstacle "${obs?.type ?? obsId}". Left-click to place, Right-click or Esc to cancel.`);
+            if (controlsRef.current) controlsRef.current.enabled = false;
+            canvas.style.cursor = "grabbing";
+            return;
+          }
+
+          // Pick up tree
           const tId = pickTree(ndc);
           if (tId) {
-            dragging = { type: "tree", id: tId };
+            const tr = treesRef.current?.find((t) => t.id === tId);
+            const tx = tr?.position.x ?? 0;
+            const ty = tr?.position.y ?? 0;
+            movingEntity = {
+              type: "tree",
+              id: tId,
+              origX: tx,
+              origY: ty,
+              currentX: tx,
+              currentY: ty,
+            };
+            setMovingBanner("Moving tree. Left-click to place, Right-click or Esc to cancel.");
             if (controlsRef.current) controlsRef.current.enabled = false;
             canvas.style.cursor = "grabbing";
-            event.preventDefault();
-            event.stopPropagation();
             return;
           }
+
+          // Pick up solar panel
+          const pHit = pickPanel(ndc);
+          if (pHit) {
+            movingEntity = {
+              type: "panel",
+              id: pHit.panelId,
+              setId: pHit.setId,
+              panelIndex: pHit.panelIndex,
+              origX: pHit.x,
+              origY: pHit.y,
+              currentX: pHit.x,
+              currentY: pHit.y,
+            };
+            setMovingBanner(`Moving solar panel #${pHit.panelIndex + 1}. Left-click to place, Right-click or Esc to cancel.`);
+            if (controlsRef.current) controlsRef.current.enabled = false;
+            canvas.style.cursor = "grabbing";
+            return;
+          }
+          return;
+        }
+
+        // Left-click while moving commits the new position
+        if (event.button === 0 && movingEntity) {
+          event.preventDefault();
+          event.stopPropagation();
+          const cur = movingEntity;
+          if (cur.type === "obstacle") {
+            onObstacleDragMoveRef.current?.(cur.id, cur.currentX, cur.currentY);
+            onObstacleDragEndRef.current?.(cur.id);
+          } else if (cur.type === "tree") {
+            onTreeDragMoveRef.current?.(cur.id, cur.currentX, cur.currentY);
+            onTreeDragEndRef.current?.(cur.id);
+          } else if (cur.type === "panel") {
+            onMovePanelRef.current?.(cur.setId!, cur.panelIndex!, cur.currentX, cur.currentY);
+          }
+          movingEntity = null;
+          setMovingBanner(null);
+          if (controlsRef.current) controlsRef.current.enabled = true;
+          canvas.style.cursor = "grab";
+          return;
         }
       };
 
       const handleMove = (event: PointerEvent) => {
-        if (!dragging) return;
+        if (!movingEntity) return;
         const ndc = toNdc(event);
         if (!ndc) return;
-        if (dragging.type === "obstacle") {
-          const hit = roofHit(ndc);
-          if (hit) onObstacleDragMoveRef.current?.(dragging.id, hit.x, hit.y);
-        } else if (dragging.type === "tree") {
-          const hit = groundHit(ndc);
-          if (hit) onTreeDragMoveRef.current?.(dragging.id, hit.x, hit.y);
-        }
-      };
+        const cur = movingEntity;
 
-      const handleUp = () => {
-        if (!dragging) return;
-        const cur = dragging;
-        dragging = null;
-        if (controlsRef.current) controlsRef.current.enabled = true;
-        canvas.style.cursor = activeToolRef.current === "move" ? "grab" : "";
-        if (cur.type === "obstacle") {
-          onObstacleDragEndRef.current?.(cur.id);
+        if (cur.type === "obstacle" || cur.type === "panel") {
+          const hit = roofHit(ndc) || groundHit(ndc);
+          if (hit) {
+            cur.currentX = hit.x;
+            cur.currentY = hit.y;
+            if (cur.type === "obstacle") {
+              onObstacleDragMoveRef.current?.(cur.id, hit.x, hit.y);
+            } else {
+              onMovePanelRef.current?.(cur.setId!, cur.panelIndex!, hit.x, hit.y);
+            }
+          }
         } else if (cur.type === "tree") {
-          onTreeDragEndRef.current?.(cur.id);
+          const hit = groundHit(ndc);
+          if (hit) {
+            cur.currentX = hit.x;
+            cur.currentY = hit.y;
+            onTreeDragMoveRef.current?.(cur.id, hit.x, hit.y);
+          }
         }
       };
 
+      const handleKeyDown = (event: KeyboardEvent) => {
+        if (event.key === "Escape" && movingEntity) {
+          cancelMove();
+        }
+      };
+
+      canvas.addEventListener("contextmenu", handleContextMenu);
       canvas.addEventListener("pointerdown", handleDown, true);
       window.addEventListener("pointermove", handleMove);
-      window.addEventListener("pointerup", handleUp);
-      window.addEventListener("pointercancel", handleUp);
+      window.addEventListener("keydown", handleKeyDown);
+
       return () => {
+        canvas.removeEventListener("contextmenu", handleContextMenu);
         canvas.removeEventListener("pointerdown", handleDown, true);
         window.removeEventListener("pointermove", handleMove);
-        window.removeEventListener("pointerup", handleUp);
-        window.removeEventListener("pointercancel", handleUp);
-        if (dragging && controlsRef.current) controlsRef.current.enabled = true;
-        dragging = null;
+        window.removeEventListener("keydown", handleKeyDown);
+        if (movingEntity) {
+          cancelMove();
+        }
       };
     }, [isInitialized]);
 
@@ -1958,6 +2124,8 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
             buildingClicked = true;
           }
         }
+
+        if (activeToolRef.current === "move") return;
 
         if (id) {
           if (activeToolRef.current === "delete") {
@@ -2282,11 +2450,37 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
     }
 
     return (
-      <div ref={containerRef} className={`site-3d-viewer ${className}`} style={style}>
+      <div ref={containerRef} className={`site-3d-viewer ${className}`} style={{ ...style, position: "relative" }}>
         <canvas
           ref={canvasRef}
           aria-label="3D building model. Drag to rotate, scroll/pinch to zoom, click to select an obstacle."
         />
+        {movingBanner && (
+          <div
+            style={{
+              position: "absolute",
+              top: 16,
+              left: "50%",
+              transform: "translateX(-50%)",
+              background: "rgba(15, 23, 42, 0.94)",
+              color: "#38bdf8",
+              border: "1px solid rgba(56, 189, 248, 0.4)",
+              padding: "8px 16px",
+              borderRadius: "8px",
+              fontSize: "0.85rem",
+              fontWeight: 500,
+              zIndex: 30,
+              boxShadow: "0 4px 16px rgba(0,0,0,0.5)",
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              pointerEvents: "none",
+            }}
+          >
+            <Move size={16} />
+            <span>{movingBanner}</span>
+          </div>
+        )}
         {!isInitialized && (
           <div className="site-3d-viewer__loading">Loading 3D view…</div>
         )}

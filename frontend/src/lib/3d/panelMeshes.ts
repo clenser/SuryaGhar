@@ -1295,7 +1295,8 @@ export function createGroundPoleMountGeometry(
 
   const tiltMatrix = new THREE.Matrix4().makeRotationX(-tilt);
 
-  // 1. Module mounting purlin rails & clamps
+  // 1. Module mounting purlin rails & clamps for each row
+  const strongbackLength = Math.max(1.8, totalWidth * 0.85);
   for (let r = 0; r < setRows; r++) {
     const rowCenterY = (r - (setRows - 1) / 2) * stepV;
     const purlinOffsets = [-l * 0.28, l * 0.28];
@@ -1318,42 +1319,74 @@ export function createGroundPoleMountGeometry(
         parts.push(clamp);
       }
     }
+
+    // Transverse Strongback beam directly under this row's purlins
+    const rowStrongback = box(strongbackLength, 0.09, 0.08, 0, 0, purlinBottomLocalZ - 0.04, SUPPORT_COLOR);
+    rowStrongback.applyMatrix4(tiltMatrix);
+    rowStrongback.translate(0, rowCenterY, centerH);
+    parts.push(rowStrongback);
   }
 
-  // 2. Heavy Central Mast, Foundation Pier, and Strongback Framework
+  // 2. Continuous Longitudinal Torque Spine Beam connecting all rows along the tilt slope
+  const totalLength = (setRows - 1) * stepV + l * 0.8;
+  const spineWidth = 0.12;
+  const spineDepth = 0.12;
+  const spineCenterLocalZ = purlinBottomLocalZ - 0.10;
+
+  // Determine mast and spine X positions (single central mast or twin masts if wide)
   const mastRadius = 0.12;
-  const mastHeight = centerH - 0.15 - groundElevationM;
+  const mastXs = totalWidth > 4.2 ? [-totalWidth * 0.25, totalWidth * 0.25] : [0];
 
-  // Concrete foundation pedestal
-  parts.push(box(0.55, 0.55, 0.25, 0, 0, groundElevationM + 0.125, FOOTING_COLOR));
+  for (const mx of mastXs) {
+    // Longitudinal Spine Tube along Y under the strongbacks
+    const spineBeam = box(spineWidth, totalLength, spineDepth, mx, 0, spineCenterLocalZ, SUPPORT_COLOR);
+    spineBeam.applyMatrix4(tiltMatrix);
+    spineBeam.translate(0, 0, centerH);
+    parts.push(spineBeam);
 
-  // Central Vertical Mast Pipe
-  const mastMesh = box(mastRadius * 2, mastRadius * 2, mastHeight, 0, 0, groundElevationM + 0.25 + (mastHeight - 0.25) / 2, SUPPORT_COLOR);
-  parts.push(mastMesh);
+    // Vertical Mast Pipe & Footing
+    const collarZ = centerH - 0.20;
+    const mastHeight = Math.max(0.5, collarZ - (groundElevationM + 0.25));
 
-  // Top-of-Pole Azimuth Collar Sleeve
-  const collarZ = centerH - 0.15;
-  parts.push(box(0.32, 0.32, 0.22, 0, 0, collarZ, FOOTING_COLOR));
-  parts.push(box(0.20, 0.28, 0.14, 0, 0, collarZ + 0.10, FRAME_COLOR));
+    // Concrete foundation pedestal
+    parts.push(box(0.60, 0.60, 0.25, mx, 0, groundElevationM + 0.125, FOOTING_COLOR));
 
-  // Strongback Steel Cross-Beam
-  const strongbackLength = Math.max(1.8, totalWidth * 0.75);
-  const strongback = box(strongbackLength, 0.10, 0.10, 0, 0, purlinBottomLocalZ - 0.06, SUPPORT_COLOR);
-  strongback.applyMatrix4(tiltMatrix);
-  strongback.translate(0, 0, centerH);
-  parts.push(strongback);
+    // Central Vertical Mast Column
+    const mastMesh = box(mastRadius * 2, mastRadius * 2, mastHeight, mx, 0, groundElevationM + 0.25 + mastHeight / 2, SUPPORT_COLOR);
+    parts.push(mastMesh);
 
-  // Diagonal Outrigger Truss Arms from Mast collar to outer strongback tips
-  const leftTip = new THREE.Vector3(-strongbackLength / 2 + 0.1, 0, purlinBottomLocalZ - 0.06)
-    .applyMatrix4(tiltMatrix)
-    .add(new THREE.Vector3(0, 0, centerH));
-  const rightTip = new THREE.Vector3(strongbackLength / 2 - 0.1, 0, purlinBottomLocalZ - 0.06)
-    .applyMatrix4(tiltMatrix)
-    .add(new THREE.Vector3(0, 0, centerH));
+    // Top-of-Pole Azimuth / Tilt Pivot Collar Sleeve
+    parts.push(box(0.32, 0.32, 0.24, mx, 0, collarZ, FOOTING_COLOR));
+    parts.push(box(0.22, 0.28, 0.16, mx, 0, collarZ + 0.10, FRAME_COLOR));
 
-  const collarNode = { x: 0, y: 0, z: collarZ };
-  parts.push(beamBetweenPoints(collarNode, { x: leftTip.x, y: leftTip.y, z: leftTip.z }, 0.06, 0.06, FRAME_COLOR));
-  parts.push(beamBetweenPoints(collarNode, { x: rightTip.x, y: rightTip.y, z: rightTip.z }, 0.06, 0.06, FRAME_COLOR));
+    // Pitch / Elevation Truss Braces in YZ plane (locking tilt)
+    const collarNode = { x: mx, y: 0, z: collarZ };
+    if (totalLength > 0.8) {
+      const frontDist = -totalLength * 0.36;
+      const rearDist = totalLength * 0.36;
+
+      const frontSpineTip = new THREE.Vector3(mx, frontDist, spineCenterLocalZ)
+        .applyMatrix4(tiltMatrix)
+        .add(new THREE.Vector3(0, 0, centerH));
+      const rearSpineTip = new THREE.Vector3(mx, rearDist, spineCenterLocalZ)
+        .applyMatrix4(tiltMatrix)
+        .add(new THREE.Vector3(0, 0, centerH));
+
+      parts.push(beamBetweenPoints(collarNode, { x: frontSpineTip.x, y: frontSpineTip.y, z: frontSpineTip.z }, 0.07, 0.07, FRAME_COLOR));
+      parts.push(beamBetweenPoints(collarNode, { x: rearSpineTip.x, y: rearSpineTip.y, z: rearSpineTip.z }, 0.07, 0.07, FRAME_COLOR));
+    }
+
+    // Lateral Outrigger Truss Arms to strongback outer tips
+    const leftTip = new THREE.Vector3(-strongbackLength / 2 + 0.15, 0, purlinBottomLocalZ - 0.04)
+      .applyMatrix4(tiltMatrix)
+      .add(new THREE.Vector3(0, 0, centerH));
+    const rightTip = new THREE.Vector3(strongbackLength / 2 - 0.15, 0, purlinBottomLocalZ - 0.04)
+      .applyMatrix4(tiltMatrix)
+      .add(new THREE.Vector3(0, 0, centerH));
+
+    parts.push(beamBetweenPoints(collarNode, { x: leftTip.x, y: leftTip.y, z: leftTip.z }, 0.06, 0.06, FRAME_COLOR));
+    parts.push(beamBetweenPoints(collarNode, { x: rightTip.x, y: rightTip.y, z: rightTip.z }, 0.06, 0.06, FRAME_COLOR));
+  }
 
   const merged = mergeGeometries(parts, false);
   for (const part of parts) part.dispose();
@@ -1733,65 +1766,66 @@ function partitionPanelsByMounting(
   }
 
   // Fallback for callers that pass raw PlacedPanel[] without tableId
-  const tableSize = config.setRows * config.setCols;
   const isGround = config.mounting.startsWith("ground_") || config.installationType === "ground";
-  const useLegacySet = Boolean(
-    (options?.isPanelSet || isGround) &&
-    (config.setRows > 1 || config.setCols > 1) &&
-    panels.length >= tableSize,
-  );
+  const clusterDist = Math.max(stepU, stepV) * 1.35;
+  const clusterDistSq = clusterDist * clusterDist;
 
-  if (!useLegacySet) {
-    if (isGround && (config.setRows > 1 || config.setCols > 1) && panels.length > 1) {
-      let avgX = 0;
-      let avgY = 0;
-      for (const m of panels) {
-        avgX += m.x;
-        avgY += m.y;
+  // Spatial clustering into disjoint connected components
+  const visited = new Set<number>();
+  const clusters: PlacedPanel[][] = [];
+
+  for (let i = 0; i < panels.length; i++) {
+    if (visited.has(i)) continue;
+    visited.add(i);
+    const cluster: PlacedPanel[] = [panels[i]];
+    const queue = [panels[i]];
+
+    while (queue.length > 0) {
+      const cur = queue.pop()!;
+      for (let j = 0; j < panels.length; j++) {
+        if (visited.has(j)) continue;
+        const candidate = panels[j];
+        const dx = candidate.x - cur.x;
+        const dy = candidate.y - cur.y;
+        if (dx * dx + dy * dy <= clusterDistSq) {
+          visited.add(j);
+          cluster.push(candidate);
+          queue.push(candidate);
+        }
       }
-      return {
-        setPanels: panels,
-        standalonePanels: [],
-        tables: [
-          {
-            tableId: "ground-table-partial",
-            rows: Math.min(config.setRows, panels.length),
-            cols: Math.max(1, Math.ceil(panels.length / config.setRows)),
-            centerX: avgX / panels.length,
-            centerY: avgY / panels.length,
-            rotationDeg: panels[0].rotationDeg,
-            panels,
-          },
-        ],
-      };
     }
-    return { setPanels: [], standalonePanels: panels, tables: [] };
+    clusters.push(cluster);
   }
 
-  const tableCount = Math.floor(panels.length / tableSize);
-  const setPanelCount = tableCount * tableSize;
-  const setPanels = panels.slice(0, setPanelCount);
-  const standalonePanels = panels.slice(setPanelCount);
+  const setPanels: PlacedPanel[] = [];
+  const standalonePanels: PlacedPanel[] = [];
   const tables: ResolvedTableDescriptor[] = [];
 
-  for (let tIdx = 0; tIdx < tableCount; tIdx++) {
-    const start = tIdx * tableSize;
-    const members = panels.slice(start, start + tableSize);
-    let avgX = 0;
-    let avgY = 0;
-    for (const m of members) {
-      avgX += m.x;
-      avgY += m.y;
+  let clusterIdx = 0;
+  for (const cluster of clusters) {
+    if (cluster.length > 1 && (config.setRows > 1 || config.setCols > 1 || isGround)) {
+      let sumX = 0;
+      let sumY = 0;
+      for (const p of cluster) {
+        sumX += p.x;
+        sumY += p.y;
+        setPanels.push(p);
+      }
+      const tableId = `cluster-table-${clusterIdx++}`;
+      tables.push({
+        tableId,
+        rows: Math.min(config.setRows, cluster.length),
+        cols: Math.max(1, Math.ceil(cluster.length / Math.min(config.setRows, cluster.length))),
+        centerX: sumX / cluster.length,
+        centerY: sumY / cluster.length,
+        rotationDeg: cluster[0].rotationDeg,
+        panels: cluster,
+      });
+    } else {
+      for (const p of cluster) {
+        standalonePanels.push(p);
+      }
     }
-    tables.push({
-      tableId: `legacy-table-${tIdx}`,
-      rows: config.setRows,
-      cols: config.setCols,
-      centerX: avgX / members.length,
-      centerY: avgY / members.length,
-      rotationDeg: members[0].rotationDeg,
-      panels: members,
-    });
   }
 
   return { setPanels, standalonePanels, tables };
