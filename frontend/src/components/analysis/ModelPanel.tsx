@@ -455,12 +455,11 @@ export function ModelPanel({
   const parapetInsetM = DEFAULT_PARAPET_THICKNESS_M + parapetClearanceM;
 
   /**
-   * Contact boundary for OBSTACLES: the inner face of the parapet wall.
-   * Obstacles may sit flush against this (fused to the parapet); the
-   * panel clearance above stays reserved for panels, so loosening the
-   * panel gap does not silently let obstacles eat into the wall.
+   * Contact boundary for OBSTACLES: 0 allows obstacles and custom outlines to be
+   * placed anywhere on the rooftop surface up to the outer terrace boundary,
+   * including on, flush with, or spanning over the parapet zone.
    */
-  const parapetContactM = DEFAULT_PARAPET_THICKNESS_M;
+  const parapetContactM = 0;
 
   // Inner usable roof ring for the auto-placement lattice and the
   // roof-derived set limits: the raw footprint inset by wall + panel
