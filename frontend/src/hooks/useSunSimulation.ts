@@ -69,6 +69,8 @@ export interface SunSimulation {
   timeMinutes: number;
   /** Whether the render loop is advancing the clock. */
   playing: boolean;
+  /** Simulated minutes per real second. */
+  speed: number;
   /** IANA zone the date/time belong to. */
   timezone: string;
   /** Precomputed day samples, or null when the inputs could not be sampled. */
@@ -78,6 +80,7 @@ export interface SunSimulation {
   /** Stable mutable clock consumed by the Three.js render loop. */
   clock: SunClock;
   setDate: (date: string) => void;
+  setSpeed: (speed: number) => void;
   setTime: (minutes: number) => void;
   togglePlay: () => void;
   pause: () => void;
@@ -104,14 +107,16 @@ export function useSunSimulation(options: UseSunSimulationOptions): SunSimulatio
     }
   }, [latitude, longitude, date, timezone]);
 
+  const [speed, setSpeedState] = useState(SUN_PLAYBACK_SPEED);
+
   const clockRef = useRef<SunClock | null>(null);
   if (clockRef.current === null) {
-    clockRef.current = createSunClock(samples ?? [], timeMinutes, SUN_PLAYBACK_SPEED);
+    clockRef.current = createSunClock(samples ?? [], timeMinutes, speed);
   }
   const clock = clockRef.current;
-  // Keep the clock's sample set current while it is idle or playing: the loop
-  // only reads this array, so swapping it mid-play is safe.
+  // Keep the clock's sample set and speed current while it is idle or playing:
   if (samples !== null && clock.samples !== samples) clock.samples = samples;
+  clock.speed = speed;
 
   // Loop → React: throttled by the viewer (never per frame).
   const handleTick = useCallback((minutes: number) => {
@@ -128,6 +133,14 @@ export function useSunSimulation(options: UseSunSimulationOptions): SunSimulatio
     // Samples are recomputed for the new date; the time of day is preserved so
     // scrubbing to noon then comparing dates behaves as users expect.
     setDateState(next);
+  }, []);
+
+  const setSpeed = useCallback((nextSpeed: number) => {
+    const valid = Number.isFinite(nextSpeed) && nextSpeed > 0 ? nextSpeed : SUN_PLAYBACK_SPEED;
+    setSpeedState(valid);
+    if (clockRef.current) {
+      clockRef.current.speed = valid;
+    }
   }, []);
 
   const setTime = useCallback(
@@ -171,11 +184,13 @@ export function useSunSimulation(options: UseSunSimulationOptions): SunSimulatio
     date,
     timeMinutes,
     playing,
+    speed,
     timezone,
     samples,
     state,
     clock,
     setDate,
+    setSpeed,
     setTime,
     togglePlay,
     pause,

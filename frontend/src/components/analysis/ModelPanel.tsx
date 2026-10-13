@@ -2083,6 +2083,8 @@ export function ModelPanel({
               state={sun.state}
               timezoneLabel={timezoneLabel}
               dateTimeLabel={dateTimeLabel}
+              speed={sun.speed}
+              onSpeedChange={sun.setSpeed}
               onDateChange={sun.setDate}
               onTimeChange={(mins) => {
                 if (shadingVisualizationActive && heatmapMode === "annual") {

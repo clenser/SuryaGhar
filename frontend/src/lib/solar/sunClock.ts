@@ -11,8 +11,8 @@
 
 import { DAY_MINUTES, type SunSample } from "./sunSamples";
 
-/** Simulated minutes per real second while playing (a full day takes 24 s). */
-export const SUN_PLAYBACK_SPEED = 60;
+/** Simulated minutes per real second while playing (a full day takes 72 s, daylight takes ~36 s). */
+export const SUN_PLAYBACK_SPEED = 20;
 
 /** Minimum real milliseconds between React updates during playback (≤5 Hz). */
 export const SUN_UI_TICK_MS = 200;
