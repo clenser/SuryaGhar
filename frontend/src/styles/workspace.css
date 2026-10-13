@@ -1267,7 +1267,7 @@
 /* Collapse/decollapse toggle button on the left edge of the panel wrapper */
 .stage-panel__toggle {
   position: absolute;
-  top: 14px;
+  top: 64px;
   left: -40px;
   width: 40px;
   height: 44px;
@@ -1624,7 +1624,7 @@
 .imagery-selector {
   position: absolute;
   top: var(--space-4);
-  right: calc(var(--sidebar-w) + var(--space-4) * 2);
+  right: calc(var(--sidebar-w) + var(--space-4) * 2 + 36px);
   z-index: 10;
   display: flex;
   align-items: center;
@@ -1644,7 +1644,7 @@
 }
 
 .workspace:has(.stage-panel-wrapper.is-collapsed) .imagery-selector {
-  right: calc(var(--space-4) * 2 + 38px);
+  right: calc(var(--space-4) * 2 + 48px);
 }
 
 .imagery-selector:hover {
