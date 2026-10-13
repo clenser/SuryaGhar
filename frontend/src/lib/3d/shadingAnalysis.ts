@@ -374,6 +374,8 @@ export function computePanelSelfShadowPolygons(
     const receiverZ = mountH + 0.5 * elevatedSpan;
     const corners = rectangleCorners(p.x, p.y, dims.widthM, dims.lengthM, p.rotationDeg);
 
+    const topEdge = [corners[0], corners[1]];
+
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     for (const c of corners) {
       if (c.x < minX) minX = c.x;
@@ -385,6 +387,7 @@ export function computePanelSelfShadowPolygons(
     return {
       id: p.id,
       corners,
+      topEdge,
       topZ,
       receiverZ,
       elevatedSpan,
@@ -424,9 +427,9 @@ export function computePanelSelfShadowPolygons(
         continue;
       }
 
-      // Compute shadow polygon cast by caster onto receiver plane:
-      const displacedCorners = caster.corners.map((c) => ({ x: c.x + dx, y: c.y + dy }));
-      const shadowPoly = computeConvexHull([...caster.corners, ...displacedCorners]);
+      // Compute shadow polygon cast by caster's elevated top edge onto receiver plane:
+      const displacedTopEdge = caster.topEdge.map((c) => ({ x: c.x + dx, y: c.y + dy }));
+      const shadowPoly = computeConvexHull([...caster.corners, ...displacedTopEdge]);
 
       if (shadowPoly.length >= 3) {
         let list = panelShadowMap.get(receiver.id);
@@ -530,18 +533,17 @@ export function estimateHourIrradianceAndPower(
   }
 
   const deg = Math.PI / 180;
-  const zenithDeg = 90 - solarElevationDeg;
+  const elRad = solarElevationDeg * deg;
   const tRad = tiltDeg * deg;
-  const surfaceAzRad = azimuthDeg * deg;
-  const sunAzRad = solarAzimuthDeg * deg;
-  const zenithRad = zenithDeg * deg;
+  const deltaAzRad = (solarAzimuthDeg - azimuthDeg) * deg;
 
+  // Exact solar physics angle of incidence on tilted surface (Duffie & Beckman eq. 1.6.2):
+  // cos(inc) = sin(el) * cos(tilt) + cos(el) * sin(tilt) * cos(sunAz - surfaceAz)
   const cosIncidence = Math.min(
     1,
     Math.max(
       0,
-      Math.sin(zenithRad) * Math.cos(tRad) * Math.cos(surfaceAzRad - sunAzRad) +
-        Math.cos(zenithRad) * Math.sin(tRad),
+      Math.sin(elRad) * Math.cos(tRad) + Math.cos(elRad) * Math.sin(tRad) * Math.cos(deltaAzRad),
     ),
   );
 

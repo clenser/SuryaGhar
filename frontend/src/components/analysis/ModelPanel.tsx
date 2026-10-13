@@ -722,10 +722,13 @@ export function ModelPanel({
     if (!panelsEnabled) return null;
 
     if (previewCandidate) {
+      const isNightTime = Boolean(sun.state?.night || (sun.state?.elevationDeg ?? 0) <= 0);
       const metrics = shadingVisualizationActive
         ? previewCandidate.shadingSummary.panels.map((p) => ({
             annualLossPercent: p.annualLossPercent,
             severity: p.severity,
+            instantaneousShadeFraction: heatmapMode === "instantaneous" ? p.annualMeanShadeFraction : undefined,
+            isNight: heatmapMode === "instantaneous" ? isNightTime : false,
           }))
         : undefined;
 
@@ -2054,7 +2057,12 @@ export function ModelPanel({
               timezoneLabel={timezoneLabel}
               dateTimeLabel={dateTimeLabel}
               onDateChange={sun.setDate}
-              onTimeChange={sun.setTime}
+              onTimeChange={(mins) => {
+                if (shadingVisualizationActive && heatmapMode === "annual") {
+                  setHeatmapMode("instantaneous");
+                }
+                sun.setTime(mins);
+              }}
               onTogglePlay={() => {
                 if (!sun.playing && shadingVisualizationActive) {
                   setHeatmapMode("instantaneous");
