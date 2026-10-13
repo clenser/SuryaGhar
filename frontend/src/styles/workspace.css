@@ -1331,13 +1331,14 @@
    the controls form an independently scrolling inspector column. Gated to
    wide screens so phone/tablet bottom-sheet layouts are untouched. */
 @media (min-width: 900px) {
-  .workspace.design-mode .stage-panel {
+  .workspace.design-mode .stage-panel-wrapper {
     top: var(--space-4);
     right: var(--space-4);
     bottom: var(--space-4);
     left: var(--space-4);
     width: auto;
     max-width: none;
+    max-height: none;
     z-index: 8;
   }
 
@@ -4338,7 +4339,7 @@
    The inspector column scrolls independently while the viewport
    stays stable. Sections are collapsible for density control. */
 @media (min-width: 900px) {
-  .workspace.design-mode .stage-panel {
+  .workspace.design-mode .stage-panel-wrapper {
     top: var(--space-3);
     right: var(--space-3);
     bottom: var(--space-3);
@@ -4348,6 +4349,14 @@
     max-height: none;
     height: auto;
     z-index: 8;
+    pointer-events: auto;
+  }
+
+  .workspace.design-mode .stage-panel {
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
     overflow: hidden;
     display: flex;
     flex-direction: column;
