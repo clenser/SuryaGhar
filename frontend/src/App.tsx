@@ -1,6 +1,9 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
-import { ChevronRight } from "lucide-react";
+import { Check, ChevronRight, Undo2, X } from "lucide-react";
 import { MapView, type MapViewHandle } from "./components/map/MapView";
+import { computeCentroidUtm, wgsPolygonToLocalMetres } from "./lib/3d/coordinates";
+import { createObstacleId, splitPolygon, type Obstacle } from "./lib/3d/obstacles";
+import type { LngLat } from "./lib/geo";
 import { MapControls } from "./components/map/MapControls";
 import { MapToolbar } from "./components/map/MapToolbar";
 import { ImagerySelector } from "./components/map/ImagerySelector";
@@ -99,6 +102,51 @@ export default function App() {
     });
   }, []);
 
+  const [nearbyBuildingFlow, setNearbyBuildingFlow] = useState<{
+    step: "draw" | "height";
+    vertices: LngLat[];
+    height: number;
+  } | null>(null);
+
+  const handleStartAddNearbyBuilding = useCallback(() => {
+    setNearbyBuildingFlow({
+      step: "draw",
+      vertices: [],
+      height: 12,
+    });
+  }, []);
+
+  const handleCancelNearbyBuilding = useCallback(() => {
+    setNearbyBuildingFlow(null);
+    setDesignMode(true);
+  }, []);
+
+  const handleConfirmNearbyBuilding = useCallback(() => {
+    if (!nearbyBuildingFlow || nearbyBuildingFlow.vertices.length < 3) return;
+    const originUtm = computeCentroidUtm(selection.vertices);
+    const localPoints = wgsPolygonToLocalMetres(nearbyBuildingFlow.vertices, originUtm);
+    const { centroid, offsets } = splitPolygon(localPoints);
+    const xs = offsets.map((p) => p.x);
+    const ys = offsets.map((p) => p.y);
+    const width = Math.max(0.5, Math.max(...xs) - Math.min(...xs));
+    const length = Math.max(0.5, Math.max(...ys) - Math.min(...ys));
+
+    const newBuildingObstacle: Obstacle = {
+      id: createObstacleId(),
+      type: "building",
+      position: centroid,
+      width,
+      length,
+      height: Math.max(1, nearbyBuildingFlow.height || 12),
+      rotation: 0,
+      polygon: offsets,
+    };
+
+    obstacleStore.add(newBuildingObstacle);
+    setNearbyBuildingFlow(null);
+    setDesignMode(true);
+  }, [nearbyBuildingFlow, selection.vertices, obstacleStore]);
+
   // Selection cleared -> reset overlays and the current stage so the UI never
   // shows a dead-end stage panel.
   useEffect(() => {
@@ -109,6 +157,7 @@ export default function App() {
       setBuildingHeight(null);
       setParapetHeight(null);
       obstacleStore.clear();
+      setNearbyBuildingFlow(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selection.mode, obstacleStore.clear]);
@@ -122,6 +171,7 @@ export default function App() {
     setBuildingHeight(null);
     setParapetHeight(null);
     obstacleStore.clear();
+    setNearbyBuildingFlow(null);
     setSegmentationModel("sam2_tiny");
     setStage("select");
     setDesignMode(false);
@@ -214,7 +264,7 @@ export default function App() {
   // through the current stage panel, section headings and primary actions.
   const stageOrder: Stage[] = ["select", "model", "validate"];
   const has3DWorkspace = (stage === "model" || stage === "validate") && selection.vertices.length >= 3;
-  const inDesignWorkspace = has3DWorkspace && (designMode || stage === "validate" || finalView);
+  const inDesignWorkspace = has3DWorkspace && (designMode || stage === "validate" || finalView) && nearbyBuildingFlow === null;
 
   return (
     <div className="app" data-sheet={sheetCtl.sheet}>
@@ -237,19 +287,61 @@ export default function App() {
             setImageryFailed(false);
             setBannerMessage(null);
           }}
-          selectionMode={selection.mode}
-          vertices={selection.vertices}
+          backgroundPolygon={nearbyBuildingFlow ? selection.vertices : null}
+          selectionMode={
+            nearbyBuildingFlow
+              ? nearbyBuildingFlow.step === "draw"
+                ? (nearbyBuildingFlow.vertices.length >= 3 ? "editing" : "drawing")
+                : "idle"
+              : selection.mode
+          }
+          vertices={nearbyBuildingFlow ? nearbyBuildingFlow.vertices : selection.vertices}
           selectionCentroid={
-            selection.metrics
-              ? { lng: selection.metrics.centroid.lng, lat: selection.metrics.centroid.lat }
-              : null
+            nearbyBuildingFlow
+              ? null
+              : selection.metrics
+                ? { lng: selection.metrics.centroid.lng, lat: selection.metrics.centroid.lat }
+                : null
           }
           showMeasurements={measureOn}
-          onAddVertex={selection.addVertex}
-          onFinishDrawing={selection.finishDrawing}
-          onBeginDrag={selection.beginVertexDrag}
-          onMoveVertex={selection.moveVertex}
-          onDeleteVertex={selection.deleteVertex}
+          onAddVertex={
+            nearbyBuildingFlow
+              ? (point) => {
+                  if (nearbyBuildingFlow.step !== "draw") return;
+                  const last = nearbyBuildingFlow.vertices[nearbyBuildingFlow.vertices.length - 1];
+                  if (last && Math.abs(last.lng - point.lng) < 1e-6 && Math.abs(last.lat - point.lat) < 1e-6) return;
+                  setNearbyBuildingFlow((prev) => (prev ? { ...prev, vertices: [...prev.vertices, point] } : null));
+                }
+              : selection.addVertex
+          }
+          onFinishDrawing={
+            nearbyBuildingFlow
+              ? () => {
+                  if (nearbyBuildingFlow.vertices.length >= 3) {
+                    setNearbyBuildingFlow((prev) => (prev ? { ...prev, step: "height" } : null));
+                  }
+                }
+              : selection.finishDrawing
+          }
+          onBeginDrag={nearbyBuildingFlow ? () => {} : selection.beginVertexDrag}
+          onMoveVertex={
+            nearbyBuildingFlow
+              ? (index, point) => {
+                  setNearbyBuildingFlow((prev) =>
+                    prev ? { ...prev, vertices: prev.vertices.map((p, i) => (i === index ? point : p)) } : null
+                  );
+                }
+              : selection.moveVertex
+          }
+          onDeleteVertex={
+            nearbyBuildingFlow
+              ? (index) => {
+                  setNearbyBuildingFlow((prev) =>
+                    prev ? { ...prev, vertices: prev.vertices.filter((_, i) => i !== index) } : null
+                  );
+                }
+              : selection.deleteVertex
+          }
         />
         )}
 
@@ -332,81 +424,182 @@ export default function App() {
             backendLocked={!backendReady}
           />
 
-          {stage === "select" && (
-            <SelectionPanel
-              selection={selection}
-              onStartValidate={() => setStage("model")}
-              backendReady={backendReady}
-            />
-          )}
-          {has3DWorkspace && (
-            <Suspense
-              fallback={
-                <div className="stage-card">
-                  <p className="stage-card__eyebrow">Stage 2 of 3</p>
-                  <h2 className="stage-card__title">Loading 3D workspace…</h2>
-                </div>
-              }
-            >
-              <ModelPanel
-                vertices={selection.vertices}
-                metrics={selection.metrics}
-                buildingHeight={buildingHeight}
-                onSetHeight={handleModelHeight}
-                parapetHeight={parapetHeight}
-                onSetParapetHeight={setParapetHeight}
-                parapetClearance={parapetClearance}
-                onSetParapetClearance={setParapetClearance}
-                onContinue={() => {
-                  setDesignMode(true);
-                  setFinalView(false);
-                  setStage("validate");
-                }}
-                backendReady={backendReady}
-                siteCountry={place?.country}
-                obstacles={obstacleStore.obstacles}
-                onAddObstacle={obstacleStore.add}
-                onUpdateObstacle={obstacleStore.update}
-                onRemoveObstacle={obstacleStore.remove}
-                designMode={designMode}
-                onEnterDesign={() => setDesignMode(true)}
-                onExitDesign={() => setDesignMode(false)}
-                finalView={finalView}
-                onBackToDesign={() => setFinalView(false)}
-                onBackToMap={() => {
-                  setFinalView(false);
-                  setDesignMode(false);
-                  setStage("select");
-                }}
-                onReset={handleReset}
-                hasAnalysisData={hasAnalysisData}
-                stage={stage === "validate" ? "validate" : "model"}
-                validationPanel={
-                  <ValidatePanel
-                    snapshot={validation.snapshot}
-                    elapsed={validation.elapsed}
-                    segmentationModel={segmentationModel}
-                    onSegmentationModelChange={setSegmentationModel}
-                    onProceed={(model) => validation.proceed(selection.vertices, model)}
+          {nearbyBuildingFlow ? (
+            <div className="stage-card">
+              <p className="stage-card__eyebrow">Nearby Obstacle Simulation</p>
+              {nearbyBuildingFlow.step === "draw" ? (
+                <>
+                  <h2 className="stage-card__title">Outline Nearby Building</h2>
+                  <p className="stage-card__body">
+                    Click to trace the boundary of a nearby building or obstacle on the map.
+                    The green polygon marks your main rooftop terrace. Draw at least 3 points, then proceed to enter its height.
+                  </p>
+                  <p className="stage-card__meta" aria-live="polite">
+                    {nearbyBuildingFlow.vertices.length} point{nearbyBuildingFlow.vertices.length === 1 ? "" : "s"} placed
+                    {nearbyBuildingFlow.vertices.length >= 3 ? " · Outline complete" : " (draw at least 3 points)"}
+                  </p>
+                  <div className="stage-card__actions">
+                    <button
+                      type="button"
+                      className="btn btn--primary"
+                      disabled={nearbyBuildingFlow.vertices.length < 3}
+                      onClick={() => setNearbyBuildingFlow((prev) => prev ? { ...prev, step: "height" } : null)}
+                    >
+                      <Check size={15} strokeWidth={2} aria-hidden="true" />
+                      Next: Enter height
+                    </button>
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={nearbyBuildingFlow.vertices.length === 0}
+                      onClick={() => setNearbyBuildingFlow((prev) => prev ? { ...prev, vertices: prev.vertices.slice(0, -1) } : null)}
+                    >
+                      <Undo2 size={15} strokeWidth={1.75} aria-hidden="true" />
+                      Undo
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--subtle"
+                      onClick={handleCancelNearbyBuilding}
+                    >
+                      <X size={15} strokeWidth={1.75} aria-hidden="true" />
+                      Cancel
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <h2 className="stage-card__title">Enter Building Height</h2>
+                  <p className="stage-card__body">
+                    Enter the estimated height of this nearby building in metres. It will be extruded from the ground in 3D to simulate realistic shadow casting onto your rooftop and solar panels.
+                  </p>
+                  <div className="field" style={{ marginTop: "var(--space-3)", marginBottom: "var(--space-3)" }}>
+                    <label htmlFor="nearby-building-height">Building Height</label>
+                    <div className="height-input-row">
+                      <input
+                        id="nearby-building-height"
+                        type="number"
+                        step="0.5"
+                        min="1"
+                        max="100"
+                        value={nearbyBuildingFlow.height}
+                        onChange={(e) => {
+                          const val = Number(e.target.value);
+                          setNearbyBuildingFlow((prev) => prev ? { ...prev, height: val } : null);
+                        }}
+                        autoFocus
+                      />
+                      <span className="height-unit">m</span>
+                    </div>
+                  </div>
+                  <div className="stage-card__actions">
+                    <button
+                      type="button"
+                      className="btn btn--primary"
+                      disabled={!nearbyBuildingFlow.height || nearbyBuildingFlow.height <= 0}
+                      onClick={handleConfirmNearbyBuilding}
+                    >
+                      <Check size={15} strokeWidth={2} aria-hidden="true" />
+                      Confirm & View in 3D
+                    </button>
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => setNearbyBuildingFlow((prev) => prev ? { ...prev, step: "draw" } : null)}
+                    >
+                      Back to outline
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--subtle"
+                      onClick={handleCancelNearbyBuilding}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          ) : (
+            <>
+              {stage === "select" && (
+                <SelectionPanel
+                  selection={selection}
+                  onStartValidate={() => setStage("model")}
+                  backendReady={backendReady}
+                />
+              )}
+              {has3DWorkspace && (
+                <Suspense
+                  fallback={
+                    <div className="stage-card">
+                      <p className="stage-card__eyebrow">Stage 2 of 3</p>
+                      <h2 className="stage-card__title">Loading 3D workspace…</h2>
+                    </div>
+                  }
+                >
+                  <ModelPanel
+                    vertices={selection.vertices}
+                    metrics={selection.metrics}
+                    buildingHeight={buildingHeight}
+                    onSetHeight={handleModelHeight}
+                    parapetHeight={parapetHeight}
+                    onSetParapetHeight={setParapetHeight}
+                    parapetClearance={parapetClearance}
+                    onSetParapetClearance={setParapetClearance}
                     onContinue={() => {
-                      setStage("model");
                       setDesignMode(true);
-                      setFinalView(true);
+                      setFinalView(false);
+                      setStage("validate");
                     }}
-                    onRedraw={() => {
+                    backendReady={backendReady}
+                    siteCountry={place?.country}
+                    obstacles={obstacleStore.obstacles}
+                    onAddObstacle={obstacleStore.add}
+                    onUpdateObstacle={obstacleStore.update}
+                    onRemoveObstacle={obstacleStore.remove}
+                    designMode={designMode}
+                    onEnterDesign={() => setDesignMode(true)}
+                    onExitDesign={() => setDesignMode(false)}
+                    finalView={finalView}
+                    onBackToDesign={() => setFinalView(false)}
+                    onBackToMap={() => {
                       setFinalView(false);
                       setDesignMode(false);
                       setStage("select");
                     }}
-                    onBackToModel={() => {
-                      setStage("model");
-                      setFinalView(false);
-                    }}
-                    backendReady={backendReady}
+                    onReset={handleReset}
+                    hasAnalysisData={hasAnalysisData}
+                    stage={stage === "validate" ? "validate" : "model"}
+                    onStartAddNearbyBuilding={handleStartAddNearbyBuilding}
+                    validationPanel={
+                      <ValidatePanel
+                        snapshot={validation.snapshot}
+                        elapsed={validation.elapsed}
+                        segmentationModel={segmentationModel}
+                        onSegmentationModelChange={setSegmentationModel}
+                        onProceed={(model) => validation.proceed(selection.vertices, model)}
+                        onContinue={() => {
+                          setStage("model");
+                          setDesignMode(true);
+                          setFinalView(true);
+                        }}
+                        onRedraw={() => {
+                          setFinalView(false);
+                          setDesignMode(false);
+                          setStage("select");
+                        }}
+                        onBackToModel={() => {
+                          setStage("model");
+                          setFinalView(false);
+                        }}
+                        backendReady={backendReady}
+                      />
+                    }
                   />
-                }
-              />
-            </Suspense>
+                </Suspense>
+              )}
+            </>
           )}
           {selection.mode === "confirmed" && stage !== "select" && selection.vertices.length < 3 && (
             <div className="stage-card">

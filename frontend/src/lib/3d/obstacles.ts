@@ -14,7 +14,7 @@
  */
 
 /** Obstacle categories offered by the editor. */
-export type ObstacleType = "hvac" | "water-tank" | "staircase-room" | "lift-room" | "custom";
+export type ObstacleType = "hvac" | "water-tank" | "staircase-room" | "lift-room" | "custom" | "building";
 
 /**
  * Application-level obstacle state.
@@ -88,6 +88,7 @@ export const OBSTACLE_TYPES: ObstacleTypeDefinition[] = [
   { type: "staircase-room", label: "Staircase Room", defaultLength: 4.5, defaultWidth: 3.0, defaultHeight: 3.0 },
   { type: "lift-room", label: "Lift Room", defaultLength: 3.0, defaultWidth: 2.5, defaultHeight: 3.0 },
   { type: "custom", label: "Custom", defaultLength: 2.0, defaultWidth: 2.0, defaultHeight: 1.0 },
+  { type: "building", label: "Nearby Building", defaultLength: 10.0, defaultWidth: 10.0, defaultHeight: 12.0 },
 ];
 
 /** Display name for an obstacle category. */
@@ -159,8 +160,11 @@ export function obstacleFootprint(obstacle: Obstacle): Point2[] {
  */
 export function obstacleZRange(
   buildingHeight: number,
-  obstacle: Pick<Obstacle, "height">,
+  obstacle: Pick<Obstacle, "height"> & { type?: ObstacleType },
 ): { base: number; top: number } {
+  if (obstacle.type === "building") {
+    return { base: 0, top: obstacle.height };
+  }
   return { base: buildingHeight, top: buildingHeight + obstacle.height };
 }
 
@@ -529,10 +533,11 @@ function checkDimension(value: number, label: string, max: number): string | nul
  * @returns `null`-free result: either `valid` or a user-facing `error`.
  */
 export function validateObstacle(obstacle: Obstacle, context: ObstacleContext): ObstacleValidation {
+  const maxH = obstacle.type === "building" ? 100 : MAX_OBSTACLE_HEIGHT_M;
   const dimensions: Array<[number, string, number]> = [
     [obstacle.length, "Length", MAX_OBSTACLE_FOOTPRINT_M],
     [obstacle.width, "Width", MAX_OBSTACLE_FOOTPRINT_M],
-    [obstacle.height, "Height", MAX_OBSTACLE_HEIGHT_M],
+    [obstacle.height, "Height", maxH],
   ];
   for (const [value, label, max] of dimensions) {
     const error = checkDimension(value, label, max);
@@ -545,6 +550,24 @@ export function validateObstacle(obstacle: Obstacle, context: ObstacleContext): 
   if (!Number.isFinite(obstacle.rotation)) {
     return { valid: false, error: "Rotation must be a valid number" };
   }
+
+  // Nearby buildings are ground structures placed outside the rooftop terrace
+  if (obstacle.type === "building") {
+    if (context.terrace.length >= 3 && polygonsOverlap(obstacleFootprint(obstacle), context.terrace)) {
+      return { valid: false, error: "Nearby building cannot overlap the main rooftop terrace" };
+    }
+    for (const other of context.others) {
+      if (other.id === obstacle.id) continue;
+      if (other.type === "building" && obstaclesOverlap(obstacle, other)) {
+        return {
+          valid: false,
+          error: "Building overlaps another nearby building",
+        };
+      }
+    }
+    return { valid: true };
+  }
+
   if (context.terrace.length < 3) {
     return { valid: false, error: "Terrace footprint is missing" };
   }

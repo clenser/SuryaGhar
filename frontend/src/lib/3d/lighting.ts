@@ -35,13 +35,13 @@ export const SUN_DISTANCE = 400;
  * so a white/ivory wall actually reaches near-white at its specular peak,
  * while Neutral tone mapping keeps shaded faces out of the clip.
  */
-export const SUN_INTENSITY_NOON = 2.9;
+export const SUN_INTENSITY_NOON = 3.2;
 
 /** Ambient fill while the sun is up: shaded faces stay readable without
  * washing out the directional shadow contrast. Kept low enough that the
  * shadow side of the building and the rooftop stay clearly darker than the
  * lit side, so shadows read with weight rather than as flat grey. */
-export const AMBIENT_DAY_INTENSITY = 0.72;
+export const AMBIENT_DAY_INTENSITY = 0.56;
 
 /** Ambient fill at night: dimmed, and clearly not daytime illumination. */
 export const AMBIENT_NIGHT_INTENSITY = 0.35;
@@ -58,7 +58,7 @@ export const HEMI_GROUND_COLOR = 0xb9b0a4;
 /** Hemisphere fill in daylight: sky/ground variation so faces separate.
  * Deliberately weaker than the direct sun so shadowed regions keep visible
  * depth instead of lifting to the same tone as lit surfaces. */
-export const HEMI_DAY_INTENSITY = 0.95;
+export const HEMI_DAY_INTENSITY = 0.76;
 /** Hemisphere fill at night: dimmed with everything else. */
 export const HEMI_NIGHT_INTENSITY = 0.15;
 
@@ -220,7 +220,7 @@ export function sunColorHex(elevationDeg: number): number {
  * direction, with a floor so tiny roofs still use the map sensibly.
  */
 export function shadowCameraExtent(footprint: number, height: number): number {
-  return Math.max(55, Math.max(footprint, 1) * 1.30 + Math.max(height, 0) * 0.7);
+  return Math.max(40, Math.max(footprint, 1) * 1.15 + Math.max(height, 0) * 0.5);
 }
 
 /**

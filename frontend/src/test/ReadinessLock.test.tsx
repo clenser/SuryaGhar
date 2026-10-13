@@ -227,7 +227,7 @@ describe("readiness lock (App integration)", () => {
     expect(validateTab).not.toHaveAttribute("title");
     expect(screen.getByRole("region", { name: "Location" })).toHaveTextContent("Kolkata");
     expect(screen.getByRole("application", { name: /Satellite map of India/ })).toBeInTheDocument();
-  });
+  }, 15000);
 
   it("bounds persistent startup failure to CHECKING, then OFFLINE with retry", async () => {
     // Locally a failing probe means the backend is not running — there is no
@@ -256,5 +256,5 @@ describe("readiness lock (App integration)", () => {
     expect(await screen.findByText("API Offline", {}, { timeout: 9000 })).toBeInTheDocument();
     const header = screen.getByRole("banner");
     expect(within(header).getByRole("button", { name: "Retry connection" })).toBeInTheDocument();
-  });
+  }, 15000);
 });

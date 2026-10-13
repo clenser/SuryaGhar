@@ -699,10 +699,13 @@ export function runAnnualShadingAnalysis(params: {
     } else {
       footprint = rectangleCorners(o.position.x, o.position.y, o.width, o.length, o.rotation);
     }
+    const isGround = o.type === "building";
+    const baseZ = isGround ? 0 : roofZ;
+    const topZ = isGround ? o.height : roofZ + o.height;
     return {
       footprint,
-      baseZ: roofZ,
-      topZ: roofZ + o.height,
+      baseZ,
+      topZ,
     };
   });
 
@@ -1030,10 +1033,13 @@ export function computeInstantaneousShade(params: {
     } else {
       footprint = rectangleCorners(obs.position.x, obs.position.y, obs.width, obs.length, obs.rotation);
     }
+    const isGround = obs.type === "building";
+    const baseZ = isGround ? 0 : roofZ;
+    const topZ = isGround ? obs.height : roofZ + obs.height;
     const shadow = projectObstacleShadowToRoof(
       footprint,
-      roofZ,
-      roofZ + obs.height,
+      baseZ,
+      topZ,
       roofZ,
       solarAzimuthDeg,
       solarElevationDeg,

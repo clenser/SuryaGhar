@@ -12,7 +12,7 @@
  */
 
 import { type FormEvent } from "react";
-import { X } from "lucide-react";
+import { Building2, X } from "lucide-react";
 import {
   OBSTACLE_TYPES,
   type ObstacleDraft,
@@ -31,6 +31,8 @@ interface ObstacleEditorProps {
   onCancel: () => void;
   /** Start interactive footprint drawing (Custom obstacles, adding only). */
   onDrawFootprint?: () => void;
+  /** Start map outline drawing for a nearby building obstacle. */
+  onDrawNearbyBuilding?: () => void;
 }
 
 type NumericField = "length" | "width" | "height" | "rotation";
@@ -44,6 +46,7 @@ export function ObstacleEditor({
   onSubmit,
   onCancel,
   onDrawFootprint,
+  onDrawNearbyBuilding,
 }: ObstacleEditorProps) {
   const setField = (field: NumericField, value: string) => {
     onDraftChange({ ...draft, [field]: value });
@@ -136,6 +139,12 @@ export function ObstacleEditor({
         {mode === "adding" && draft.type === "custom" && onDrawFootprint && (
           <button type="button" className="btn btn--secondary" onClick={onDrawFootprint}>
             Draw footprint
+          </button>
+        )}
+        {mode === "adding" && draft.type === "building" && onDrawNearbyBuilding && (
+          <button type="button" className="btn btn--secondary" onClick={onDrawNearbyBuilding}>
+            <Building2 size={14} aria-hidden="true" />
+            Outline on map
           </button>
         )}
         <button type="submit" className="btn btn--primary">

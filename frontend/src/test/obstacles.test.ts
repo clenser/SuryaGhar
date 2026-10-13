@@ -329,6 +329,36 @@ describe("multiple obstacles", () => {
     expect(invalid[0].obstacle.id).toBe("obstacle-2");
     expect(invalid[0].error).toMatch(/beyond the rooftop boundary/);
   });
+
+  it("validates nearby building obstacles outside the terrace and at ground level", () => {
+    const nearby = makeObstacle({
+      id: "building-1",
+      type: "building",
+      position: { x: 35, y: 0 },
+      width: 15,
+      length: 20,
+      height: 25,
+    });
+    const result = validateObstacle(nearby, { terrace: TERRACE, others: [] });
+    expect(result.valid).toBe(true);
+    expect(obstacleZRange(12, nearby)).toEqual({ base: 0, top: 25 });
+  });
+
+  it("rejects nearby building obstacles that overlap the main terrace", () => {
+    const overlapping = makeObstacle({
+      id: "building-bad",
+      type: "building",
+      position: { x: 5, y: 5 },
+      width: 10,
+      length: 10,
+      height: 20,
+    });
+    const result = validateObstacle(overlapping, { terrace: TERRACE, others: [] });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.error).toMatch(/cannot overlap the main rooftop terrace/);
+    }
+  });
 });
 
 describe("obstacle catalog", () => {
@@ -339,6 +369,7 @@ describe("obstacle catalog", () => {
       "staircase-room",
       "lift-room",
       "custom",
+      "building",
     ]);
   });
 

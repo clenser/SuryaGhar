@@ -59,6 +59,43 @@ function uniqueRing(points: LngLat[]): LngLat[] {
 }
 
 /**
+ * Compute the centroid in UTM metres for a polygon in WGS84.
+ */
+export function computeCentroidUtm(vertices: LngLat[]): { x: number; y: number } {
+  const ring = uniqueRing(vertices);
+  if (ring.length === 0) return { x: 0, y: 0 };
+  const utmVertices = ring.map(projectUtm);
+  const anchor = utmVertices[0];
+  let sumDx = 0;
+  let sumDy = 0;
+  for (const v of utmVertices) {
+    sumDx += v.x - anchor.x;
+    sumDy += v.y - anchor.y;
+  }
+  return {
+    x: anchor.x + sumDx / utmVertices.length,
+    y: anchor.y + sumDy / utmVertices.length,
+  };
+}
+
+/**
+ * Convert an arbitrary WGS84 polygon into local metres relative to a site's UTM origin.
+ */
+export function wgsPolygonToLocalMetres(
+  polygon: LngLat[],
+  originUtm: { x: number; y: number },
+): Array<{ x: number; y: number }> {
+  const ring = uniqueRing(polygon);
+  return ring.map((pt) => {
+    const utm = projectUtm(pt);
+    return {
+      x: utm.x - originUtm.x,
+      y: utm.y - originUtm.y,
+    };
+  });
+}
+
+/**
  * Convert a terrace polygon from WGS84 to local 3D coordinates.
  *
  * @param vertices Terrace polygon in WGS84 (closed or open — both accepted)

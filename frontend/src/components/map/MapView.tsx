@@ -41,6 +41,7 @@ interface MapViewProps {
   onReady?: () => void;
   selectionMode?: SelectionMode;
   vertices?: LngLat[];
+  backgroundPolygon?: LngLat[] | null;
   panelFootprints?: import("geojson").FeatureCollection | null;
   orientation?: { tilt_deg: number; azimuth_deg: number } | null;
   selectionCentroid?: LngLat | null;
@@ -140,7 +141,9 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
   const shared = {
     layers: props.layers,
     selectionMode: props.selectionMode,
-    vertices: props.vertices,    panelFootprints: props.panelFootprints,
+    vertices: props.vertices,
+    backgroundPolygon: props.backgroundPolygon,
+    panelFootprints: props.panelFootprints,
     orientation: props.orientation,
     selectionCentroid: props.selectionCentroid,
     shadowFC: props.shadowFC,

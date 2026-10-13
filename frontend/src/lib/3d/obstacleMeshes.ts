@@ -22,6 +22,7 @@ export const OBSTACLE_COLORS: Record<ObstacleType, number> = {
   "staircase-room": 0x3d4f63, // slate navy
   "lift-room": 0x2c3e50, // navy
   custom: 0x6f7f92, // neutral steel
+  building: 0x64748b, // architectural concrete/masonry
 };
 
 /** Teal highlight used for the selected obstacle (matches wireframe teal). */
@@ -33,6 +34,13 @@ export const OBSTACLE_INVALID_COLOR = 0xd94b4b;
  * Solid obstacle material (MeshStandardMaterial, same PBR style as building).
  */
 export function createObstacleMaterial(type: ObstacleType): THREE.MeshStandardMaterial {
+  if (type === "building") {
+    return new THREE.MeshStandardMaterial({
+      color: 0x64748b,
+      roughness: 0.85,
+      metalness: 0.05,
+    });
+  }
   return new THREE.MeshStandardMaterial({
     color: OBSTACLE_COLORS[type] ?? OBSTACLE_COLORS.custom,
     roughness: 0.6,
@@ -275,12 +283,15 @@ export function createObstacleMesh(
       })
     : createObstacleMaterial(obstacle.type);
 
+  const isGroundBuilding = obstacle.type === "building";
+  const baseZ = isGroundBuilding ? 0 : buildingHeight;
+
   const mesh = new THREE.Mesh(geometry, material);
   if (usePolygon) {
     // Absolute footprint already carries position + rotation: place flat.
-    mesh.position.set(0, 0, buildingHeight);
+    mesh.position.set(0, 0, baseZ);
   } else {
-    mesh.position.set(obstacle.position.x, obstacle.position.y, buildingHeight);
+    mesh.position.set(obstacle.position.x, obstacle.position.y, baseZ);
     mesh.rotation.z = (obstacle.rotation * Math.PI) / 180;
   }
   mesh.name = `Obstacle:${obstacle.id}`;

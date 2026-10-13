@@ -33,6 +33,7 @@ interface MapViewProps {
   onInitError?: (message: string) => void;
   selectionMode?: SelectionMode;
   vertices?: LngLat[];
+  backgroundPolygon?: LngLat[] | null;
   panelFootprints?: FeatureCollection | null;
   orientation?: { tilt_deg: number; azimuth_deg: number } | null;
   selectionCentroid?: LngLat | null;
@@ -66,7 +67,7 @@ function isCoarsePointer(): boolean {
 }
 
 export const MapLibreMapView = forwardRef<MapLibreMapViewHandle, MapViewProps>(function MapLibreMapView(
-  { layers, onViewChange, onMapError, onReady, initialView = null, onInitError, selectionMode = "idle", vertices = [], panelFootprints = null, orientation = null, selectionCentroid = null, shadowFC = null, showMeasurements = true, onAddVertex, onFinishDrawing, onBeginDrag, onMoveVertex, onDeleteVertex },
+  { layers, onViewChange, onMapError, onReady, initialView = null, onInitError, selectionMode = "idle", vertices = [], backgroundPolygon = null, panelFootprints = null, orientation = null, selectionCentroid = null, shadowFC = null, showMeasurements = true, onAddVertex, onFinishDrawing, onBeginDrag, onMoveVertex, onDeleteVertex },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -94,6 +95,21 @@ export const MapLibreMapView = forwardRef<MapLibreMapViewHandle, MapViewProps>(f
     const coarse = isCoarsePointer();
     const handleRadius = coarse ? 9 : 5.5;
     const handleFirstRadius = coarse ? 11 : 8;
+    if (!map.getSource("bg-polygon")) {
+      map.addSource("bg-polygon", { type: "geojson", data: emptyFC() });
+      map.addLayer({
+        id: "bg-fill",
+        type: "fill",
+        source: "bg-polygon",
+        paint: { "fill-color": "#10b981", "fill-opacity": 0.2 },
+      });
+      map.addLayer({
+        id: "bg-line",
+        type: "line",
+        source: "bg-polygon",
+        paint: { "line-color": "#10b981", "line-width": 2.5 },
+      });
+    }
     if (!map.getSource("sel-polygon")) {
       map.addSource("sel-polygon", { type: "geojson", data: emptyFC() });
       map.addSource("sel-vertices", { type: "geojson", data: emptyFC() });
@@ -264,6 +280,16 @@ export const MapLibreMapView = forwardRef<MapLibreMapViewHandle, MapViewProps>(f
     if (labelSource) labelSource.setData(measured.labels);
     if (tickSource) tickSource.setData(measured.ticks);
   }, [vertices, loaded, showMeasurements]);
+
+  // Keep background polygon (e.g. main building) in sync
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !loaded) return;
+    const bgSource = map.getSource("bg-polygon") as maplibregl.GeoJSONSource | undefined;
+    if (bgSource) {
+      bgSource.setData(backgroundPolygon && backgroundPolygon.length >= 3 ? polygonFC(backgroundPolygon) : emptyFC());
+    }
+  }, [backgroundPolygon, loaded]);
 
   const panelFootprintsRef = useRef(panelFootprints);
   panelFootprintsRef.current = panelFootprints;

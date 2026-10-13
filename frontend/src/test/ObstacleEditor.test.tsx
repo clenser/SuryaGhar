@@ -87,7 +87,7 @@ describe("ObstacleEditor", () => {
     const options = screen
       .getAllByRole("option")
       .map((option) => (option as HTMLOptionElement).value);
-    expect(options).toEqual(["hvac", "water-tank", "staircase-room", "lift-room", "custom"]);
+    expect(options).toEqual(["hvac", "water-tank", "staircase-room", "lift-room", "custom", "building"]);
   });
 
   it("asks the parent to load preset dimensions when the type changes", async () => {

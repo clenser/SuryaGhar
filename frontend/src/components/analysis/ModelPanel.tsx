@@ -15,7 +15,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { RotateCcw, ArrowRight, Plus, Pencil, Trash2, AlertTriangle, Sun, TreePine, Eye, Moon, Grid3x3, X, Sparkles, Zap } from "lucide-react";
+import { RotateCcw, ArrowRight, Plus, Pencil, Trash2, AlertTriangle, Sun, TreePine, Eye, Moon, Grid3x3, X, Sparkles, Zap, Building2 } from "lucide-react";
 import { BACKEND_WAITING_LABEL } from "../../hooks/useBackendStatus";
 import type { LngLat, PolygonMetrics } from "../../lib/geo";
 import { formatArea } from "../../lib/geo";
@@ -157,6 +157,8 @@ interface ModelPanelProps {
   hasAnalysisData?: boolean;
   /** Current workspace stage: "model" (Step 2) or "validate" (Step 3) */
   stage?: "model" | "validate";
+  /** Action to start drawing a nearby building on the map */
+  onStartAddNearbyBuilding?: () => void;
   /** Validation panel rendered in the right-hand column during Step 3 */
   validationPanel?: ReactNode;
 }
@@ -186,6 +188,7 @@ export function ModelPanel({
   onReset,
   hasAnalysisData = false,
   stage = "model",
+  onStartAddNearbyBuilding,
   validationPanel,
 }: ModelPanelProps) {
   // True while the user is back-editing an existing height.
@@ -2153,9 +2156,21 @@ export function ModelPanel({
                 </p>
               </div>
               {obstacleMode === "idle" && (
-                <button type="button" className="btn btn--secondary" onClick={startAddObstacle}>
-                  <Plus size={15} strokeWidth={2} aria-hidden="true" /> Add obstacle
-                </button>
+                <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap" }}>
+                  <button type="button" className="btn btn--secondary" onClick={startAddObstacle}>
+                    <Plus size={15} strokeWidth={2} aria-hidden="true" /> Add obstacle
+                  </button>
+                  {onStartAddNearbyBuilding && (
+                    <button
+                      type="button"
+                      className="btn btn--secondary"
+                      onClick={onStartAddNearbyBuilding}
+                      title="Outline a nearby building on the map to simulate its shadow"
+                    >
+                      <Building2 size={15} strokeWidth={2} aria-hidden="true" /> Add building
+                    </button>
+                  )}
+                </div>
               )}
             </div>
 
@@ -2213,6 +2228,7 @@ export function ModelPanel({
                   onDrawFootprint={
                     obstacleMode === "adding" && obstacleDraft.type === "custom" ? startDrawFootprint : undefined
                   }
+                  onDrawNearbyBuilding={onStartAddNearbyBuilding}
                 />
               )
             )}
@@ -2228,7 +2244,10 @@ export function ModelPanel({
                       className={`obstacle-item${selectedObstacleId === obstacle.id ? " is-selected" : ""}${invalid ? " is-invalid" : ""}`}
                     >
                       <div className="obstacle-item__body">
-                        <span className="obstacle-item__name">{label}</span>
+                        <span className="obstacle-item__name">
+                          {obstacle.type === "building" && <Building2 size={13} style={{ marginRight: 4, verticalAlign: "text-bottom" }} />}
+                          {label}
+                        </span>
                         <span className="obstacle-item__meta">
                           {formatObstacleDimensions(obstacle)} · {obstacle.rotation}° · E {obstacle.position.x.toFixed(1)} · N {obstacle.position.y.toFixed(1)}
                           {invalid ? ` · ${invalid.error}` : ""}

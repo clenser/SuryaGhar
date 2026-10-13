@@ -25,6 +25,7 @@ import {
   ChevronRight,
   ArrowLeft,
   Zap,
+  Building2,
 } from "lucide-react";
 import type { ObstacleType } from "../../lib/3d/obstacles";
 
@@ -104,6 +105,7 @@ const DRAW_OBSTACLE_CONFIG: Record<ObstacleType, { icon: React.ReactNode; label:
   "lift-room": { icon: <Box size={16} strokeWidth={2} />, label: "Lift room", title: "Draw lift room footprint" },
   hvac: { icon: <Box size={16} strokeWidth={2} />, label: "HVAC", title: "Draw HVAC unit footprint" },
   custom: { icon: <PenTool size={16} strokeWidth={2} />, label: "Custom", title: "Draw custom footprint" },
+  building: { icon: <Building2 size={16} strokeWidth={2} />, label: "Building", title: "Nearby building" },
 };
 
 export function ViewportToolbar({

@@ -22,6 +22,7 @@ interface MapViewProps {
   onReady?: () => void;
   selectionMode?: SelectionMode;
   vertices?: LngLat[];
+  backgroundPolygon?: LngLat[] | null;
   panelFootprints?: FeatureCollection | null;
   orientation?: { tilt_deg: number; azimuth_deg: number } | null;
   selectionCentroid?: LngLat | null;
@@ -54,6 +55,7 @@ export const GoogleMapView = forwardRef<GoogleMapViewHandle, MapViewProps>(funct
     onReady,
     selectionMode = "idle",
     vertices = [],
+    backgroundPolygon = null,
     panelFootprints = null,
     orientation = null,
     selectionCentroid = null,
@@ -86,6 +88,7 @@ export const GoogleMapView = forwardRef<GoogleMapViewHandle, MapViewProps>(funct
   const dragIndexRef = useRef<number | null>(null);
 
   // Overlay references
+  const bgPolygonRef = useRef<google.maps.Polygon | null>(null);
   const polygonRef = useRef<google.maps.Polygon | null>(null);
   const polylineRef = useRef<google.maps.Polyline | null>(null);
   const vertexMarkersRef = useRef<google.maps.Marker[]>([]);
@@ -211,6 +214,10 @@ export const GoogleMapView = forwardRef<GoogleMapViewHandle, MapViewProps>(funct
     return () => {
       active = false;
       mapRef.current = null;
+      if (bgPolygonRef.current) {
+        bgPolygonRef.current.setMap(null);
+        bgPolygonRef.current = null;
+      }
       if (win.gm_authFailure === ourAuthFailure) win.gm_authFailure = prevAuthFailure;
     };
   }, []);
@@ -406,6 +413,34 @@ export const GoogleMapView = forwardRef<GoogleMapViewHandle, MapViewProps>(funct
 
     vertexMarkersRef.current = newMarkers;
   }, [vertices, selectionMode, loaded]);
+
+  // Render background polygon (e.g. main building polygon when drawing a nearby building)
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !loaded || typeof window === "undefined" || !window.google?.maps) return;
+
+    if (backgroundPolygon && backgroundPolygon.length >= 3) {
+      const path = backgroundPolygon.map((v) => ({ lat: v.lat, lng: v.lng }));
+      if (!bgPolygonRef.current) {
+        bgPolygonRef.current = new window.google.maps.Polygon({
+          paths: path,
+          strokeColor: "#10b981",
+          strokeOpacity: 0.95,
+          strokeWeight: 2.5,
+          fillColor: "#10b981",
+          fillOpacity: 0.2,
+          map,
+          zIndex: 4,
+        });
+      } else {
+        bgPolygonRef.current.setPaths(path);
+        bgPolygonRef.current.setMap(map);
+      }
+    } else if (bgPolygonRef.current) {
+      bgPolygonRef.current.setMap(null);
+      bgPolygonRef.current = null;
+    }
+  }, [backgroundPolygon, loaded]);
 
   // CAD-style live measurement labels & ticks overlay
   useEffect(() => {
