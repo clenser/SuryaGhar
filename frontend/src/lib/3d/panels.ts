@@ -16,10 +16,20 @@
  * app: degrees from true North clockwise (0 = N, 90 = E, 180 = S, 270 = W).
  */
 
+export type InstallationType = "rooftop" | "ground";
+
 export type PanelTypeId = "panel-450w" | "panel-550w" | "panel-600w";
 
-/** Mounting arrangements offered in the UI. */
-export type MountingType = "flat" | "tilted" | "shed";
+/** Ground-mounted structure catalogue types (Phase 3). */
+export type GroundMountingType =
+  | "ground_fixed"
+  | "ground_adjustable"
+  | "ground_tracker_single"
+  | "ground_elevated"
+  | "ground_pole";
+
+/** Mounting arrangements offered in the UI (both rooftop and ground). */
+export type MountingType = "flat" | "tilted" | "shed" | GroundMountingType;
 
 /** One selectable panel product. Dimensions in metres. */
 export interface PanelTypeDefinition {
@@ -53,15 +63,66 @@ export const PANEL_TYPES: PanelTypeDefinition[] = [
   { id: "panel-600w", label: "600 W", watts: 600, widthM: 1.13, lengthM: 2.38, thicknessM: 0.04, vmpV: 45.5, impA: 13.2, vocV: 54.5, iscA: 14.1 },
 ];
 
-/** Mounting-type catalogue for the selector. */
+/** Rooftop mounting-type catalogue. */
 export const MOUNTING_TYPES: Array<{ type: MountingType; label: string }> = [
   { type: "flat", label: "Flat Roof" },
   { type: "tilted", label: "Tilted Roof" },
   { type: "shed", label: "Shed" },
 ];
 
-/** Display label for a mounting type. */
+export interface GroundMountingDefinition {
+  type: GroundMountingType;
+  label: string;
+  description: string;
+  disabled: boolean;
+  badge?: string;
+}
+
+/**
+ * Ground-mounted structure catalogue (Phase 3).
+ *
+ * `ground_fixed` is fully implemented first with an authentic structural load path
+ * (piles/foundations -> front/rear posts -> sloped rafters -> purlin rails -> clamps + knee braces).
+ * Remaining types are clearly marked "Coming Soon" and disabled until their kinematics
+ * and geometries are functional (Phase 3 constraint & user correction).
+ */
+export const GROUND_MOUNTING_TYPES: GroundMountingDefinition[] = [
+  {
+    type: "ground_fixed",
+    label: "Fixed-Tilt Ground Mount",
+    description: "Multi-panel ground table with driven pile foundations, front/rear posts, inclined rafters, purlins and diagonal knee braces.",
+    disabled: false,
+  },
+  {
+    type: "ground_adjustable",
+    label: "Seasonal Adjustable",
+    description: "Telescoping rear strut with locking pin plates and front hinge pivots allowing 10°-45° seasonal tilt optimization.",
+    disabled: false,
+  },
+  {
+    type: "ground_tracker_single",
+    label: "Single-Axis Tracker",
+    description: "Horizontal single-axis tracker (HSAT) with continuous torque tube, bearing pillow blocks, and central slew drive motor.",
+    disabled: false,
+  },
+  {
+    type: "ground_elevated",
+    label: "Elevated / Agrivoltaic",
+    description: "High-clearance canopy (2.5m - 3.5m) portal frame for dual agricultural land-use, farm machinery, or parking clearance.",
+    disabled: false,
+  },
+  {
+    type: "ground_pole",
+    label: "Pole Mount",
+    description: "Heavy central cylindrical steel mast embedded in concrete, with top-of-pole azimuth collar and radiating truss strongback.",
+    disabled: false,
+  },
+];
+
+/** Display label for any mounting type (rooftop or ground). */
 export function mountingTypeLabel(type: MountingType): string {
+  const groundMatch = GROUND_MOUNTING_TYPES.find((m) => m.type === type);
+  if (groundMatch) return groundMatch.label;
   return MOUNTING_TYPES.find((m) => m.type === type)?.label ?? "Flat Roof";
 }
 
@@ -72,9 +133,11 @@ export function panelTypeDefinition(id: PanelTypeId): PanelTypeDefinition {
 
 /** Full panel layout configuration — the React state that drives placement. */
 export interface PanelLayoutConfig {
+  /** Installation domain mode: rooftop (default) or ground-mounted (Phase 1). */
+  installationType?: InstallationType;
   panelTypeId: PanelTypeId;
   mounting: MountingType;
-  /** Tilt above the roof plane, degrees (0–60). */
+  /** Tilt above the roof/ground plane, degrees (0–60). */
   tiltDeg: number;
   /** Facing direction, degrees from North clockwise (0–360). */
   azimuthDeg: number;
@@ -87,12 +150,11 @@ export interface PanelLayoutConfig {
    */
   rowSpacingM: number | null;
   colSpacingM: number | null;
-  /** Required clearance from the roof edge, metres. */
+  /** Required clearance from the roof edge or usable boundary, metres. */
   setbackM: number;
   /**
-   * Height of the mounting supports above the roof surface, metres. Controls
-   * both the rendered support geometry and the panel's stand-off — a larger
-   * value lifts the array and lengthens every leg.
+   * Height of the mounting supports above the roof or ground surface, metres.
+   * Controls both rendered support geometry and panel standoff.
    */
   mountHeightM: number;
   /**
@@ -170,7 +232,7 @@ export const PANEL_SETBACK_MAX_M = 5;
  * the ceiling keeps the array visually sane for rooftop service access.
  */
 export const PANEL_MOUNT_HEIGHT_MIN_M = 0.02;
-export const PANEL_MOUNT_HEIGHT_MAX_M = 2;
+export const PANEL_MOUNT_HEIGHT_MAX_M = 4.0;
 /** Smallest module side the UI accepts, metres (a real module is > 0.3 m). */
 export const PANEL_MIN_SIDE_M = 0.3;
 /** Largest module side the UI accepts, metres (roof-scale sanity limit). */
@@ -186,6 +248,7 @@ export const PANEL_SET_COLS_MAX = 50;
 
 /** Defaults: south-facing, modest tilt, small gaps (India rooftop typical). */
 export const DEFAULT_PANEL_CONFIG: PanelLayoutConfig = {
+  installationType: "rooftop",
   panelTypeId: "panel-550w",
   mounting: "flat",
   tiltDeg: 15,
@@ -207,6 +270,66 @@ export const DEFAULT_PANEL_CONFIG: PanelLayoutConfig = {
   targetCapacityKwp: null,
 };
 
+/**
+ * Defaults for ground-mounted installation: fixed-tilt ground mount, 0.6m ground clearance,
+ * generous setbacks, and 2x8 module tables (Phase 3 & 5).
+ */
+export const DEFAULT_GROUND_PANEL_CONFIG: PanelLayoutConfig = {
+  installationType: "ground",
+  panelTypeId: "panel-550w",
+  mounting: "ground_fixed",
+  tiltDeg: 25,
+  azimuthDeg: 180,
+  spacingM: 0.05,
+  rowSpacingM: 1.5,
+  colSpacingM: 0.05,
+  setbackM: 1.0,
+  mountHeightM: 0.6,
+  orientation: "portrait",
+  customWidthM: null,
+  customLengthM: null,
+  setRows: 2,
+  setCols: 8,
+  legRows: 2,
+  legCols: 4,
+  targetCapacityKwp: null,
+};
+
+/**
+ * Initial geometric estimate for row-to-row spacing that mitigates inter-row shading.
+ * Accounts for panel slope length, tilt angle, site latitude, design solar elevation,
+ * and row azimuth direction (Phase 5 & User Correction 2).
+ */
+export function calculateSolarRowSpacing(
+  panelLengthM: number,
+  tiltDeg: number,
+  latitudeDeg: number = 22.5,
+  solarElevationDeg?: number,
+  azimuthOffsetDeg: number = 0,
+): number {
+  if (!Number.isFinite(panelLengthM) || panelLengthM <= 0) return 0.5;
+  if (!Number.isFinite(tiltDeg) || tiltDeg <= 0) return 0.2;
+
+  const tiltRad = (Math.min(tiltDeg, 60) * Math.PI) / 180;
+  const deltaH = panelLengthM * Math.sin(tiltRad);
+
+  // Default design elevation: winter solstice solar noon (worst-case sun elevation for row shading)
+  const designElevation =
+    solarElevationDeg !== undefined && Number.isFinite(solarElevationDeg) && solarElevationDeg > 5
+      ? solarElevationDeg
+      : Math.max(15, 90 - Math.abs(latitudeDeg) - 23.45);
+
+  const elRad = (designElevation * Math.PI) / 180;
+  const tanEl = Math.max(0.1, Math.tan(elRad));
+  const rawShadowM = deltaH / tanEl;
+
+  const azFactor = Math.max(0.5, Math.cos((Math.abs(azimuthOffsetDeg) * Math.PI) / 180));
+  const recommendedGap = rawShadowM * azFactor;
+
+  // Round to 2 decimal places and clamp to sensible bounds (0.1m - 5m)
+  return Math.max(0.1, Math.min(5.0, Math.round(recommendedGap * 100) / 100));
+}
+
 /** Row gap actually used: explicit value, else the shared spacing. */
 export function effectiveRowSpacingM(config: PanelLayoutConfig): number {
   const v = config.rowSpacingM;
@@ -224,7 +347,10 @@ export function validatePanelConfig(config: PanelLayoutConfig): string | null {
   if (!PANEL_TYPES.some((p) => p.id === config.panelTypeId)) {
     return "Unknown panel type";
   }
-  if (!MOUNTING_TYPES.some((m) => m.type === config.mounting)) {
+  const isValidMounting =
+    MOUNTING_TYPES.some((m) => m.type === config.mounting) ||
+    GROUND_MOUNTING_TYPES.some((m) => m.type === config.mounting);
+  if (!isValidMounting) {
     return "Unknown mounting type";
   }
   if (config.orientation !== "portrait" && config.orientation !== "landscape") {

@@ -1,9 +1,9 @@
-import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
-import { Check, ChevronRight, Undo2, X } from "lucide-react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Check, ChevronRight, Loader2, Undo2, X } from "lucide-react";
 import { MapView, type MapViewHandle } from "./components/map/MapView";
 import { computeCentroidUtm, wgsPolygonToLocalMetres } from "./lib/3d/coordinates";
 import { createObstacleId, splitPolygon, type Obstacle } from "./lib/3d/obstacles";
-import type { LngLat } from "./lib/geo";
+import { analyzePolygon, formatArea, type LngLat } from "./lib/geo";
 import { MapControls } from "./components/map/MapControls";
 import { MapToolbar } from "./components/map/MapToolbar";
 import { ImagerySelector } from "./components/map/ImagerySelector";
@@ -26,6 +26,7 @@ import { SelectionPanel } from "./components/selection/SelectionPanel";
 import { ValidatePanel } from "./components/analysis/ValidatePanel";
 import type { LocationResult } from "./types";
 import type { SegmentationModel } from "./services/analysis";
+import type { InstallationType } from "./lib/3d/panels";
 import { ensureBackendAwake } from "./services/backendStatus";
 
 type Stage = "select" | "model" | "validate";
@@ -50,6 +51,8 @@ export default function App() {
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const selection = useSelection();
   const [stage, setStage] = useState<Stage>("select");
+  /** Installation mode: rooftop (default) or ground-mounted (Phase 1). */
+  const [installationType, setInstallationType] = useState<InstallationType>("rooftop");
   const [buildingHeight, setBuildingHeight] = useState<number | null>(null);
   /**
    * Parapet height above the roof (m). Null means "no explicit value yet" —
@@ -103,10 +106,17 @@ export default function App() {
   }, []);
 
   const [nearbyBuildingFlow, setNearbyBuildingFlow] = useState<{
-    step: "draw" | "height";
+    step: "draw" | "edit" | "height";
     vertices: LngLat[];
     height: number;
   } | null>(null);
+
+  const nearbyBuildingMetrics = useMemo(() => {
+    if (nearbyBuildingFlow && nearbyBuildingFlow.vertices.length >= 3) {
+      return analyzePolygon(nearbyBuildingFlow.vertices);
+    }
+    return null;
+  }, [nearbyBuildingFlow]);
 
   const handleStartAddNearbyBuilding = useCallback(() => {
     setNearbyBuildingFlow({
@@ -114,38 +124,58 @@ export default function App() {
       vertices: [],
       height: 12,
     });
-  }, []);
+    if (selection.vertices.length >= 3) {
+      let sumLng = 0;
+      let sumLat = 0;
+      selection.vertices.forEach((v) => {
+        sumLng += v.lng;
+        sumLat += v.lat;
+      });
+      const cLng = sumLng / selection.vertices.length;
+      const cLat = sumLat / selection.vertices.length;
+      mapRef.current?.flyToPlace(cLng, cLat, 19.5);
+    }
+  }, [selection.vertices]);
 
   const handleCancelNearbyBuilding = useCallback(() => {
     setNearbyBuildingFlow(null);
     setDesignMode(true);
   }, []);
 
+  const [isConfirmingObstacle, setIsConfirmingObstacle] = useState(false);
+
   const handleConfirmNearbyBuilding = useCallback(() => {
-    if (!nearbyBuildingFlow || nearbyBuildingFlow.vertices.length < 3) return;
-    const originUtm = computeCentroidUtm(selection.vertices);
-    const localPoints = wgsPolygonToLocalMetres(nearbyBuildingFlow.vertices, originUtm);
-    const { centroid, offsets } = splitPolygon(localPoints);
-    const xs = offsets.map((p) => p.x);
-    const ys = offsets.map((p) => p.y);
-    const width = Math.max(0.5, Math.max(...xs) - Math.min(...xs));
-    const length = Math.max(0.5, Math.max(...ys) - Math.min(...ys));
+    if (!nearbyBuildingFlow || nearbyBuildingFlow.vertices.length < 3 || isConfirmingObstacle) return;
+    setIsConfirmingObstacle(true);
+    setTimeout(() => {
+      try {
+        const originUtm = computeCentroidUtm(selection.vertices);
+        const localPoints = wgsPolygonToLocalMetres(nearbyBuildingFlow.vertices, originUtm);
+        const { centroid, offsets } = splitPolygon(localPoints);
+        const xs = offsets.map((p) => p.x);
+        const ys = offsets.map((p) => p.y);
+        const width = Math.max(0.5, Math.max(...xs) - Math.min(...xs));
+        const length = Math.max(0.5, Math.max(...ys) - Math.min(...ys));
 
-    const newBuildingObstacle: Obstacle = {
-      id: createObstacleId(),
-      type: "building",
-      position: centroid,
-      width,
-      length,
-      height: Math.max(1, nearbyBuildingFlow.height || 12),
-      rotation: 0,
-      polygon: offsets,
-    };
+        const newBuildingObstacle: Obstacle = {
+          id: createObstacleId(),
+          type: "building",
+          position: centroid,
+          width,
+          length,
+          height: Math.max(1, nearbyBuildingFlow.height || 12),
+          rotation: 0,
+          polygon: offsets,
+        };
 
-    obstacleStore.add(newBuildingObstacle);
-    setNearbyBuildingFlow(null);
-    setDesignMode(true);
-  }, [nearbyBuildingFlow, selection.vertices, obstacleStore]);
+        obstacleStore.add(newBuildingObstacle);
+        setNearbyBuildingFlow(null);
+        setDesignMode(true);
+      } finally {
+        setIsConfirmingObstacle(false);
+      }
+    }, 100);
+  }, [nearbyBuildingFlow, selection.vertices, obstacleStore, isConfirmingObstacle]);
 
   // Selection cleared -> reset overlays and the current stage so the UI never
   // shows a dead-end stage panel.
@@ -266,6 +296,27 @@ export default function App() {
   const has3DWorkspace = (stage === "model" || stage === "validate") && selection.vertices.length >= 3;
   const inDesignWorkspace = has3DWorkspace && (designMode || stage === "validate" || finalView) && nearbyBuildingFlow === null;
 
+  const mapInitialView = useMemo(() => {
+    if (nearbyBuildingFlow && selection.vertices.length >= 3) {
+      let sumLng = 0;
+      let sumLat = 0;
+      selection.vertices.forEach((v) => {
+        sumLng += v.lng;
+        sumLat += v.lat;
+      });
+      return {
+        center: {
+          lng: sumLng / selection.vertices.length,
+          lat: sumLat / selection.vertices.length,
+        },
+        zoom: 19.5,
+        bearing: 0,
+        pitch: 0,
+      };
+    }
+    return null;
+  }, [nearbyBuildingFlow, selection.vertices]);
+
   return (
     <div className="app" data-sheet={sheetCtl.sheet}>
       <Header advanced={advanced} onAdvancedToggle={handleAdvancedToggle} onSelectPlace={handleSelectPlace} designMode={inDesignWorkspace} />
@@ -281,6 +332,7 @@ export default function App() {
         <MapView
           ref={mapRef}
           layers={layers}
+          initialView={mapInitialView}
           onViewChange={setView}
           onMapError={handleMapError}
           onReady={() => {
@@ -291,14 +343,16 @@ export default function App() {
           selectionMode={
             nearbyBuildingFlow
               ? nearbyBuildingFlow.step === "draw"
-                ? (nearbyBuildingFlow.vertices.length >= 3 ? "editing" : "drawing")
-                : "idle"
+                ? "drawing"
+                : nearbyBuildingFlow.step === "edit"
+                  ? "editing"
+                  : "idle"
               : selection.mode
           }
           vertices={nearbyBuildingFlow ? nearbyBuildingFlow.vertices : selection.vertices}
           selectionCentroid={
             nearbyBuildingFlow
-              ? null
+              ? nearbyBuildingMetrics?.centroid ?? null
               : selection.metrics
                 ? { lng: selection.metrics.centroid.lng, lat: selection.metrics.centroid.lat }
                 : null
@@ -318,7 +372,7 @@ export default function App() {
             nearbyBuildingFlow
               ? () => {
                   if (nearbyBuildingFlow.vertices.length >= 3) {
-                    setNearbyBuildingFlow((prev) => (prev ? { ...prev, step: "height" } : null));
+                    setNearbyBuildingFlow((prev) => (prev ? { ...prev, step: "edit" } : null));
                   }
                 }
               : selection.finishDrawing
@@ -427,25 +481,32 @@ export default function App() {
           {nearbyBuildingFlow ? (
             <div className="stage-card">
               <p className="stage-card__eyebrow">Nearby Obstacle Simulation</p>
-              {nearbyBuildingFlow.step === "draw" ? (
+              {nearbyBuildingFlow.step === "draw" && (
                 <>
                   <h2 className="stage-card__title">Outline Nearby Building</h2>
                   <p className="stage-card__body">
-                    Click to trace the boundary of a nearby building or obstacle on the map.
-                    The green polygon marks your main rooftop terrace. Draw at least 3 points, then proceed to enter its height.
+                    Click to place points along the building boundary. Click the first point again, double-click, or press “Finish polygon” when done (minimum 3 points). The green shape outlines your main rooftop terrace.
                   </p>
                   <p className="stage-card__meta" aria-live="polite">
                     {nearbyBuildingFlow.vertices.length} point{nearbyBuildingFlow.vertices.length === 1 ? "" : "s"} placed
-                    {nearbyBuildingFlow.vertices.length >= 3 ? " · Outline complete" : " (draw at least 3 points)"}
+                    {nearbyBuildingFlow.vertices.length >= 3 ? " · Click first point to close" : " (place at least 3 points)"}
                   </p>
                   <div className="stage-card__actions">
                     <button
                       type="button"
                       className="btn btn--primary"
                       disabled={nearbyBuildingFlow.vertices.length < 3}
-                      onClick={() => setNearbyBuildingFlow((prev) => prev ? { ...prev, step: "height" } : null)}
+                      onClick={() => setNearbyBuildingFlow((prev) => prev ? { ...prev, step: "edit" } : null)}
                     >
                       <Check size={15} strokeWidth={2} aria-hidden="true" />
+                      Finish polygon
+                    </button>
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={nearbyBuildingFlow.vertices.length < 3}
+                      onClick={() => setNearbyBuildingFlow((prev) => prev ? { ...prev, step: "height" } : null)}
+                    >
                       Next: Enter height
                     </button>
                     <button
@@ -467,7 +528,72 @@ export default function App() {
                     </button>
                   </div>
                 </>
-              ) : (
+              )}
+
+              {nearbyBuildingFlow.step === "edit" && (
+                <>
+                  <h2 className="stage-card__title">Review Building Outline</h2>
+                  <p className="stage-card__body">
+                    Review and adjust the boundary. Drag corner handles on the map to fine-tune the shape, or right-click a handle to delete it.
+                  </p>
+                  {nearbyBuildingMetrics && (
+                    <>
+                      <dl className="metric-list">
+                        <div>
+                          <dt>Area</dt>
+                          <dd>{formatArea(nearbyBuildingMetrics.areaM2)}</dd>
+                        </div>
+                        <div>
+                          <dt>Perimeter</dt>
+                          <dd>{nearbyBuildingMetrics.perimeterM.toFixed(1)} m</dd>
+                        </div>
+                        <div>
+                          <dt>Points</dt>
+                          <dd>{nearbyBuildingFlow.vertices.length}</dd>
+                        </div>
+                      </dl>
+                      {!nearbyBuildingMetrics.valid && (
+                        <p className="stage-card__warning" role="alert">{nearbyBuildingMetrics.issue}</p>
+                      )}
+                    </>
+                  )}
+                  <div className="stage-card__actions">
+                    <button
+                      type="button"
+                      className="btn btn--primary"
+                      disabled={!nearbyBuildingMetrics?.valid}
+                      onClick={() => setNearbyBuildingFlow((prev) => prev ? { ...prev, step: "height" } : null)}
+                    >
+                      <Check size={15} strokeWidth={2} aria-hidden="true" />
+                      Next: Enter height
+                    </button>
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => setNearbyBuildingFlow((prev) => prev ? { ...prev, step: "draw" } : null)}
+                    >
+                      Add more points
+                    </button>
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => setNearbyBuildingFlow((prev) => prev ? { ...prev, step: "draw", vertices: [] } : null)}
+                    >
+                      Redraw
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--subtle"
+                      onClick={handleCancelNearbyBuilding}
+                    >
+                      <X size={15} strokeWidth={1.75} aria-hidden="true" />
+                      Cancel
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {nearbyBuildingFlow.step === "height" && (
                 <>
                   <h2 className="stage-card__title">Enter Building Height</h2>
                   <p className="stage-card__body">
@@ -496,16 +622,20 @@ export default function App() {
                     <button
                       type="button"
                       className="btn btn--primary"
-                      disabled={!nearbyBuildingFlow.height || nearbyBuildingFlow.height <= 0}
+                      disabled={!nearbyBuildingFlow.height || nearbyBuildingFlow.height <= 0 || isConfirmingObstacle}
                       onClick={handleConfirmNearbyBuilding}
                     >
-                      <Check size={15} strokeWidth={2} aria-hidden="true" />
-                      Confirm & View in 3D
+                      {isConfirmingObstacle ? (
+                        <Loader2 size={15} className="spin" aria-hidden="true" />
+                      ) : (
+                        <Check size={15} strokeWidth={2} aria-hidden="true" />
+                      )}
+                      {isConfirmingObstacle ? "Creating 3D Obstacle…" : "Confirm & View in 3D"}
                     </button>
                     <button
                       type="button"
                       className="btn"
-                      onClick={() => setNearbyBuildingFlow((prev) => prev ? { ...prev, step: "draw" } : null)}
+                      onClick={() => setNearbyBuildingFlow((prev) => prev ? { ...prev, step: "edit" } : null)}
                     >
                       Back to outline
                     </button>
@@ -514,6 +644,7 @@ export default function App() {
                       className="btn btn--subtle"
                       onClick={handleCancelNearbyBuilding}
                     >
+                      <X size={15} strokeWidth={1.75} aria-hidden="true" />
                       Cancel
                     </button>
                   </div>
@@ -527,6 +658,8 @@ export default function App() {
                   selection={selection}
                   onStartValidate={() => setStage("model")}
                   backendReady={backendReady}
+                  installationType={installationType}
+                  onInstallationTypeChange={setInstallationType}
                 />
               )}
               {has3DWorkspace && (
@@ -543,6 +676,7 @@ export default function App() {
                     metrics={selection.metrics}
                     buildingHeight={buildingHeight}
                     onSetHeight={handleModelHeight}
+                    installationType={installationType}
                     parapetHeight={parapetHeight}
                     onSetParapetHeight={setParapetHeight}
                     parapetClearance={parapetClearance}
@@ -594,6 +728,7 @@ export default function App() {
                           setFinalView(false);
                         }}
                         backendReady={backendReady}
+                        installationType={installationType}
                       />
                     }
                   />
@@ -643,12 +778,40 @@ export default function App() {
             <ImagerySelector onOpenLayers={() => setLayersOpen(true)} />
 
         <MapToolbar
-          mode={selection.mode}
-          hasVertices={selection.vertices.length > 0}
+          mode={
+            nearbyBuildingFlow
+              ? nearbyBuildingFlow.step === "draw"
+                ? "drawing"
+                : nearbyBuildingFlow.step === "edit"
+                  ? "editing"
+                  : "confirmed"
+              : selection.mode
+          }
+          hasVertices={
+            nearbyBuildingFlow
+              ? nearbyBuildingFlow.vertices.length > 0
+              : selection.vertices.length > 0
+          }
           measureOn={measureOn}
-          onSelect={selection.start}
-          onEdit={selection.enterEditing}
-          onClear={selection.clear}
+          onSelect={
+            nearbyBuildingFlow
+              ? () => setNearbyBuildingFlow((prev) => (prev ? { ...prev, step: "draw" } : null))
+              : selection.start
+          }
+          onEdit={
+            nearbyBuildingFlow
+              ? () => {
+                  if (nearbyBuildingFlow.vertices.length >= 3) {
+                    setNearbyBuildingFlow((prev) => (prev ? { ...prev, step: "edit" } : null));
+                  }
+                }
+              : selection.enterEditing
+          }
+          onClear={
+            nearbyBuildingFlow
+              ? () => setNearbyBuildingFlow((prev) => (prev ? { ...prev, vertices: [], step: "draw" } : null))
+              : selection.clear
+          }
           onMeasure={() => setMeasureOn((v) => !v)}
         />
 

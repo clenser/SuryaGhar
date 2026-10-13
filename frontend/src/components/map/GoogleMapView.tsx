@@ -20,6 +20,7 @@ interface MapViewProps {
   onViewChange: (state: MapViewState) => void;
   onMapError: (entry: Omit<MapErrorEntry, "id" | "at">) => void;
   onReady?: () => void;
+  initialView?: MapViewState | null;
   selectionMode?: SelectionMode;
   vertices?: LngLat[];
   backgroundPolygon?: LngLat[] | null;
@@ -53,6 +54,7 @@ export const GoogleMapView = forwardRef<GoogleMapViewHandle, MapViewProps>(funct
     onViewChange,
     onMapError,
     onReady,
+    initialView = null,
     selectionMode = "idle",
     vertices = [],
     backgroundPolygon = null,
@@ -89,6 +91,7 @@ export const GoogleMapView = forwardRef<GoogleMapViewHandle, MapViewProps>(funct
 
   // Overlay references
   const bgPolygonRef = useRef<google.maps.Polygon | null>(null);
+  const bgMarkerRef = useRef<google.maps.Marker | null>(null);
   const polygonRef = useRef<google.maps.Polygon | null>(null);
   const polylineRef = useRef<google.maps.Polyline | null>(null);
   const vertexMarkersRef = useRef<google.maps.Marker[]>([]);
@@ -127,9 +130,14 @@ export const GoogleMapView = forwardRef<GoogleMapViewHandle, MapViewProps>(funct
           throw new Error("Google Maps library loaded without a valid Map constructor.");
         }
 
+        const initCenter = initialView?.center
+          ? { lat: initialView.center.lat, lng: initialView.center.lng }
+          : { lat: KOLKATA_VIEW.center.lat, lng: KOLKATA_VIEW.center.lng };
+        const initZoom = initialView?.zoom ? Math.round(initialView.zoom) : Math.round(KOLKATA_VIEW.zoom);
+
         const map = new MapConstructor(containerRef.current, {
-          center: { lat: KOLKATA_VIEW.center.lat, lng: KOLKATA_VIEW.center.lng },
-          zoom: Math.round(KOLKATA_VIEW.zoom),
+          center: initCenter,
+          zoom: initZoom,
           maxZoom: 22,
           isFractionalZoomEnabled: true,
           mapTypeId: (googleInstance.maps?.MapTypeId?.SATELLITE as string | undefined) ?? "satellite",
@@ -217,6 +225,10 @@ export const GoogleMapView = forwardRef<GoogleMapViewHandle, MapViewProps>(funct
       if (bgPolygonRef.current) {
         bgPolygonRef.current.setMap(null);
         bgPolygonRef.current = null;
+      }
+      if (bgMarkerRef.current) {
+        bgMarkerRef.current.setMap(null);
+        bgMarkerRef.current = null;
       }
       if (win.gm_authFailure === ourAuthFailure) win.gm_authFailure = prevAuthFailure;
     };
@@ -320,11 +332,13 @@ export const GoogleMapView = forwardRef<GoogleMapViewHandle, MapViewProps>(funct
           strokeWeight: 2.5,
           fillColor: "#13a8b5",
           fillOpacity: 0.16,
+          clickable: false,
           map,
           zIndex: 5,
         });
       } else {
         polygonRef.current.setPaths(path);
+        polygonRef.current.setOptions({ clickable: false });
         polygonRef.current.setMap(map);
       }
     } else {
@@ -341,11 +355,13 @@ export const GoogleMapView = forwardRef<GoogleMapViewHandle, MapViewProps>(funct
             strokeColor: "#13a8b5",
             strokeOpacity: 0.9,
             strokeWeight: 2.5,
+            clickable: false,
             map,
             zIndex: 5,
           });
         } else {
           polylineRef.current.setPath(path);
+          polylineRef.current.setOptions({ clickable: false });
           polylineRef.current.setMap(map);
         }
       } else if (polylineRef.current) {
@@ -425,20 +441,72 @@ export const GoogleMapView = forwardRef<GoogleMapViewHandle, MapViewProps>(funct
         bgPolygonRef.current = new window.google.maps.Polygon({
           paths: path,
           strokeColor: "#10b981",
-          strokeOpacity: 0.95,
-          strokeWeight: 2.5,
+          strokeOpacity: 1.0,
+          strokeWeight: 3.5,
           fillColor: "#10b981",
-          fillOpacity: 0.2,
+          fillOpacity: 0.25,
+          clickable: false,
           map,
-          zIndex: 4,
+          zIndex: 10,
         });
       } else {
         bgPolygonRef.current.setPaths(path);
+        bgPolygonRef.current.setOptions({ clickable: false });
         bgPolygonRef.current.setMap(map);
       }
-    } else if (bgPolygonRef.current) {
-      bgPolygonRef.current.setMap(null);
-      bgPolygonRef.current = null;
+
+      // Calculate centroid and center/zoom to the main building
+      let sumLat = 0;
+      let sumLng = 0;
+      path.forEach((p) => {
+        sumLat += p.lat;
+        sumLng += p.lng;
+      });
+      const centerLat = sumLat / path.length;
+      const centerLng = sumLng / path.length;
+
+      map.panTo({ lat: centerLat, lng: centerLng });
+      if ((map.getZoom() ?? 0) < 18) {
+        map.setZoom(19.5);
+      }
+
+      // Add or update marker label for Main Building
+      if (!bgMarkerRef.current) {
+        bgMarkerRef.current = new window.google.maps.Marker({
+          position: { lat: centerLat, lng: centerLng },
+          map,
+          clickable: false,
+          label: {
+            text: "Main Building",
+            color: "#ffffff",
+            fontSize: "12px",
+            fontWeight: "bold",
+            className: "main-building-map-label",
+          },
+          icon: {
+            path: window.google.maps.SymbolPath.CIRCLE,
+            scale: 7,
+            fillColor: "#059669",
+            fillOpacity: 1,
+            strokeColor: "#ffffff",
+            strokeWeight: 2,
+          },
+          zIndex: 15,
+        });
+      } else {
+        bgMarkerRef.current.setPosition({ lat: centerLat, lng: centerLng });
+        bgMarkerRef.current.setOptions({ clickable: false });
+        bgMarkerRef.current.setMap(map);
+      }
+    } else {
+      if (bgPolygonRef.current) {
+        bgPolygonRef.current.setMap(null);
+        bgPolygonRef.current = null;
+      }
+      if (bgMarkerRef.current) {
+        bgMarkerRef.current.setMap(null);
+        bgMarkerRef.current = null;
+      }
     }
   }, [backgroundPolygon, loaded]);
 

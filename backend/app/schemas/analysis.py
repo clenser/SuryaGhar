@@ -35,6 +35,8 @@ class ValidateRequest(BaseModel):
     # Optional explicit segmentation model ("hotosm_buildings" | "sam2_tiny").
     # Omitted -> configured default (HOTOSM). Unknown ids are rejected with 400.
     segmentation_model: str | None = None
+    # Optional installation type ("rooftop" | "ground"), default rooftop
+    installation_type: str | None = "rooftop"
 
 
 class ValidateResponse(BaseModel):
@@ -68,6 +70,9 @@ class PanelLayoutRequest(BaseModel):
     tilt_deg: float | None = Field(default=None, ge=0, le=90)
     azimuth_deg: float | None = Field(default=None, ge=0, le=360)
     target_capacity_kwp: float | None = Field(default=None, ge=0.2, le=1000)
+    installation_type: str | None = "rooftop"
+    mounting_type: str | None = None
+    ground_clearance_m: float | None = Field(default=None, ge=0.0, le=5.0)
 
 
 class PanelLayoutResponse(BaseModel):
@@ -85,6 +90,7 @@ class PanelLayoutResponse(BaseModel):
     layout: dict | None = None
     orientation: dict | None = None
     solar: dict | None = None
+    installation_type: str | None = None
 
 
 class SolarRequest(BaseModel):

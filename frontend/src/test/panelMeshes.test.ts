@@ -16,7 +16,6 @@ import {
 } from "../lib/3d/panelMeshes";
 import { DEFAULT_PANEL_CONFIG, panelTypeDefinition } from "../lib/3d/panels";
 import type { PlacedPanel } from "../lib/3d/panelPlacement";
-import type { MountingType } from "../lib/3d/panels";
 
 function panels(count: number): PlacedPanel[] {
   return Array.from({ length: count }, (_, i) => ({
@@ -40,8 +39,8 @@ describe("createPanelUnitGeometry", () => {
   });
 
   it("builds a distinct arrangement for each mounting type", () => {
-    const arrays: Record<MountingType, number[]> = { flat: [], tilted: [], shed: [] };
-    for (const mounting of Object.keys(arrays) as MountingType[]) {
+    const arrays: Record<"flat" | "tilted" | "shed", number[]> = { flat: [], tilted: [], shed: [] };
+    for (const mounting of Object.keys(arrays) as Array<"flat" | "tilted" | "shed">) {
       const geometry = createPanelUnitGeometry("panel-550w", mounting, 20);
       geometry.computeBoundingBox();
       const box = geometry.boundingBox!;

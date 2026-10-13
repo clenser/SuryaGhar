@@ -36,6 +36,7 @@ export interface MapViewHandle {
 
 interface MapViewProps {
   layers: LayerSettings;
+  initialView?: MapViewState | null;
   onViewChange: (state: MapViewState) => void;
   onMapError: (entry: Omit<MapErrorEntry, "id" | "at">) => void;
   onReady?: () => void;
@@ -162,6 +163,7 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
           key="google"
           ref={googleRef}
           {...shared}
+          initialView={props.initialView ?? lastView.current}
           onViewChange={onViewChange}
           onMapError={onGoogleError}
           onReady={onGoogleReady}
@@ -183,7 +185,7 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
             key="maplibre"
             ref={libreRef}
             {...shared}
-            initialView={lastView.current}
+            initialView={props.initialView ?? lastView.current}
             onViewChange={onViewChange}
             onMapError={onMapLibreError}
             onReady={onMapLibreReady}

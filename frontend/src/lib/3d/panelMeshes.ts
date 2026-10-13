@@ -205,6 +205,38 @@ function box(
   return paint(geometry, color);
 }
 
+/**
+ * Construct a structural beam/column/brace between two explicit 3D anchor points (Phase 4).
+ * Ensures mathematical connection without floating endpoints, gaps, or misalignments.
+ */
+export function beamBetweenPoints(
+  p1: { x: number; y: number; z: number },
+  p2: { x: number; y: number; z: number },
+  widthM: number,
+  depthM: number,
+  color: number,
+): THREE.BufferGeometry {
+  const dx = p2.x - p1.x;
+  const dy = p2.y - p1.y;
+  const dz = p2.z - p1.z;
+  const length = Math.hypot(dx, dy, dz);
+  if (length < 0.002) {
+    return box(widthM, depthM, 0.002, p1.x, p1.y, p1.z, color);
+  }
+
+  const geometry = new THREE.BoxGeometry(
+    Math.max(widthM, 0.002),
+    Math.max(depthM, 0.002),
+    length,
+  );
+  const dir = new THREE.Vector3(dx, dy, dz).normalize();
+  const up = new THREE.Vector3(0, 0, 1);
+  const quaternion = new THREE.Quaternion().setFromUnitVectors(up, dir);
+  geometry.applyQuaternion(quaternion);
+  geometry.translate((p1.x + p2.x) / 2, (p1.y + p2.y) / 2, (p1.z + p2.z) / 2);
+  return paint(geometry, color);
+}
+
 /** Triangular prism (shed wedge): triangle in the YZ plane, extruded along X. */
 function wedge(widthM: number, lengthM: number, backHeightM: number): THREE.BufferGeometry {
   const hw = widthM / 2;
@@ -411,6 +443,49 @@ export function createPanelUnitGeometry(
     }
     const lift = new THREE.Matrix4().makeTranslation(0, 0, centerH);
     for (const part of panelParts) part.applyMatrix4(lift);
+  } else if (
+    mounting === "ground_fixed" ||
+    mounting === "ground_adjustable" ||
+    mounting === "ground_tracker_single" ||
+    mounting === "ground_elevated" ||
+    mounting === "ground_pole"
+  ) {
+    const centerH = ROOF_STANDOFF_M + mountHeight + (l / 2) * sin;
+    if (!withoutLegs) {
+      const singleCfg: PanelLayoutConfig = {
+        panelTypeId,
+        mounting,
+        tiltDeg,
+        azimuthDeg: 180,
+        spacingM: 0.05,
+        rowSpacingM: null,
+        colSpacingM: null,
+        setbackM: 1.0,
+        mountHeightM,
+        orientation: "portrait",
+        customWidthM: null,
+        customLengthM: null,
+        setRows: 1,
+        setCols: 1,
+        legRows: 2,
+        legCols: 2,
+      };
+      let singleMount: THREE.BufferGeometry;
+      if (mounting === "ground_adjustable") {
+        singleMount = createGroundAdjustableMountGeometry(singleCfg, 1, 1);
+      } else if (mounting === "ground_tracker_single") {
+        singleMount = createGroundTrackerMountGeometry(singleCfg, 1, 1);
+      } else if (mounting === "ground_elevated") {
+        singleMount = createGroundElevatedMountGeometry(singleCfg, 1, 1);
+      } else if (mounting === "ground_pole") {
+        singleMount = createGroundPoleMountGeometry(singleCfg, 1, 1);
+      } else {
+        singleMount = createGroundFixedMountGeometry(singleCfg, 1, 1);
+      }
+      parts.push(singleMount);
+    }
+    const lift = new THREE.Matrix4().makeTranslation(0, 0, centerH);
+    for (const part of panelParts) part.applyMatrix4(lift);
   } else {
     // Shed: single-slope solid wedge under the panel. The wedge is a prism,
     // so its height comes from the underside at its own back edge and its
@@ -491,6 +566,803 @@ export function createPanelHeatmapFaceGeometry(
 }
 
 /**
+ * Create an authentic fixed-tilt ground mount structure (Phase 3 A & Phase 4).
+ *
+ * Coherent load path:
+ * PV module -> clamps -> transverse purlin rails -> sloped rafters -> front/rear posts -> foundation piles -> ground.
+ *
+ * Uses shared structural anchor nodes to guarantee all members and diagonal knee braces connect without gaps or overlaps.
+ */
+export function createGroundFixedMountGeometry(
+  config: PanelLayoutConfig,
+  tableRowsOverride?: number,
+  tableColsOverride?: number,
+  groundElevationM: number = 0,
+): THREE.BufferGeometry {
+  const typeDef = panelTypeDefinition(config.panelTypeId);
+  const dims = effectivePanelDims(config);
+  const w = dims.widthM;
+  const l = dims.lengthM;
+  const t = typeDef.thicknessM;
+  const tilt = (config.tiltDeg * Math.PI) / 180;
+  const sin = Math.sin(tilt);
+
+  const setRows = Math.max(1, tableRowsOverride ?? config.setRows);
+  const setCols = Math.max(1, tableColsOverride ?? config.setCols);
+  const rowSpacing = effectiveRowSpacingM(config);
+  const colSpacing = effectiveColSpacingM(config);
+
+  const stepU = w + colSpacing;
+  const stepV = l + rowSpacing;
+  const totalWidth = setCols * w + (setCols - 1) * colSpacing;
+
+  const mountHeight = Number.isFinite(config.mountHeightM) && config.mountHeightM > 0
+    ? config.mountHeightM
+    : 0.6;
+  const centerH = ROOF_STANDOFF_M + mountHeight + (l / 2) * sin;
+
+  const parts: THREE.BufferGeometry[] = [];
+
+  const purlinProfileW = 0.045;
+  const purlinProfileH = 0.04;
+  const purlinLengthX = totalWidth + 0.10;
+
+  const purlinTopLocalZ = -t / 2 + SUPPORT_OVERLAP_M;
+  const purlinCenterLocalZ = purlinTopLocalZ - purlinProfileH / 2;
+  const purlinBottomLocalZ = purlinTopLocalZ - purlinProfileH;
+
+  const tiltMatrix = new THREE.Matrix4().makeRotationX(-tilt);
+
+  // 1. Continuous transverse purlin rails per row & module clamps
+  for (let r = 0; r < setRows; r++) {
+    const rowCenterY = (r - (setRows - 1) / 2) * stepV;
+    const purlinOffsets = [-l * 0.28, l * 0.28];
+
+    for (const dy of purlinOffsets) {
+      const purlin = box(
+        purlinLengthX,
+        purlinProfileW,
+        purlinProfileH,
+        0,
+        dy,
+        purlinCenterLocalZ,
+        SUPPORT_COLOR,
+      );
+      purlin.applyMatrix4(tiltMatrix);
+      purlin.translate(0, rowCenterY, centerH);
+      parts.push(purlin);
+
+      // Under-frame module clamping interfaces
+      const clampH = 0.018;
+      const clampCenterLocalZ = purlinTopLocalZ - clampH / 2;
+      for (let c = 0; c <= setCols; c++) {
+        let clampX: number;
+        if (c === 0) clampX = -totalWidth / 2;
+        else if (c === setCols) clampX = totalWidth / 2;
+        else clampX = -totalWidth / 2 + c * stepU - colSpacing / 2;
+
+        const clamp = box(0.04, 0.05, clampH, clampX, dy, clampCenterLocalZ, FRAME_COLOR);
+        clamp.applyMatrix4(tiltMatrix);
+        clamp.translate(0, rowCenterY, centerH);
+        parts.push(clamp);
+      }
+    }
+  }
+
+  // 2. Structural Column Bents: inclined rafters, front/rear posts, foundations, knee braces
+  const legCols = Math.max(2, config.legCols);
+  const spanX = (count: number): number[] => {
+    if (count <= 1) return [0];
+    const margin = Math.min(0.35, totalWidth * 0.15);
+    const half = Math.max(0.1, totalWidth / 2 - margin);
+    return Array.from({ length: count }, (_, i) => -half + (i * 2 * half) / (count - 1));
+  };
+  const bentXs = spanX(legCols);
+
+  const rafterW = 0.06;
+  const rafterH = 0.06;
+  const rafterLength = l * 0.94;
+  const rafterTopLocalZ = purlinBottomLocalZ + SUPPORT_OVERLAP_M;
+  const rafterCenterLocalZ = rafterTopLocalZ - rafterH / 2;
+  const rafterBottomLocalZ = rafterTopLocalZ - rafterH;
+
+  const postThickness = 0.07;
+  const pileWidth = 0.14;
+  const pileHeight = 0.16;
+  const baseFlangeThickness = 0.016;
+
+  for (const bx of bentXs) {
+    for (let r = 0; r < setRows; r++) {
+      const rowCenterY = (r - (setRows - 1) / 2) * stepV;
+
+      // Sloped Rafter
+      const rafter = box(
+        rafterW,
+        rafterLength,
+        rafterH,
+        bx,
+        0,
+        rafterCenterLocalZ,
+        SUPPORT_COLOR,
+      );
+      rafter.applyMatrix4(tiltMatrix);
+      rafter.translate(0, rowCenterY, centerH);
+      parts.push(rafter);
+
+      // Shared anchor nodes on rafter underside via exact Three.js Matrix4 transform
+      const frontLocalY = -l * 0.30;
+      const rearLocalY = l * 0.30;
+
+      const frontAnchorVec = new THREE.Vector3(bx, frontLocalY, rafterBottomLocalZ)
+        .applyMatrix4(tiltMatrix)
+        .add(new THREE.Vector3(0, rowCenterY, centerH));
+
+      const rearAnchorVec = new THREE.Vector3(bx, rearLocalY, rafterBottomLocalZ)
+        .applyMatrix4(tiltMatrix)
+        .add(new THREE.Vector3(0, rowCenterY, centerH));
+
+      const frontAnchor = { x: frontAnchorVec.x, y: frontAnchorVec.y, z: frontAnchorVec.z };
+      const rearAnchor = { x: rearAnchorVec.x, y: rearAnchorVec.y, z: rearAnchorVec.z };
+
+      // Ground-contact foundation piles
+      const frontBaseGround = { x: bx, y: frontAnchor.y, z: groundElevationM };
+      const rearBaseGround = { x: bx, y: rearAnchor.y, z: groundElevationM };
+
+      // Front pile stub + flange
+      parts.push(
+        box(
+          pileWidth,
+          pileWidth,
+          pileHeight,
+          frontBaseGround.x,
+          frontBaseGround.y,
+          frontBaseGround.z + pileHeight / 2,
+          FOOTING_COLOR,
+        ),
+      );
+      parts.push(
+        box(
+          pileWidth + 0.04,
+          pileWidth + 0.04,
+          baseFlangeThickness,
+          frontBaseGround.x,
+          frontBaseGround.y,
+          frontBaseGround.z + pileHeight + baseFlangeThickness / 2,
+          FOOTING_COLOR,
+        ),
+      );
+
+      // Rear pile stub + flange
+      parts.push(
+        box(
+          pileWidth,
+          pileWidth,
+          pileHeight,
+          rearBaseGround.x,
+          rearBaseGround.y,
+          rearBaseGround.z + pileHeight / 2,
+          FOOTING_COLOR,
+        ),
+      );
+      parts.push(
+        box(
+          pileWidth + 0.04,
+          pileWidth + 0.04,
+          baseFlangeThickness,
+          rearBaseGround.x,
+          rearBaseGround.y,
+          rearBaseGround.z + pileHeight + baseFlangeThickness / 2,
+          FOOTING_COLOR,
+        ),
+      );
+
+      const frontPostBaseZ = frontBaseGround.z + pileHeight + baseFlangeThickness;
+      const rearPostBaseZ = rearBaseGround.z + pileHeight + baseFlangeThickness;
+
+      const frontPostBase = { x: bx, y: frontAnchor.y, z: frontPostBaseZ };
+      const rearPostBase = { x: bx, y: rearAnchor.y, z: rearPostBaseZ };
+
+      // Front & Rear vertical support posts (terminating cleanly on rafter underside)
+      parts.push(
+        beamBetweenPoints(
+          frontPostBase,
+          frontAnchor,
+          postThickness,
+          postThickness,
+          SUPPORT_COLOR,
+        ),
+      );
+      parts.push(
+        beamBetweenPoints(
+          rearPostBase,
+          rearAnchor,
+          postThickness,
+          postThickness,
+          SUPPORT_COLOR,
+        ),
+      );
+
+      // Ground tie strut between front and rear piles
+      parts.push(
+        beamBetweenPoints(
+          frontPostBase,
+          rearPostBase,
+          0.05,
+          0.04,
+          FOOTING_COLOR,
+        ),
+      );
+
+      // Diagonal Knee Bracing (anchored strictly to rafter underside)
+      const frontPostMid = {
+        x: bx,
+        y: frontAnchor.y,
+        z: frontPostBaseZ + (frontAnchor.z - frontPostBaseZ) * 0.45,
+      };
+      const midRafterVec = new THREE.Vector3(bx, frontLocalY * 0.35, rafterBottomLocalZ)
+        .applyMatrix4(tiltMatrix)
+        .add(new THREE.Vector3(0, rowCenterY, centerH));
+      parts.push(
+        beamBetweenPoints(
+          frontPostMid,
+          { x: midRafterVec.x, y: midRafterVec.y, z: midRafterVec.z },
+          0.04,
+          0.04,
+          SUPPORT_COLOR,
+        ),
+      );
+
+      const rearPostMid = {
+        x: bx,
+        y: rearAnchor.y,
+        z: rearPostBaseZ + (rearAnchor.z - rearPostBaseZ) * 0.45,
+      };
+      const midRafterVecRear = new THREE.Vector3(bx, rearLocalY * 0.35, rafterBottomLocalZ)
+        .applyMatrix4(tiltMatrix)
+        .add(new THREE.Vector3(0, rowCenterY, centerH));
+      parts.push(
+        beamBetweenPoints(
+          rearPostMid,
+          { x: midRafterVecRear.x, y: midRafterVecRear.y, z: midRafterVecRear.z },
+          0.04,
+          0.04,
+          SUPPORT_COLOR,
+        ),
+      );
+    }
+  }
+
+  const merged = mergeGeometries(parts, false);
+  for (const part of parts) part.dispose();
+  if (!merged) {
+    throw new Error("Failed to merge ground fixed mount geometry");
+  }
+  merged.computeBoundingSphere();
+  return merged;
+}
+
+/**
+ * Create an authentic seasonal adjustable ground mount structure.
+ * Features front pivot hinge pin and rear telescoping strut with multi-hole locking plates.
+ */
+export function createGroundAdjustableMountGeometry(
+  config: PanelLayoutConfig,
+  tableRowsOverride?: number,
+  tableColsOverride?: number,
+  groundElevationM: number = 0,
+): THREE.BufferGeometry {
+  const typeDef = panelTypeDefinition(config.panelTypeId);
+  const dims = effectivePanelDims(config);
+  const w = dims.widthM;
+  const l = dims.lengthM;
+  const t = typeDef.thicknessM;
+  const tilt = (config.tiltDeg * Math.PI) / 180;
+  const sin = Math.sin(tilt);
+
+  const setRows = Math.max(1, tableRowsOverride ?? config.setRows);
+  const setCols = Math.max(1, tableColsOverride ?? config.setCols);
+  const rowSpacing = effectiveRowSpacingM(config);
+  const colSpacing = effectiveColSpacingM(config);
+
+  const stepU = w + colSpacing;
+  const stepV = l + rowSpacing;
+  const totalWidth = setCols * w + (setCols - 1) * colSpacing;
+
+  const mountHeight = Number.isFinite(config.mountHeightM) && config.mountHeightM > 0
+    ? config.mountHeightM
+    : 0.6;
+  const centerH = ROOF_STANDOFF_M + mountHeight + (l / 2) * sin;
+
+  const parts: THREE.BufferGeometry[] = [];
+  const purlinProfileW = 0.045;
+  const purlinProfileH = 0.04;
+  const purlinLengthX = totalWidth + 0.10;
+  const purlinTopLocalZ = -t / 2 + SUPPORT_OVERLAP_M;
+  const purlinCenterLocalZ = purlinTopLocalZ - purlinProfileH / 2;
+  const purlinBottomLocalZ = purlinTopLocalZ - purlinProfileH;
+
+  const tiltMatrix = new THREE.Matrix4().makeRotationX(-tilt);
+
+  // 1. Transverse purlin rails per row & module clamps
+  for (let r = 0; r < setRows; r++) {
+    const rowCenterY = (r - (setRows - 1) / 2) * stepV;
+    const purlinOffsets = [-l * 0.28, l * 0.28];
+
+    for (const dy of purlinOffsets) {
+      const purlin = box(purlinLengthX, purlinProfileW, purlinProfileH, 0, dy, purlinCenterLocalZ, SUPPORT_COLOR);
+      purlin.applyMatrix4(tiltMatrix);
+      purlin.translate(0, rowCenterY, centerH);
+      parts.push(purlin);
+
+      for (let c = 0; c <= setCols; c++) {
+        let clampX: number;
+        if (c === 0) clampX = -totalWidth / 2;
+        else if (c === setCols) clampX = totalWidth / 2;
+        else clampX = -totalWidth / 2 + c * stepU - colSpacing / 2;
+
+        const clamp = box(0.04, 0.05, 0.018, clampX, dy, purlinTopLocalZ - 0.009, FRAME_COLOR);
+        clamp.applyMatrix4(tiltMatrix);
+        clamp.translate(0, rowCenterY, centerH);
+        parts.push(clamp);
+      }
+    }
+  }
+
+  // 2. Structural Column Bents with front pivot hinge & rear telescoping adjustment strut
+  const legCols = Math.max(2, config.legCols);
+  const spanX = (count: number): number[] => {
+    if (count <= 1) return [0];
+    const margin = Math.min(0.35, totalWidth * 0.15);
+    const half = Math.max(0.1, totalWidth / 2 - margin);
+    return Array.from({ length: count }, (_, i) => -half + (i * 2 * half) / (count - 1));
+  };
+  const bentXs = spanX(legCols);
+
+  const rafterW = 0.06;
+  const rafterH = 0.06;
+  const rafterLength = l * 0.94;
+  const rafterTopLocalZ = purlinBottomLocalZ + SUPPORT_OVERLAP_M;
+  const rafterCenterLocalZ = rafterTopLocalZ - rafterH / 2;
+  const rafterBottomLocalZ = rafterTopLocalZ - rafterH;
+
+  const postThickness = 0.07;
+  const pileWidth = 0.14;
+  const pileHeight = 0.16;
+  const baseFlangeThickness = 0.016;
+
+  for (const bx of bentXs) {
+    for (let r = 0; r < setRows; r++) {
+      const rowCenterY = (r - (setRows - 1) / 2) * stepV;
+
+      // Sloped Rafter
+      const rafter = box(rafterW, rafterLength, rafterH, bx, 0, rafterCenterLocalZ, SUPPORT_COLOR);
+      rafter.applyMatrix4(tiltMatrix);
+      rafter.translate(0, rowCenterY, centerH);
+      parts.push(rafter);
+
+      const frontLocalY = -l * 0.30;
+      const rearLocalY = l * 0.30;
+
+      const frontAnchorVec = new THREE.Vector3(bx, frontLocalY, rafterBottomLocalZ)
+        .applyMatrix4(tiltMatrix)
+        .add(new THREE.Vector3(0, rowCenterY, centerH));
+
+      const rearAnchorVec = new THREE.Vector3(bx, rearLocalY, rafterBottomLocalZ)
+        .applyMatrix4(tiltMatrix)
+        .add(new THREE.Vector3(0, rowCenterY, centerH));
+
+      const frontAnchor = { x: frontAnchorVec.x, y: frontAnchorVec.y, z: frontAnchorVec.z };
+      const rearAnchor = { x: rearAnchorVec.x, y: rearAnchorVec.y, z: rearAnchorVec.z };
+
+      const frontBaseGround = { x: bx, y: frontAnchor.y, z: groundElevationM };
+      const rearBaseGround = { x: bx, y: rearAnchor.y, z: groundElevationM };
+
+      // Front & Rear Pile stubs and flanges
+      parts.push(box(pileWidth, pileWidth, pileHeight, frontBaseGround.x, frontBaseGround.y, frontBaseGround.z + pileHeight / 2, FOOTING_COLOR));
+      parts.push(box(pileWidth + 0.04, pileWidth + 0.04, baseFlangeThickness, frontBaseGround.x, frontBaseGround.y, frontBaseGround.z + pileHeight + baseFlangeThickness / 2, FOOTING_COLOR));
+
+      parts.push(box(pileWidth, pileWidth, pileHeight, rearBaseGround.x, rearBaseGround.y, rearBaseGround.z + pileHeight / 2, FOOTING_COLOR));
+      parts.push(box(pileWidth + 0.04, pileWidth + 0.04, baseFlangeThickness, rearBaseGround.x, rearBaseGround.y, rearBaseGround.z + pileHeight + baseFlangeThickness / 2, FOOTING_COLOR));
+
+      const frontPostBaseZ = frontBaseGround.z + pileHeight + baseFlangeThickness;
+      const rearPostBaseZ = rearBaseGround.z + pileHeight + baseFlangeThickness;
+
+      const frontPostBase = { x: bx, y: frontAnchor.y, z: frontPostBaseZ };
+      const rearPostBase = { x: bx, y: rearAnchor.y, z: rearPostBaseZ };
+
+      // Front post with hinge bracket collar
+      parts.push(beamBetweenPoints(frontPostBase, frontAnchor, postThickness, postThickness, SUPPORT_COLOR));
+      parts.push(box(postThickness + 0.03, 0.06, 0.05, frontAnchor.x, frontAnchor.y, frontAnchor.z - 0.02, FRAME_COLOR));
+
+      // Rear Telescoping Strut: lower outer sleeve + upper inner sliding tube
+      const telescopeMidZ = rearPostBaseZ + (rearAnchor.z - rearPostBaseZ) * 0.55;
+      const telescopeMid = { x: bx, y: rearAnchor.y, z: telescopeMidZ };
+      parts.push(beamBetweenPoints(rearPostBase, telescopeMid, 0.085, 0.085, SUPPORT_COLOR));
+      parts.push(beamBetweenPoints(telescopeMid, rearAnchor, 0.065, 0.065, FRAME_COLOR));
+      parts.push(box(0.10, 0.12, 0.08, bx, rearAnchor.y, telescopeMidZ, FOOTING_COLOR));
+
+      // Ground tie strut
+      parts.push(beamBetweenPoints(frontPostBase, rearPostBase, 0.05, 0.04, FOOTING_COLOR));
+    }
+  }
+
+  const merged = mergeGeometries(parts, false);
+  for (const part of parts) part.dispose();
+  if (!merged) throw new Error("Failed to merge ground adjustable mount geometry");
+  merged.computeBoundingSphere();
+  return merged;
+}
+
+/**
+ * Create an authentic single-axis horizontal solar tracker (HSAT) structure.
+ * Features central continuous torque tube, bearing pillow blocks, slew drive motor, and torque arms.
+ */
+export function createGroundTrackerMountGeometry(
+  config: PanelLayoutConfig,
+  tableRowsOverride?: number,
+  tableColsOverride?: number,
+  groundElevationM: number = 0,
+): THREE.BufferGeometry {
+  const typeDef = panelTypeDefinition(config.panelTypeId);
+  const dims = effectivePanelDims(config);
+  const w = dims.widthM;
+  const l = dims.lengthM;
+  const t = typeDef.thicknessM;
+  const tilt = (config.tiltDeg * Math.PI) / 180;
+  const sin = Math.sin(tilt);
+
+  const setRows = Math.max(1, tableRowsOverride ?? config.setRows);
+  const setCols = Math.max(1, tableColsOverride ?? config.setCols);
+  const rowSpacing = effectiveRowSpacingM(config);
+  const colSpacing = effectiveColSpacingM(config);
+
+  const stepU = w + colSpacing;
+  const stepV = l + rowSpacing;
+  const totalWidth = setCols * w + (setCols - 1) * colSpacing;
+
+  const mountHeight = Number.isFinite(config.mountHeightM) && config.mountHeightM > 0
+    ? config.mountHeightM
+    : 0.85;
+  const centerH = ROOF_STANDOFF_M + mountHeight + (l / 2) * sin;
+
+  const parts: THREE.BufferGeometry[] = [];
+  const purlinProfileW = 0.045;
+  const purlinProfileH = 0.04;
+  const purlinLengthX = totalWidth + 0.10;
+  const purlinTopLocalZ = -t / 2 + SUPPORT_OVERLAP_M;
+  const purlinCenterLocalZ = purlinTopLocalZ - purlinProfileH / 2;
+  const purlinBottomLocalZ = purlinTopLocalZ - purlinProfileH;
+
+  const tiltMatrix = new THREE.Matrix4().makeRotationX(-tilt);
+
+  // 1. Module mounting purlin rails & clamps
+  for (let r = 0; r < setRows; r++) {
+    const rowCenterY = (r - (setRows - 1) / 2) * stepV;
+    const purlinOffsets = [-l * 0.28, l * 0.28];
+
+    for (const dy of purlinOffsets) {
+      const purlin = box(purlinLengthX, purlinProfileW, purlinProfileH, 0, dy, purlinCenterLocalZ, SUPPORT_COLOR);
+      purlin.applyMatrix4(tiltMatrix);
+      purlin.translate(0, rowCenterY, centerH);
+      parts.push(purlin);
+
+      for (let c = 0; c <= setCols; c++) {
+        let clampX: number;
+        if (c === 0) clampX = -totalWidth / 2;
+        else if (c === setCols) clampX = totalWidth / 2;
+        else clampX = -totalWidth / 2 + c * stepU - colSpacing / 2;
+
+        const clamp = box(0.04, 0.05, 0.018, clampX, dy, purlinTopLocalZ - 0.009, FRAME_COLOR);
+        clamp.applyMatrix4(tiltMatrix);
+        clamp.translate(0, rowCenterY, centerH);
+        parts.push(clamp);
+      }
+    }
+  }
+
+  // 2. Continuous Central Torque Tube & Transverse Torque Arms
+  const torqueTubeWidth = 0.13;
+  const torqueTubeCenterZ = centerH - 0.10;
+
+  for (let r = 0; r < setRows; r++) {
+    const rowCenterY = (r - (setRows - 1) / 2) * stepV;
+
+    // Continuous Torque Tube along X axis
+    const torqueTube = box(totalWidth + 0.20, torqueTubeWidth, torqueTubeWidth, 0, rowCenterY, torqueTubeCenterZ, SUPPORT_COLOR);
+    parts.push(torqueTube);
+
+    // Central Slew Drive Motor Enclosure at row center
+    const motorBox = box(0.36, 0.36, 0.34, 0, rowCenterY, torqueTubeCenterZ, FOOTING_COLOR);
+    parts.push(motorBox);
+    const motorCanister = box(0.16, 0.22, 0.16, 0.18, rowCenterY, torqueTubeCenterZ, FRAME_COLOR);
+    parts.push(motorCanister);
+
+    // Driven Foundation Piers with Bearing Pillow Blocks
+    const legCols = Math.max(2, config.legCols);
+    const spanX = (count: number): number[] => {
+      if (count <= 1) return [0];
+      const margin = Math.min(0.35, totalWidth * 0.15);
+      const half = Math.max(0.1, totalWidth / 2 - margin);
+      return Array.from({ length: count }, (_, i) => -half + (i * 2 * half) / (count - 1));
+    };
+    const pierXs = spanX(legCols);
+
+    for (const px of pierXs) {
+      const pierTop = { x: px, y: rowCenterY, z: torqueTubeCenterZ - torqueTubeWidth / 2 - 0.04 };
+
+      // Foundation pile
+      parts.push(box(0.18, 0.18, 0.20, px, rowCenterY, groundElevationM + 0.10, FOOTING_COLOR));
+      parts.push(beamBetweenPoints({ x: px, y: rowCenterY, z: groundElevationM + 0.20 }, pierTop, 0.10, 0.10, SUPPORT_COLOR));
+
+      // Bearing Pillow Block housing supporting torque tube
+      const pillowBlock = box(0.16, 0.20, 0.12, px, rowCenterY, torqueTubeCenterZ, FRAME_COLOR);
+      parts.push(pillowBlock);
+
+      // Transverse torque arm bracket connecting torque tube to purlins
+      const torqueArm = box(0.06, l * 0.90, 0.06, px, 0, purlinBottomLocalZ - 0.03, SUPPORT_COLOR);
+      torqueArm.applyMatrix4(tiltMatrix);
+      torqueArm.translate(0, rowCenterY, centerH);
+      parts.push(torqueArm);
+    }
+  }
+
+  const merged = mergeGeometries(parts, false);
+  for (const part of parts) part.dispose();
+  if (!merged) throw new Error("Failed to merge ground tracker mount geometry");
+  merged.computeBoundingSphere();
+  return merged;
+}
+
+/**
+ * Create an authentic elevated agrivoltaic / high-clearance canopy structure (2.5m - 3.5m).
+ * Allows farm machinery, livestock, crops, and vehicles to pass comfortably underneath.
+ */
+export function createGroundElevatedMountGeometry(
+  config: PanelLayoutConfig,
+  tableRowsOverride?: number,
+  tableColsOverride?: number,
+  groundElevationM: number = 0,
+): THREE.BufferGeometry {
+  const typeDef = panelTypeDefinition(config.panelTypeId);
+  const dims = effectivePanelDims(config);
+  const w = dims.widthM;
+  const l = dims.lengthM;
+  const t = typeDef.thicknessM;
+  const tilt = (config.tiltDeg * Math.PI) / 180;
+  const sin = Math.sin(tilt);
+
+  const setRows = Math.max(1, tableRowsOverride ?? config.setRows);
+  const setCols = Math.max(1, tableColsOverride ?? config.setCols);
+  const rowSpacing = effectiveRowSpacingM(config);
+  const colSpacing = effectiveColSpacingM(config);
+
+  const stepU = w + colSpacing;
+  const stepV = l + rowSpacing;
+  const totalWidth = setCols * w + (setCols - 1) * colSpacing;
+
+  const mountHeight = Number.isFinite(config.mountHeightM) && config.mountHeightM >= 2.0
+    ? config.mountHeightM
+    : 2.8;
+  const centerH = ROOF_STANDOFF_M + mountHeight + (l / 2) * sin;
+
+  const parts: THREE.BufferGeometry[] = [];
+  const purlinProfileW = 0.05;
+  const purlinProfileH = 0.045;
+  const purlinLengthX = totalWidth + 0.12;
+  const purlinTopLocalZ = -t / 2 + SUPPORT_OVERLAP_M;
+  const purlinCenterLocalZ = purlinTopLocalZ - purlinProfileH / 2;
+  const purlinBottomLocalZ = purlinTopLocalZ - purlinProfileH;
+
+  const tiltMatrix = new THREE.Matrix4().makeRotationX(-tilt);
+
+  // 1. Transverse purlin channels & module clamps
+  for (let r = 0; r < setRows; r++) {
+    const rowCenterY = (r - (setRows - 1) / 2) * stepV;
+    const purlinOffsets = [-l * 0.30, l * 0.30];
+
+    for (const dy of purlinOffsets) {
+      const purlin = box(purlinLengthX, purlinProfileW, purlinProfileH, 0, dy, purlinCenterLocalZ, SUPPORT_COLOR);
+      purlin.applyMatrix4(tiltMatrix);
+      purlin.translate(0, rowCenterY, centerH);
+      parts.push(purlin);
+
+      for (let c = 0; c <= setCols; c++) {
+        let clampX: number;
+        if (c === 0) clampX = -totalWidth / 2;
+        else if (c === setCols) clampX = totalWidth / 2;
+        else clampX = -totalWidth / 2 + c * stepU - colSpacing / 2;
+
+        const clamp = box(0.04, 0.05, 0.018, clampX, dy, purlinTopLocalZ - 0.009, FRAME_COLOR);
+        clamp.applyMatrix4(tiltMatrix);
+        clamp.translate(0, rowCenterY, centerH);
+        parts.push(clamp);
+      }
+    }
+  }
+
+  // 2. High portal frame columns & overhead cross-girders
+  const legCols = Math.max(2, config.legCols);
+  const spanX = (count: number): number[] => {
+    if (count <= 1) return [0];
+    const margin = Math.min(0.40, totalWidth * 0.15);
+    const half = Math.max(0.1, totalWidth / 2 - margin);
+    return Array.from({ length: count }, (_, i) => -half + (i * 2 * half) / (count - 1));
+  };
+  const colXs = spanX(legCols);
+
+  const columnW = 0.11;
+  const rafterW = 0.08;
+  const rafterH = 0.08;
+  const rafterLength = l * 0.95;
+  const rafterBottomLocalZ = purlinBottomLocalZ - rafterH;
+
+  for (const cx of colXs) {
+    for (let r = 0; r < setRows; r++) {
+      const rowCenterY = (r - (setRows - 1) / 2) * stepV;
+
+      // Overhead Sloped Rafter
+      const rafter = box(rafterW, rafterLength, rafterH, cx, 0, purlinBottomLocalZ - rafterH / 2, SUPPORT_COLOR);
+      rafter.applyMatrix4(tiltMatrix);
+      rafter.translate(0, rowCenterY, centerH);
+      parts.push(rafter);
+
+      const frontLocalY = -l * 0.32;
+      const rearLocalY = l * 0.32;
+
+      const frontAnchorVec = new THREE.Vector3(cx, frontLocalY, rafterBottomLocalZ)
+        .applyMatrix4(tiltMatrix)
+        .add(new THREE.Vector3(0, rowCenterY, centerH));
+
+      const rearAnchorVec = new THREE.Vector3(cx, rearLocalY, rafterBottomLocalZ)
+        .applyMatrix4(tiltMatrix)
+        .add(new THREE.Vector3(0, rowCenterY, centerH));
+
+      const frontAnchor = { x: frontAnchorVec.x, y: frontAnchorVec.y, z: frontAnchorVec.z };
+      const rearAnchor = { x: rearAnchorVec.x, y: rearAnchorVec.y, z: rearAnchorVec.z };
+
+      // Reinforced concrete pedestal footings
+      parts.push(box(0.30, 0.30, 0.25, frontAnchor.x, frontAnchor.y, groundElevationM + 0.125, FOOTING_COLOR));
+      parts.push(box(0.30, 0.30, 0.25, rearAnchor.x, rearAnchor.y, groundElevationM + 0.125, FOOTING_COLOR));
+
+      const frontColBase = { x: cx, y: frontAnchor.y, z: groundElevationM + 0.25 };
+      const rearColBase = { x: cx, y: rearAnchor.y, z: groundElevationM + 0.25 };
+
+      // Tall Portal Frame Columns
+      parts.push(beamBetweenPoints(frontColBase, frontAnchor, columnW, columnW, SUPPORT_COLOR));
+      parts.push(beamBetweenPoints(rearColBase, rearAnchor, columnW, columnW, SUPPORT_COLOR));
+
+      // Corner Haunch Gusset Plates connecting column heads to overhead rafters
+      const frontGussetMid = { x: cx, y: frontAnchor.y, z: frontAnchor.z - 0.40 };
+      const frontRafterGusset = new THREE.Vector3(cx, frontLocalY + 0.35, rafterBottomLocalZ)
+        .applyMatrix4(tiltMatrix)
+        .add(new THREE.Vector3(0, rowCenterY, centerH));
+      parts.push(beamBetweenPoints(frontGussetMid, { x: frontRafterGusset.x, y: frontRafterGusset.y, z: frontRafterGusset.z }, 0.05, 0.05, FRAME_COLOR));
+
+      const rearGussetMid = { x: cx, y: rearAnchor.y, z: rearAnchor.z - 0.40 };
+      const rearRafterGusset = new THREE.Vector3(cx, rearLocalY - 0.35, rafterBottomLocalZ)
+        .applyMatrix4(tiltMatrix)
+        .add(new THREE.Vector3(0, rowCenterY, centerH));
+      parts.push(beamBetweenPoints(rearGussetMid, { x: rearRafterGusset.x, y: rearRafterGusset.y, z: rearRafterGusset.z }, 0.05, 0.05, FRAME_COLOR));
+    }
+  }
+
+  const merged = mergeGeometries(parts, false);
+  for (const part of parts) part.dispose();
+  if (!merged) throw new Error("Failed to merge ground elevated mount geometry");
+  merged.computeBoundingSphere();
+  return merged;
+}
+
+/**
+ * Create an authentic single-mast pole mount structure.
+ * Features heavy central cylindrical mast pipe, reinforced concrete pier, azimuth collar, and truss strongback.
+ */
+export function createGroundPoleMountGeometry(
+  config: PanelLayoutConfig,
+  tableRowsOverride?: number,
+  tableColsOverride?: number,
+  groundElevationM: number = 0,
+): THREE.BufferGeometry {
+  const typeDef = panelTypeDefinition(config.panelTypeId);
+  const dims = effectivePanelDims(config);
+  const w = dims.widthM;
+  const l = dims.lengthM;
+  const t = typeDef.thicknessM;
+  const tilt = (config.tiltDeg * Math.PI) / 180;
+  const sin = Math.sin(tilt);
+
+  const setRows = Math.max(1, tableRowsOverride ?? config.setRows);
+  const setCols = Math.max(1, tableColsOverride ?? config.setCols);
+  const rowSpacing = effectiveRowSpacingM(config);
+  const colSpacing = effectiveColSpacingM(config);
+
+  const stepU = w + colSpacing;
+  const stepV = l + rowSpacing;
+  const totalWidth = setCols * w + (setCols - 1) * colSpacing;
+
+  const mountHeight = Number.isFinite(config.mountHeightM) && config.mountHeightM > 0
+    ? config.mountHeightM
+    : 1.2;
+  const centerH = ROOF_STANDOFF_M + mountHeight + (l / 2) * sin;
+
+  const parts: THREE.BufferGeometry[] = [];
+  const purlinProfileW = 0.045;
+  const purlinProfileH = 0.04;
+  const purlinLengthX = totalWidth + 0.10;
+  const purlinTopLocalZ = -t / 2 + SUPPORT_OVERLAP_M;
+  const purlinCenterLocalZ = purlinTopLocalZ - purlinProfileH / 2;
+  const purlinBottomLocalZ = purlinTopLocalZ - purlinProfileH;
+
+  const tiltMatrix = new THREE.Matrix4().makeRotationX(-tilt);
+
+  // 1. Module mounting purlin rails & clamps
+  for (let r = 0; r < setRows; r++) {
+    const rowCenterY = (r - (setRows - 1) / 2) * stepV;
+    const purlinOffsets = [-l * 0.28, l * 0.28];
+
+    for (const dy of purlinOffsets) {
+      const purlin = box(purlinLengthX, purlinProfileW, purlinProfileH, 0, dy, purlinCenterLocalZ, SUPPORT_COLOR);
+      purlin.applyMatrix4(tiltMatrix);
+      purlin.translate(0, rowCenterY, centerH);
+      parts.push(purlin);
+
+      for (let c = 0; c <= setCols; c++) {
+        let clampX: number;
+        if (c === 0) clampX = -totalWidth / 2;
+        else if (c === setCols) clampX = totalWidth / 2;
+        else clampX = -totalWidth / 2 + c * stepU - colSpacing / 2;
+
+        const clamp = box(0.04, 0.05, 0.018, clampX, dy, purlinTopLocalZ - 0.009, FRAME_COLOR);
+        clamp.applyMatrix4(tiltMatrix);
+        clamp.translate(0, rowCenterY, centerH);
+        parts.push(clamp);
+      }
+    }
+  }
+
+  // 2. Heavy Central Mast, Foundation Pier, and Strongback Framework
+  const mastRadius = 0.12;
+  const mastHeight = centerH - 0.15 - groundElevationM;
+
+  // Concrete foundation pedestal
+  parts.push(box(0.55, 0.55, 0.25, 0, 0, groundElevationM + 0.125, FOOTING_COLOR));
+
+  // Central Vertical Mast Pipe
+  const mastMesh = box(mastRadius * 2, mastRadius * 2, mastHeight, 0, 0, groundElevationM + 0.25 + (mastHeight - 0.25) / 2, SUPPORT_COLOR);
+  parts.push(mastMesh);
+
+  // Top-of-Pole Azimuth Collar Sleeve
+  const collarZ = centerH - 0.15;
+  parts.push(box(0.32, 0.32, 0.22, 0, 0, collarZ, FOOTING_COLOR));
+  parts.push(box(0.20, 0.28, 0.14, 0, 0, collarZ + 0.10, FRAME_COLOR));
+
+  // Strongback Steel Cross-Beam
+  const strongbackLength = Math.max(1.8, totalWidth * 0.75);
+  const strongback = box(strongbackLength, 0.10, 0.10, 0, 0, purlinBottomLocalZ - 0.06, SUPPORT_COLOR);
+  strongback.applyMatrix4(tiltMatrix);
+  strongback.translate(0, 0, centerH);
+  parts.push(strongback);
+
+  // Diagonal Outrigger Truss Arms from Mast collar to outer strongback tips
+  const leftTip = new THREE.Vector3(-strongbackLength / 2 + 0.1, 0, purlinBottomLocalZ - 0.06)
+    .applyMatrix4(tiltMatrix)
+    .add(new THREE.Vector3(0, 0, centerH));
+  const rightTip = new THREE.Vector3(strongbackLength / 2 - 0.1, 0, purlinBottomLocalZ - 0.06)
+    .applyMatrix4(tiltMatrix)
+    .add(new THREE.Vector3(0, 0, centerH));
+
+  const collarNode = { x: 0, y: 0, z: collarZ };
+  parts.push(beamBetweenPoints(collarNode, { x: leftTip.x, y: leftTip.y, z: leftTip.z }, 0.06, 0.06, FRAME_COLOR));
+  parts.push(beamBetweenPoints(collarNode, { x: rightTip.x, y: rightTip.y, z: rightTip.z }, 0.06, 0.06, FRAME_COLOR));
+
+  const merged = mergeGeometries(parts, false);
+  for (const part of parts) part.dispose();
+  if (!merged) throw new Error("Failed to merge ground pole mount geometry");
+  merged.computeBoundingSphere();
+  return merged;
+}
+
+/**
  * Shared mounting table frame geometry for Panel Sets (Task 1).
  *
  * Implements a true commercial mounting table structure where every row `r`
@@ -507,6 +1379,21 @@ export function createSharedPanelSetFrameGeometry(
   tableRowsOverride?: number,
   tableColsOverride?: number,
 ): THREE.BufferGeometry {
+  if (config.mounting === "ground_fixed") {
+    return createGroundFixedMountGeometry(config, tableRowsOverride, tableColsOverride);
+  }
+  if (config.mounting === "ground_adjustable") {
+    return createGroundAdjustableMountGeometry(config, tableRowsOverride, tableColsOverride);
+  }
+  if (config.mounting === "ground_tracker_single") {
+    return createGroundTrackerMountGeometry(config, tableRowsOverride, tableColsOverride);
+  }
+  if (config.mounting === "ground_elevated") {
+    return createGroundElevatedMountGeometry(config, tableRowsOverride, tableColsOverride);
+  }
+  if (config.mounting === "ground_pole") {
+    return createGroundPoleMountGeometry(config, tableRowsOverride, tableColsOverride);
+  }
   const typeDef = panelTypeDefinition(config.panelTypeId);
   const dims = effectivePanelDims(config);
   const w = dims.widthM;
@@ -847,13 +1734,37 @@ function partitionPanelsByMounting(
 
   // Fallback for callers that pass raw PlacedPanel[] without tableId
   const tableSize = config.setRows * config.setCols;
+  const isGround = config.mounting.startsWith("ground_") || config.installationType === "ground";
   const useLegacySet = Boolean(
-    options?.isPanelSet &&
+    (options?.isPanelSet || isGround) &&
     (config.setRows > 1 || config.setCols > 1) &&
     panels.length >= tableSize,
   );
 
   if (!useLegacySet) {
+    if (isGround && (config.setRows > 1 || config.setCols > 1) && panels.length > 1) {
+      let avgX = 0;
+      let avgY = 0;
+      for (const m of panels) {
+        avgX += m.x;
+        avgY += m.y;
+      }
+      return {
+        setPanels: panels,
+        standalonePanels: [],
+        tables: [
+          {
+            tableId: "ground-table-partial",
+            rows: Math.min(config.setRows, panels.length),
+            cols: Math.max(1, Math.ceil(panels.length / config.setRows)),
+            centerX: avgX / panels.length,
+            centerY: avgY / panels.length,
+            rotationDeg: panels[0].rotationDeg,
+            panels,
+          },
+        ],
+      };
+    }
     return { setPanels: [], standalonePanels: panels, tables: [] };
   }
 

@@ -101,13 +101,13 @@ export const MapLibreMapView = forwardRef<MapLibreMapViewHandle, MapViewProps>(f
         id: "bg-fill",
         type: "fill",
         source: "bg-polygon",
-        paint: { "fill-color": "#10b981", "fill-opacity": 0.2 },
+        paint: { "fill-color": "#10b981", "fill-opacity": 0.25 },
       });
       map.addLayer({
         id: "bg-line",
         type: "line",
         source: "bg-polygon",
-        paint: { "line-color": "#10b981", "line-width": 2.5 },
+        paint: { "line-color": "#10b981", "line-width": 3.5 },
       });
     }
     if (!map.getSource("sel-polygon")) {
@@ -287,7 +287,23 @@ export const MapLibreMapView = forwardRef<MapLibreMapViewHandle, MapViewProps>(f
     if (!map || !loaded) return;
     const bgSource = map.getSource("bg-polygon") as maplibregl.GeoJSONSource | undefined;
     if (bgSource) {
-      bgSource.setData(backgroundPolygon && backgroundPolygon.length >= 3 ? polygonFC(backgroundPolygon) : emptyFC());
+      if (backgroundPolygon && backgroundPolygon.length >= 3) {
+        bgSource.setData(polygonFC(backgroundPolygon));
+        let sumLat = 0;
+        let sumLng = 0;
+        backgroundPolygon.forEach((v) => {
+          sumLat += v.lat;
+          sumLng += v.lng;
+        });
+        const centerLat = sumLat / backgroundPolygon.length;
+        const centerLng = sumLng / backgroundPolygon.length;
+        map.panTo([centerLng, centerLat]);
+        if (map.getZoom() < 18) {
+          map.setZoom(19.5);
+        }
+      } else {
+        bgSource.setData(emptyFC());
+      }
     }
   }, [backgroundPolygon, loaded]);
 

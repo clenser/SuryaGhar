@@ -147,6 +147,47 @@ export function terraceToLocal3D(vertices: LngLat[], height: number): LocalCoord
 }
 
 /**
+ * Convert a ground usable area polygon from WGS84 to local 3D coordinates at ground level (Z = 0).
+ *
+ * @param vertices Ground boundary polygon in WGS84
+ * @param groundElevationM Base ground elevation in metres (default 0)
+ * @throws when there are fewer than 3 vertices
+ */
+export function groundPolygonToLocal3D(vertices: LngLat[], groundElevationM: number = 0): LocalCoords3D {
+  if (vertices.length < 3) {
+    throw new Error("Need at least 3 vertices to create a ground site");
+  }
+
+  const ring = uniqueRing(vertices);
+  const centroidLngLat = computeCentroidLngLat(ring);
+  const utmZone = getUtmZone(centroidLngLat.lng);
+  const utmVertices = ring.map(projectUtm);
+
+  const anchor = utmVertices[0];
+  let sumDx = 0;
+  let sumDy = 0;
+  for (const v of utmVertices) {
+    sumDx += v.x - anchor.x;
+    sumDy += v.y - anchor.y;
+  }
+  const meanDx = sumDx / utmVertices.length;
+  const meanDy = sumDy / utmVertices.length;
+  const centroidUtm = { x: anchor.x + meanDx, y: anchor.y + meanDy };
+
+  const verticesLocal = utmVertices.map(
+    (v) => new THREE.Vector3(v.x - anchor.x - meanDx, v.y - anchor.y - meanDy, groundElevationM),
+  );
+
+  return {
+    vertices: verticesLocal,
+    height: 0,
+    utmZone,
+    centroidUtm,
+    centroidLngLat,
+  };
+}
+
+/**
  * Axis-aligned bounds of local vertices, for camera framing and readouts.
  */
 export function getLocalBounds(vertices: THREE.Vector3[]): THREE.Box3 {

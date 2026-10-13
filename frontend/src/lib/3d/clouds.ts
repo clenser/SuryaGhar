@@ -265,6 +265,7 @@ export function createCloudsSimulation(
 
     // Stagger spawn upwind outside map boundary
     spawnCloudUpwind(cloudInst, i * 0.4);
+    mesh.scale.setScalar(0.001);
 
     masterGroup.add(mesh);
     clouds.push(cloudInst);
@@ -317,11 +318,24 @@ export function createCloudsSimulation(
       // 3. Very slow organic yaw rotation
       cloud.mesh.rotation.z += cloud.rotationSpeed * dt;
 
-      // 4. Boundary wrapping: when cloud drifts beyond downwind arena boundary, wrap to upwind side
+      // 4. Smooth boundary fade envelope: prevents cut/clipped shadow edges at arena/shadow boundaries
+      const dist = Math.hypot(cloud.position.x, cloud.position.y);
+      const outerRadius = arenaRadius * 1.15;
+      const innerRadius = arenaRadius * 0.70;
+      let fade = 1.0;
+      if (dist > innerRadius) {
+        fade = Math.max(0, Math.min(1, (outerRadius - dist) / (outerRadius - innerRadius)));
+        fade = fade * fade * (3 - 2 * fade);
+      }
+      const targetScale = cloud.scale * Math.max(0.001, fade);
+      cloud.mesh.scale.setScalar(targetScale);
+
+      // 5. Boundary wrapping: when cloud drifts beyond downwind arena boundary, wrap to upwind side
       if (windLen > 0.001) {
         const proj = cloud.position.x * uX + cloud.position.y * uY;
         if (proj > arenaRadius * 1.35) {
           spawnCloudUpwind(cloud, 0);
+          cloud.mesh.scale.setScalar(0.001);
         }
       }
     }

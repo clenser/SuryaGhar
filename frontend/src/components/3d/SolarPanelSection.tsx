@@ -11,8 +11,9 @@
  */
 
 import { useState, useEffect, useRef } from "react";
-import { RefreshCw, AlertTriangle, Grid3x3, Plus, Copy, Trash2, Wand2, RotateCw, Zap } from "lucide-react";
+import { RefreshCw, AlertTriangle, Grid3x3, Plus, Copy, Trash2, Wand2, RotateCw, Zap, Loader2 } from "lucide-react";
 import {
+  GROUND_MOUNTING_TYPES,
   MOUNTING_TYPES,
   PANEL_LEGS_MAX,
   PANEL_LEGS_MIN,
@@ -25,6 +26,7 @@ import {
   PANEL_SPACING_MIN_M,
   PANEL_SPACING_MAX_M,
   PANEL_TYPES,
+  calculateSolarRowSpacing,
   formatCapacity,
   panelTypeDefinition,
   type MountingType,
@@ -404,10 +406,15 @@ export function SolarPanelSection({
             type="button"
             className="btn btn--secondary"
             onClick={onRecalculate}
+            disabled={isPlacing}
             title="Recalculate panel placement from the current settings"
           >
-            <RefreshCw size={15} strokeWidth={2} aria-hidden="true" />
-            Recalculate
+            {isPlacing ? (
+              <Loader2 size={15} className="spin" aria-hidden="true" />
+            ) : (
+              <RefreshCw size={15} strokeWidth={2} aria-hidden="true" />
+            )}
+            {isPlacing ? "Recalculating…" : "Recalculate"}
           </button>
         </div>
       )}
@@ -443,10 +450,15 @@ export function SolarPanelSection({
                   type="button"
                   className="btn btn--secondary"
                   onClick={onRecalculate}
+                  disabled={isPlacing}
                   title="Recalculate panel placement from the current settings"
                 >
-                  <RefreshCw size={15} strokeWidth={2} aria-hidden="true" />
-                  Recalculate
+                  {isPlacing ? (
+                    <Loader2 size={15} className="spin" aria-hidden="true" />
+                  ) : (
+                    <RefreshCw size={15} strokeWidth={2} aria-hidden="true" />
+                  )}
+                  {isPlacing ? "Recalculating…" : "Recalculate"}
                 </button>
               </div>
             )}
@@ -467,7 +479,11 @@ export function SolarPanelSection({
               disabled={isPlacing}
               title="Automatically arrange solar panels within the usable roof area"
             >
-              <Wand2 size={14} strokeWidth={2} aria-hidden="true" />
+              {isPlacing ? (
+                <Loader2 size={14} className="animate-spin" aria-hidden="true" />
+              ) : (
+                <Wand2 size={14} strokeWidth={2} aria-hidden="true" />
+              )}
               {isPlacing ? "Placing..." : "Auto-Place Panels"}
             </button>
             <button
@@ -515,7 +531,8 @@ export function SolarPanelSection({
               }}
               disabled={isPlacing}
             >
-              {isPlacing ? "Placing..." : "Confirm Auto-Place"}
+              {isPlacing && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
+              {isPlacing ? " Placing..." : "Confirm Auto-Place"}
             </button>
           </div>
         </div>
@@ -542,7 +559,12 @@ export function SolarPanelSection({
           disabled={isPlacing}
           title="Automatically arrange this set inside the usable roof"
         >
-          <Wand2 size={14} strokeWidth={2} aria-hidden="true" /> {isPlacing ? "Placing..." : "Auto-place set"}
+          {isPlacing ? (
+            <Loader2 size={14} className="animate-spin" aria-hidden="true" />
+          ) : (
+            <Wand2 size={14} strokeWidth={2} aria-hidden="true" />
+          )}{" "}
+          {isPlacing ? "Placing..." : "Auto-place set"}
         </button>
         <button
           type="button"
@@ -551,7 +573,12 @@ export function SolarPanelSection({
           disabled={isPlacing || setsList.length < 2}
           title="Auto-place every set (sets may then overlap if the roof is crowded)"
         >
-          <Wand2 size={14} strokeWidth={2} aria-hidden="true" /> Auto-place all
+          {isPlacing ? (
+            <Loader2 size={14} className="animate-spin" aria-hidden="true" />
+          ) : (
+            <Wand2 size={14} strokeWidth={2} aria-hidden="true" />
+          )}{" "}
+          {isPlacing ? "Placing all..." : "Auto-place all"}
         </button>
         <button
           type="button"
@@ -752,27 +779,66 @@ export function SolarPanelSection({
         </div>
       </div>
 
-      {/* Mounting type — Flat Roof only for now. The engine keeps the other
-          types internally for later milestones; the UI offers no switch. */}
+      {/* Mounting type / structure selector */}
       <div className="panel-group">
         <span className="panel-group__label" id="panel-mounting-label">
-          Mounting type
+          {config.installationType === "ground" ? "Ground mounting structure" : "Mounting type"}
         </span>
-        <div className="segmented" role="group" aria-labelledby="panel-mounting-label">
-          {MOUNTING_TYPES.filter((mounting) => mounting.type === "flat").map((mounting) => (
-            <button
-              key={mounting.type}
-              type="button"
-              className={`segmented__btn${config.mounting === mounting.type ? " is-active" : ""}`}
-              aria-pressed={config.mounting === mounting.type}
-              onClick={() => onConfigChange({ mounting: mounting.type as MountingType })}
-            >
-              {mounting.label}
-            </button>
-          ))}
+        <div className="segmented" role="group" aria-labelledby="panel-mounting-label" style={{ flexWrap: "wrap", gap: "4px" }}>
+          {config.installationType === "ground" ? (
+            GROUND_MOUNTING_TYPES.map((mounting) => (
+              <button
+                key={mounting.type}
+                type="button"
+                className={`segmented__btn${config.mounting === mounting.type ? " is-active" : ""}`}
+                aria-pressed={config.mounting === mounting.type}
+                disabled={mounting.disabled}
+                title={mounting.description}
+                onClick={() => {
+                  if (!mounting.disabled) {
+                    onConfigChange({ mounting: mounting.type as MountingType });
+                  }
+                }}
+                style={
+                  mounting.disabled
+                    ? { opacity: 0.55, cursor: "not-allowed", fontSize: "0.78rem" }
+                    : { fontSize: "0.82rem" }
+                }
+              >
+                {mounting.label}
+                {mounting.badge && (
+                  <span
+                    style={{
+                      marginLeft: "6px",
+                      fontSize: "0.68rem",
+                      padding: "1px 5px",
+                      background: "rgba(255, 255, 255, 0.15)",
+                      borderRadius: "4px",
+                    }}
+                  >
+                    {mounting.badge}
+                  </span>
+                )}
+              </button>
+            ))
+          ) : (
+            MOUNTING_TYPES.filter((mounting) => mounting.type === "flat").map((mounting) => (
+              <button
+                key={mounting.type}
+                type="button"
+                className={`segmented__btn${config.mounting === mounting.type ? " is-active" : ""}`}
+                aria-pressed={config.mounting === mounting.type}
+                onClick={() => onConfigChange({ mounting: mounting.type as MountingType })}
+              >
+                {mounting.label}
+              </button>
+            ))
+          )}
         </div>
         <p className="panel-group__hint">
-          Panels on supports above the flat roof — tilt and facing are adjustable.
+          {config.installationType === "ground"
+            ? "Engineered dual-post steel table with driven pile foundations, sloped rafters, purlins, clamps and knee braces."
+            : "Panels on supports above the flat roof — tilt and facing are adjustable."}
         </p>
       </div>
 
@@ -928,6 +994,36 @@ export function SolarPanelSection({
         />
       </div>
 
+      {config.installationType === "ground" && (
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginTop: "4px",
+            fontSize: "0.75rem",
+            background: "rgba(16, 185, 129, 0.08)",
+            border: "1px solid rgba(16, 185, 129, 0.25)",
+            borderRadius: "6px",
+            padding: "6px 10px",
+          }}
+        >
+          <span>
+            Recommended shadow-clear row spacing:{" "}
+            <b>{calculateSolarRowSpacing(selected.lengthM, config.tiltDeg).toFixed(2)} m</b>
+          </span>
+          <button
+            type="button"
+            className="btn btn--subtle"
+            style={{ fontSize: "0.72rem", padding: "2px 8px", minHeight: "24px" }}
+            onClick={() => onConfigChange({ rowSpacingM: calculateSolarRowSpacing(selected.lengthM, config.tiltDeg) })}
+            title="Apply solar shadow-clear row spacing estimate"
+          >
+            Apply
+          </button>
+        </div>
+      )}
+
       {optimalOrientation && (
         <div
           style={{
@@ -962,16 +1058,14 @@ export function SolarPanelSection({
         </div>
       )}
 
-      {/* Mounting height — support stand-off above the roof plane. Applied to
-          both the panel lift and the support/leg geometry, so the rendered
-          array rises and its supports grow with the value. */}
+      {/* Mounting height — support stand-off above the roof or ground plane */}
       <div className="field-grid">
         <SliderNumberField
           id="panel-mount-height"
-          label="Panel mounting height"
+          label={config.installationType === "ground" ? "Ground clearance (lower edge)" : "Panel mounting height"}
           value={config.mountHeightM}
-          min={0.02}
-          max={2}
+          min={config.installationType === "ground" ? 0.2 : 0.02}
+          max={config.installationType === "ground" ? 3.5 : 2}
           step={0.05}
           unit="m"
           onChange={(value) => onConfigChange({ mountHeightM: value })}

@@ -26,6 +26,7 @@ import {
   ArrowLeft,
   Zap,
   Building2,
+  Bird,
 } from "lucide-react";
 import type { ObstacleType } from "../../lib/3d/obstacles";
 
@@ -39,7 +40,8 @@ export type ViewportTool =
   | "reset-view"
   | "sun"
   | "trees"
-  | "flow";
+  | "flow"
+  | "nature";
 
 export interface LayerVisibility {
   building: boolean;
@@ -50,6 +52,7 @@ export interface LayerVisibility {
   electricityFlow?: boolean;
   birds?: boolean;
   clouds?: boolean;
+  nature?: boolean;
 }
 
 interface ViewportToolbarProps {
@@ -85,6 +88,10 @@ interface ViewportToolbarProps {
   onDeleteSelected?: () => void;
   /** Whether an obstacle or tree is currently selected */
   hasSelectedObject?: boolean;
+  /** Whether nature animations (birds & clouds) are active (default: false) */
+  natureActive?: boolean;
+  /** Toggle nature animations */
+  onToggleNature?: () => void;
 }
 
 const TOOL_CONFIG: Record<Exclude<ViewportTool, "draw-obstacle">, { icon: React.ReactNode; label: string; title: string }> = {
@@ -97,6 +104,7 @@ const TOOL_CONFIG: Record<Exclude<ViewportTool, "draw-obstacle">, { icon: React.
   sun: { icon: <Sun size={16} strokeWidth={2} />, label: "Sun", title: "Sun & shadows (S)" },
   trees: { icon: <TreePine size={16} strokeWidth={2} />, label: "Trees", title: "Trees & obstacles (T)" },
   flow: { icon: <Zap size={16} strokeWidth={2} />, label: "Electricity Flow", title: "Toggle animated electricity flow" },
+  nature: { icon: <Bird size={16} strokeWidth={2} />, label: "Nature", title: "Toggle Nature animations: Clouds & Flying Birds" },
 };
 
 const DRAW_OBSTACLE_CONFIG: Record<ObstacleType, { icon: React.ReactNode; label: string; title: string }> = {
@@ -125,6 +133,8 @@ export function ViewportToolbar({
   onToggleLayer,
   onDeleteSelected,
   hasSelectedObject = false,
+  natureActive = false,
+  onToggleNature,
 }: ViewportToolbarProps) {
   const [collapsed, setCollapsed] = useState(false);
 
@@ -138,6 +148,7 @@ export function ViewportToolbar({
   if (sunPlaying !== undefined) modeTools.push("sun");
   modeTools.push("trees");
   modeTools.push("flow");
+  modeTools.push("nature");
 
   // View tools: always visible
   const viewTools: ViewportTool[] = ["xray"];
@@ -251,6 +262,30 @@ export function ViewportToolbar({
         >
           <span className="viewport-tool__icon"><Zap size={16} strokeWidth={2} /></span>
           <span className="viewport-tool__label">Electricity Flow</span>
+        </button>
+      );
+    }
+
+    if (tool === "nature") {
+      const isNatureOn = natureActive ?? (Boolean(layerVisibility?.birds) && Boolean(layerVisibility?.clouds));
+      return (
+        <button
+          key={tool}
+          type="button"
+          className={`viewport-tool${isNatureOn ? " is-active" : ""}`}
+          onClick={() => {
+            if (onToggleNature) onToggleNature();
+            else if (onToggleLayer) {
+              onToggleLayer("birds");
+              onToggleLayer("clouds");
+            }
+          }}
+          title={isNatureOn ? "Disable Nature: Birds & Clouds" : "Enable Nature: Birds & Clouds"}
+          aria-pressed={isNatureOn}
+          aria-label={isNatureOn ? "Disable Nature" : "Enable Nature"}
+        >
+          <span className="viewport-tool__icon"><Bird size={16} strokeWidth={2} /></span>
+          <span className="viewport-tool__label">Nature</span>
         </button>
       );
     }
@@ -394,6 +429,20 @@ export function ViewportToolbar({
               onChange={() => onToggleLayer("electricityFlow")}
             />
             <span>Electricity Flow</span>
+          </label>
+          <label className="viewport-layers-menu__item">
+            <input
+              type="checkbox"
+              checked={natureActive ?? (Boolean(layerVisibility.birds) && Boolean(layerVisibility.clouds))}
+              onChange={() => {
+                if (onToggleNature) onToggleNature();
+                else if (onToggleLayer) {
+                  onToggleLayer("birds");
+                  onToggleLayer("clouds");
+                }
+              }}
+            />
+            <span>Nature (Birds & Clouds)</span>
           </label>
           <label className="viewport-layers-menu__item">
             <input

@@ -10,7 +10,7 @@
  */
 
 import { useState, type ChangeEvent, type FormEvent } from "react";
-import { Ruler, Box, AlertTriangle, Check } from "lucide-react";
+import { Ruler, Box, AlertTriangle, Loader2 } from "lucide-react";
 import { BACKEND_WAITING_LABEL } from "../../hooks/useBackendStatus";
 import type { LngLat, PolygonMetrics } from "../../lib/geo";
 import { formatArea } from "../../lib/geo";
@@ -155,7 +155,7 @@ export function BuildingHeightPanel({
         >
           {submitted && !error ? (
             <>
-              <Check size={15} strokeWidth={2.5} aria-hidden="true" />
+              <Loader2 size={15} className="spin" aria-hidden="true" />
               Creating 3D model…
             </>
           ) : (

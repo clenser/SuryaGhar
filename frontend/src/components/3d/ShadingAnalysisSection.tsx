@@ -20,6 +20,7 @@ import {
   Info,
   Compass,
   Zap,
+  Loader2,
 } from "lucide-react";
 import type { AnnualShadingResult, AnalyzedPanel } from "../../lib/3d/shadingAnalysis";
 import type { OptimizationCandidate, OptimizationResult } from "../../lib/3d/layoutOptimization";
@@ -329,7 +330,11 @@ export const ShadingAnalysisSection: React.FC<ShadingAnalysisSectionProps> = ({
               disabled={isLoadingSolarResource}
               title="Estimate meteorological yield and optimal orientation via pvlib + PVGIS"
             >
-              <Zap size={12} style={{ marginRight: "4px" }} />
+              {isLoadingSolarResource ? (
+                <Loader2 size={12} className="spin" style={{ marginRight: "4px" }} aria-hidden="true" />
+              ) : (
+                <Zap size={12} style={{ marginRight: "4px" }} />
+              )}
               {isLoadingSolarResource ? "Analysing…" : solarResourceResult ? "Refresh Benchmark" : "Analyse Weather Resource"}
             </button>
           )}
@@ -543,7 +548,12 @@ export const ShadingAnalysisSection: React.FC<ShadingAnalysisSectionProps> = ({
             onClick={onRunOptimization}
             disabled={isOptimizing}
           >
-            {isOptimizing ? "Optimizing..." : "Find Alternatives"}
+            {isOptimizing ? (
+              <Loader2 size={13} className="spin" style={{ marginRight: "4px" }} aria-hidden="true" />
+            ) : (
+              <Sparkles size={13} style={{ marginRight: "4px", color: "#f59e0b" }} aria-hidden="true" />
+            )}
+            {isOptimizing ? "Optimizing…" : "Find Alternatives"}
           </button>
         </div>
 

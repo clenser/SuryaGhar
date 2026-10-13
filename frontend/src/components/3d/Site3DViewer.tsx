@@ -32,7 +32,17 @@ import {
   setupScene,
   updateCameraAspect,
 } from "../../lib/3d/scene";
-import { createBuildingMeshes, disposeBuildingMeshes, createDesignBuildingMaterial, createDesignRoofMaterial, setShellTransparent, type BuildingMeshes } from "../../lib/3d/geometry";
+import {
+  createBuildingMeshes,
+  disposeBuildingMeshes,
+  createDesignBuildingMaterial,
+  createDesignRoofMaterial,
+  setShellTransparent,
+  createUsableAreaBoundary,
+  disposeUsableAreaBoundary,
+  type BuildingMeshes,
+  type UsableAreaBoundaryMeshes,
+} from "../../lib/3d/geometry";
 import { applySunToScene, applyWeatherPreset, shadowCameraExtent } from "../../lib/3d/lighting";
 import { pointInPolygon, type Obstacle } from "../../lib/3d/obstacles";
 import {
@@ -42,7 +52,7 @@ import {
   disposePanelGroup,
   updatePanelGroupShading,
 } from "../../lib/3d/panelMeshes";
-import { effectivePanelDims, type PanelLayoutConfig } from "../../lib/3d/panels";
+import { effectivePanelDims, type InstallationType, type PanelLayoutConfig } from "../../lib/3d/panels";
 import type { PlacedPanel } from "../../lib/3d/panelPlacement";
 import { setBlockPanels, validatePanelPlacement, validateSetPlacement } from "../../lib/3d/panelSets";
 import {
@@ -252,6 +262,18 @@ export interface Site3DViewerProps {
   onDeleteObstacle?: (id: string) => void;
   /** Delete tree callback */
   onDeleteTree?: (id: string) => void;
+  /** Selected solar panel instance info */
+  selectedPanelInfo?: { setId: string; panelIndex: number; panelId: string } | null;
+  /** Callback when a panel is clicked */
+  onPanelSelect?: (info: { setId: string; panelIndex: number; panelId: string } | null) => void;
+  /** Whether the building terrace is selected */
+  selectedBuilding?: boolean;
+  /** Callback when the building rooftop is clicked */
+  onBuildingSelect?: (selected: boolean) => void;
+  /** Installation mode: rooftop (default) or ground-mounted (Phase 1). */
+  installationType?: InstallationType;
+  /** Ground baseline elevation in metres (default 0). */
+  groundElevationM?: number;
   /** Additional CSS class for the container */
   className?: string;
   /** Inline style for the container */
@@ -312,6 +334,12 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       activeTool = null,
       onDeleteObstacle,
       onDeleteTree,
+      selectedPanelInfo: _selectedPanelInfo = null,
+      onPanelSelect,
+      selectedBuilding: _selectedBuilding = false,
+      onBuildingSelect,
+      installationType = "rooftop",
+      groundElevationM = 0,
     },
     ref,
   ) {
@@ -337,6 +365,8 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
     /** Translucent tree shown while ground tree placement is active. */
     const treePreviewMeshRef = useRef<THREE.Group | null>(null);
     const texturedGroundRef = useRef<{ mesh: THREE.Mesh; texture: THREE.CanvasTexture } | null>(null);
+    /** Translucent usable-area boundary mesh for ground-mounted solar (Phase 2). */
+    const usableAreaBoundaryRef = useRef<UsableAreaBoundaryMeshes | null>(null);
     /**
      * Building volume in local metres, for camera containment. Rebuilt with
      * the mesh so a height or footprint change is picked up without a manual
@@ -421,6 +451,10 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
     onDeleteObstacleRef.current = onDeleteObstacle;
     const onDeleteTreeRef = useRef(onDeleteTree);
     onDeleteTreeRef.current = onDeleteTree;
+    const onPanelSelectRef = useRef(onPanelSelect);
+    onPanelSelectRef.current = onPanelSelect;
+    const onBuildingSelectRef = useRef(onBuildingSelect);
+    onBuildingSelectRef.current = onBuildingSelect;
 
     /**
      * The renderer renders shadow maps on demand (`autoUpdate` is false), so
@@ -521,6 +555,11 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           for (const object of meshesRef.current.all) sceneRef.current?.remove(object);
           disposeBuildingMeshes(meshesRef.current);
           meshesRef.current = null;
+        }
+        if (usableAreaBoundaryRef.current) {
+          sceneRef.current?.remove(usableAreaBoundaryRef.current.group);
+          disposeUsableAreaBoundary(usableAreaBoundaryRef.current);
+          usableAreaBoundaryRef.current = null;
         }
         if (obstacleGroupRef.current) {
           disposeObstacleResources(obstacleGroupRef.current);
@@ -666,6 +705,34 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         for (const mesh of meshes.all) {
           sceneRef.current.add(mesh);
         }
+
+        if (usableAreaBoundaryRef.current) {
+          sceneRef.current.remove(usableAreaBoundaryRef.current.group);
+          disposeUsableAreaBoundary(usableAreaBoundaryRef.current);
+          usableAreaBoundaryRef.current = null;
+        }
+
+        const isGround = installationType === "ground";
+        if (isGround) {
+          // Suppress building extrusion, edges, and parapet in ground-mounted mode
+          meshes.building.visible = false;
+          meshes.building.castShadow = false;
+          meshes.wireframe.visible = false;
+          if (meshes.parapet) {
+            meshes.parapet.visible = false;
+            meshes.parapet.traverse((child) => {
+              const m = child as Partial<THREE.Mesh>;
+              if (m.isMesh) m.castShadow = false;
+            });
+          }
+
+          // Create translucent usable-area boundary in 3D (Phase 2)
+          // Follows exact polygon footprint, subtle +0.03m vertical offset eliminates z-fighting
+          const boundary = createUsableAreaBoundary(localCoords.vertices, groundElevationM ?? 0);
+          usableAreaBoundaryRef.current = boundary;
+          sceneRef.current.add(boundary.group);
+        }
+
         requestShadowUpdate();
         // Update distance bounds for the new building dimensions without
         // resetting the user's orbit camera target or orientation.
@@ -678,7 +745,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       } catch (err) {
         console.error("[Site3DViewer] Mesh update failed:", err);
       }
-    }, [localCoords, isInitialized, parapet, xray]);
+    }, [localCoords, isInitialized, parapet, xray, installationType, groundElevationM]);
 
     // Satellite ground context: real site imagery under the model, aligned
     // to the local frame. Failure resolves to null and the neutral studio
@@ -1726,6 +1793,8 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         canvas.style.cursor = "grab";
       } else if (activeTool === "delete") {
         canvas.style.cursor = "crosshair";
+      } else if (activeTool === "select") {
+        canvas.style.cursor = "default";
       } else if (!footprintDrawing && !manualPlaceActive && !treePlaceActive) {
         canvas.style.cursor = "";
       }
@@ -1833,12 +1902,71 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           ? ((treeHits[0].object.userData.treeId ?? treeHits[0].object.parent?.userData.treeId) as string | undefined)
           : undefined;
 
+        // Raycast solar panels
+        const panelGroups = panelGroupRef.current;
+        let panelHitInfo: { setId: string; panelIndex: number; panelId: string } | null = null;
+        if (panelGroups && panelGroups.length > 0) {
+          const panelTargets: THREE.Object3D[] = [];
+          for (const pGroup of panelGroups) {
+            pGroup.updateMatrixWorld(true);
+            pGroup.traverse((child) => {
+              if ((child as THREE.InstancedMesh).isInstancedMesh || (child as THREE.Mesh).isMesh) {
+                panelTargets.push(child);
+              }
+            });
+          }
+          if (panelTargets.length > 0) {
+            const pHits = raycaster.intersectObjects(panelTargets, false);
+            if (pHits.length > 0) {
+              const hit = pHits[0];
+              const hitMesh = hit.object;
+              let layerIdx = 0;
+              for (let i = 0; i < panelGroups.length; i++) {
+                let cur: THREE.Object3D | null = hitMesh;
+                let found = false;
+                while (cur) {
+                  if (cur === panelGroups[i]) {
+                    found = true;
+                    break;
+                  }
+                  cur = cur.parent;
+                }
+                if (found) {
+                  layerIdx = i;
+                  break;
+                }
+              }
+              const layer = panelLayersRef.current ? panelLayersRef.current[layerIdx] : null;
+              const instanceIdx = hit.instanceId ?? 0;
+              const setId = (layer as any)?.setId ?? (layer?.config ? `panel-set-${layerIdx + 1}` : "panel-set-1");
+              const panelObj = layer?.panels[instanceIdx];
+              const panelId = (panelObj as any)?.id ?? `p-${instanceIdx}`;
+              panelHitInfo = {
+                setId,
+                panelIndex: instanceIdx,
+                panelId,
+              };
+            }
+          }
+        }
+
+        // Raycast building / terrace
+        let buildingClicked = false;
+        if (meshesRef.current?.building) {
+          const bHits = raycaster.intersectObject(meshesRef.current.building, false);
+          if (bHits.length > 0) {
+            buildingClicked = true;
+          }
+        }
+
         if (id) {
           if (activeToolRef.current === "delete") {
             onDeleteObstacleRef.current?.(id);
           } else {
             onObstacleSelectRef.current?.(id);
             onTreeSelectRef.current?.(null);
+            onPanelSelectRef.current?.(null);
+            onBuildingSelectRef.current?.(false);
           }
         } else if (treeId) {
           if (activeToolRef.current === "delete") {
@@ -1846,10 +1974,24 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           } else {
             onTreeSelectRef.current?.(treeId);
             onObstacleSelectRef.current?.(null);
+            onPanelSelectRef.current?.(null);
+            onBuildingSelectRef.current?.(false);
           }
+        } else if (panelHitInfo) {
+          onPanelSelectRef.current?.(panelHitInfo);
+          onObstacleSelectRef.current?.(null);
+          onTreeSelectRef.current?.(null);
+          onBuildingSelectRef.current?.(false);
+        } else if (buildingClicked) {
+          onBuildingSelectRef.current?.(true);
+          onObstacleSelectRef.current?.(null);
+          onTreeSelectRef.current?.(null);
+          onPanelSelectRef.current?.(null);
         } else {
           onObstacleSelectRef.current?.(null);
           onTreeSelectRef.current?.(null);
+          onPanelSelectRef.current?.(null);
+          onBuildingSelectRef.current?.(false);
         }
       };
 

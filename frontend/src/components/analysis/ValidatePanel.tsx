@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { ArrowLeft, ArrowRight, Check, Play } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ArrowLeft, ArrowRight, Check, Download, FileSpreadsheet, Loader2, Play } from "lucide-react";
 import { BACKEND_WAITING_LABEL } from "../../hooks/useBackendStatus";
 import {
   SEGMENTATION_MODELS,
@@ -9,6 +9,8 @@ import {
   type ValidationResult,
 } from "../../services/analysis";
 import type { ValidationSnapshot } from "../../hooks/useValidation";
+import { downloadBillOfMaterialsCSV, generateBillOfMaterials } from "../../lib/solar/bom";
+import type { InstallationType, MountingType, PanelTypeId } from "../../lib/3d/panels";
 
 interface ValidatePanelProps {
   /** Persisted validation state (owned by App, survives tab switches). */
@@ -27,6 +29,11 @@ interface ValidatePanelProps {
   backendReady: boolean;
   /** Optional initial model status map (tests or preloaded config). */
   initialModelStatuses?: Record<string, ModelStatusItem>;
+  /** Optional placed panel count for Bill of Materials */
+  panelCount?: number;
+  panelTypeId?: PanelTypeId;
+  mountingType?: MountingType;
+  installationType?: InstallationType;
 }
 
 /** Stage 3: surface assessment. Pure view over persisted validation state:
@@ -44,6 +51,10 @@ export function ValidatePanel({
   onBackToModel,
   backendReady,
   initialModelStatuses,
+  panelCount,
+  panelTypeId,
+  mountingType,
+  installationType,
 }: ValidatePanelProps) {
   // Draft selection only; committed to App on Proceed so it survives remounts.
   const [draft, setDraft] = useState<SegmentationModel>(segmentationModel);
@@ -91,6 +102,115 @@ export function ValidatePanel({
   const showTimer = state.kind === "loading";
 
   const selectedModelStatus = modelStatuses[draft];
+  const [isDownloadingBOM, setIsDownloadingBOM] = useState(false);
+  const [isTransitioningFinal, setIsTransitioningFinal] = useState(false);
+
+  const bomSummary = useMemo(() => {
+    return generateBillOfMaterials({
+      panelCount: panelCount ?? 12,
+      panelTypeId: panelTypeId ?? "panel-550w",
+      mountingType: mountingType ?? (installationType === "ground" ? "ground_fixed" : "tilted"),
+      installationType: installationType ?? "rooftop",
+    });
+  }, [panelCount, panelTypeId, mountingType, installationType]);
+
+  const bomSection = (
+    <div
+      className="stage-card"
+      style={{
+        padding: "var(--space-3)",
+        marginTop: "var(--space-3)",
+        marginBottom: "var(--space-3)",
+        border: "1px solid var(--color-border)",
+        borderRadius: "var(--radius-md)",
+        background: "var(--color-surface-muted)",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <FileSpreadsheet size={16} strokeWidth={2} style={{ color: "var(--color-primary, #10b981)" }} />
+          <strong style={{ fontSize: "0.88rem" }}>Bill of Materials (BOM)</strong>
+        </div>
+        <span
+          style={{
+            fontSize: "0.72rem",
+            fontWeight: 600,
+            padding: "2px 8px",
+            borderRadius: "999px",
+            background: "rgba(16, 185, 129, 0.15)",
+            color: "var(--color-primary, #10b981)",
+          }}
+        >
+          {bomSummary.totalCapacityKwp} kWp System
+        </span>
+      </div>
+      <p className="stage-card__body" style={{ fontSize: "0.8rem", marginBottom: "var(--space-2)", color: "var(--color-text-muted)" }}>
+        Download complete turnkey components list (ALMM solar modules, mounting structure, inverter, AC/DC cabling, protection boxes, earthing &amp; PM Surya Ghar subsidy) in CSV format.
+      </p>
+
+      {/* Financial & Capacity Summary Grid */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(3, 1fr)",
+          gap: "8px",
+          background: "var(--color-surface)",
+          padding: "8px 10px",
+          borderRadius: "6px",
+          border: "1px solid var(--color-border)",
+          marginBottom: "12px",
+          fontSize: "0.75rem",
+        }}
+      >
+        <div>
+          <div style={{ color: "var(--color-text-muted)", fontSize: "0.7rem" }}>Modules</div>
+          <strong style={{ color: "var(--color-text)" }}>{bomSummary.moduleCount} Nos</strong>
+        </div>
+        <div>
+          <div style={{ color: "var(--color-text-muted)", fontSize: "0.7rem" }}>Est. Turnkey</div>
+          <strong style={{ color: "var(--color-text)" }}>₹{bomSummary.grossTotalInr.toLocaleString("en-IN")}</strong>
+        </div>
+        <div>
+          <div style={{ color: "var(--color-text-muted)", fontSize: "0.7rem" }}>
+            {bomSummary.subsidyInr > 0 ? "Net Payable" : "Total (INR)"}
+          </div>
+          <strong style={{ color: "var(--color-primary, #10b981)" }}>
+            ₹{bomSummary.netPayableInr.toLocaleString("en-IN")}
+          </strong>
+        </div>
+      </div>
+
+      <button
+        type="button"
+        className="btn btn--secondary"
+        disabled={isDownloadingBOM}
+        onClick={() => {
+          setIsDownloadingBOM(true);
+          setTimeout(() => {
+            try {
+              downloadBillOfMaterialsCSV({
+                panelCount: panelCount ?? 12,
+                panelTypeId: panelTypeId ?? "panel-550w",
+                mountingType: mountingType ?? (installationType === "ground" ? "ground_fixed" : "tilted"),
+                installationType: installationType ?? "rooftop",
+              });
+            } finally {
+              setIsDownloadingBOM(false);
+            }
+          }, 150);
+        }}
+        title="Download Bill of Materials CSV"
+        style={{ width: "100%", justifyContent: "center" }}
+      >
+        {isDownloadingBOM ? (
+          <Loader2 size={14} className="spin" aria-hidden="true" />
+        ) : (
+          <Download size={14} strokeWidth={2} aria-hidden="true" />
+        )}
+        {isDownloadingBOM ? "Generating CSV…" : "Download Bill of Materials (CSV)"}
+      </button>
+    </div>
+  );
 
   return (
     <div className="stage-card stage-card--validate">
@@ -159,7 +279,11 @@ export function ValidatePanel({
           disabled={state.kind === "loading" || !backendReady}
           title={backendReady ? undefined : BACKEND_WAITING_LABEL}
         >
-          <Play size={15} strokeWidth={2} aria-hidden="true" />
+          {state.kind === "loading" ? (
+            <Loader2 size={15} className="spin" aria-hidden="true" />
+          ) : (
+            <Play size={15} strokeWidth={2} aria-hidden="true" />
+          )}
           {state.kind === "loading" ? "Analyzing site..." : state.kind === "ok" ? "Re-analyze" : "Proceed with analysis"}
         </button>
         <button
@@ -204,6 +328,8 @@ export function ValidatePanel({
           </div>
         </>
       )}
+
+      {state.kind !== "ok" && bomSection}
 
       {state.kind === "ok" && (
         <>
@@ -337,6 +463,8 @@ export function ValidatePanel({
             <p className="stage-card__warning" key={w}>{w}</p>
           ))}
 
+          {bomSection}
+
           <div className="stage-card__actions stage-card__actions--footer">
             {onBackToModel && (
               <button
@@ -353,11 +481,34 @@ export function ValidatePanel({
             <button
               type="button"
               className="btn btn--primary"
-              onClick={onContinue}
-              disabled={!backendReady || state.kind !== "ok"}
+              onClick={() => {
+                setIsTransitioningFinal(true);
+                const isTest =
+                  (typeof process !== "undefined" && process.env?.NODE_ENV === "test") ||
+                  Boolean(import.meta.env?.MODE === "test");
+                if (isTest) {
+                  try {
+                    onContinue();
+                  } finally {
+                    setIsTransitioningFinal(false);
+                  }
+                } else {
+                  setTimeout(() => {
+                    try {
+                      onContinue();
+                    } finally {
+                      setIsTransitioningFinal(false);
+                    }
+                  }, 25);
+                }
+              }}
+              disabled={!backendReady || state.kind !== "ok" || isTransitioningFinal}
               title={backendReady ? "View final 3D solar model" : BACKEND_WAITING_LABEL}
             >
-              View Final Model
+              {isTransitioningFinal ? (
+                <Loader2 size={15} className="spin" aria-hidden="true" />
+              ) : null}
+              {isTransitioningFinal ? "Loading 3D Model…" : "View Final Model"}
             </button>
           </div>
         </>

@@ -565,3 +565,85 @@ export function createParapetMeshes(
 
   return { group };
 }
+
+export interface UsableAreaBoundaryMeshes {
+  group: THREE.Group;
+  fillMesh: THREE.Mesh;
+  outlineLine: THREE.LineLoop;
+}
+
+/**
+ * Create a translucent usable-area boundary in 3D (Phase 2).
+ * Rendered with a subtle vertical offset (+0.03m / 3cm) above base elevation to prevent
+ * z-fighting with the ground plane, lightly tinted transparent fill, and crisp thin outline.
+ */
+export function createUsableAreaBoundary(
+  vertices: THREE.Vector3[],
+  baseElevationM: number = 0,
+): UsableAreaBoundaryMeshes {
+  if (vertices.length < 3) {
+    throw new Error("Need at least 3 vertices to create usable area boundary");
+  }
+
+  const ring = signedArea2(vertices) < 0 ? [...vertices].reverse() : vertices;
+  const shape = new THREE.Shape();
+  shape.moveTo(ring[0].x, ring[0].y);
+  for (let i = 1; i < ring.length; i++) {
+    shape.lineTo(ring[i].x, ring[i].y);
+  }
+  shape.closePath();
+
+  const fillGeometry = new THREE.ShapeGeometry(shape);
+  const fillMaterial = new THREE.MeshBasicMaterial({
+    color: 0x10b981, // Emerald green tint for solar land boundary
+    transparent: true,
+    opacity: 0.16,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const fillMesh = new THREE.Mesh(fillGeometry, fillMaterial);
+  fillMesh.name = "UsableAreaBoundaryFill";
+  fillMesh.receiveShadow = false;
+  fillMesh.castShadow = false;
+
+  const points = ring.map((v) => new THREE.Vector3(v.x, v.y, 0));
+  const lineGeometry = new THREE.BufferGeometry().setFromPoints(points);
+  const lineMaterial = new THREE.LineBasicMaterial({
+    color: 0x10b981,
+    transparent: true,
+    opacity: 0.70,
+    linewidth: 2,
+  });
+  const outlineLine = new THREE.LineLoop(lineGeometry, lineMaterial);
+  outlineLine.name = "UsableAreaBoundaryOutline";
+
+  const group = new THREE.Group();
+  group.name = "UsableAreaBoundaryGroup";
+  // Subtle vertical offset (3cm) above ground/terrain base to eliminate z-fighting
+  group.position.z = baseElevationM + 0.03;
+  group.renderOrder = 1;
+  group.add(fillMesh);
+  group.add(outlineLine);
+
+  return { group, fillMesh, outlineLine };
+}
+
+/**
+ * Dispose of usable area boundary meshes, geometry, and materials.
+ */
+export function disposeUsableAreaBoundary(meshes: UsableAreaBoundaryMeshes | null | undefined): void {
+  if (!meshes) return;
+  meshes.fillMesh.geometry.dispose();
+  if (Array.isArray(meshes.fillMesh.material)) {
+    meshes.fillMesh.material.forEach((m) => m.dispose());
+  } else {
+    meshes.fillMesh.material.dispose();
+  }
+  meshes.outlineLine.geometry.dispose();
+  if (Array.isArray(meshes.outlineLine.material)) {
+    meshes.outlineLine.material.forEach((m) => m.dispose());
+  } else {
+    meshes.outlineLine.material.dispose();
+  }
+}
+

@@ -8,7 +8,7 @@
  */
 
 import type { LngLat } from "../geo";
-import { getLocalBounds, terraceToLocal3D, type LocalCoords3D } from "./coordinates";
+import { getLocalBounds, groundPolygonToLocal3D, terraceToLocal3D, type LocalCoords3D } from "./coordinates";
 
 /** Lowest building height the application accepts (metres). */
 export const MIN_BUILDING_HEIGHT_M = 0.5;
@@ -33,13 +33,13 @@ export function validateBuildingHeight(height: unknown): string | null {
   return null;
 }
 
-/** Immutable description of the extruded building, independent of Three.js meshes. */
+/** Immutable description of the extruded building or ground site, independent of Three.js meshes. */
 export interface BuildingModel {
   /** Local 3D vertices (centroid at origin) plus the extrusion height */
   coords: LocalCoords3D;
-  /** Building height in metres (propagates to the extruded top face) */
+  /** Building height in metres (0 for ground-mounted installations) */
   heightM: number;
-  /** Axis-aligned footprint extent of the terrace in local metres (E × N) */
+  /** Axis-aligned footprint extent of the site in local metres (E × N) */
   extentM: { east: number; north: number };
   /** Number of polygon vertices actually used (closing duplicate excluded) */
   vertexCount: number;
@@ -63,6 +63,25 @@ export function createBuildingModel(vertices: LngLat[], heightM: number): Buildi
   return {
     coords,
     heightM,
+    extentM: {
+      east: bounds.max.x - bounds.min.x,
+      north: bounds.max.y - bounds.min.y,
+    },
+    vertexCount: coords.vertices.length,
+  };
+}
+
+/**
+ * Build the 3D ground site model from a WGS84 usable boundary polygon.
+ * Height is 0 (ground baseline).
+ */
+export function createGroundSiteModel(vertices: LngLat[], groundElevationM: number = 0): BuildingModel {
+  const coords = groundPolygonToLocal3D(vertices, groundElevationM);
+  const bounds = getLocalBounds(coords.vertices);
+
+  return {
+    coords,
+    heightM: 0,
     extentM: {
       east: bounds.max.x - bounds.min.x,
       north: bounds.max.y - bounds.min.y,
