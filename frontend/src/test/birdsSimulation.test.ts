@@ -32,14 +32,14 @@ describe("Birds Simulation & Geometry", () => {
     expect(pos.count).toBeGreaterThanOrEqual(14);
     expect(pos.count).toBeLessThan(30);
 
-    // Bounding box spans realistic dimensions (~0.8m length, ~0.2m width)
+    // Bounding box spans realistic dimensions (~1.4m length, ~0.28m width)
     geom.computeBoundingBox();
     const box = geom.boundingBox!;
     const size = box.getSize(new THREE.Vector3());
-    expect(size.y).toBeGreaterThan(0.6); // Length along forward Y axis
-    expect(size.y).toBeLessThan(1.2);
+    expect(size.y).toBeGreaterThan(0.8); // Length along forward Y axis
+    expect(size.y).toBeLessThan(1.6);
     expect(size.x).toBeGreaterThan(0.15); // Lateral width
-    expect(size.x).toBeLessThan(0.4);
+    expect(size.x).toBeLessThanOrEqual(0.45);
 
     geom.dispose();
   });
@@ -124,12 +124,25 @@ describe("Birds Simulation & Geometry", () => {
 });
 
 describe("Birds Simulation Lifecycle & Solar Isolation", () => {
+  it("immediately populates active birds on mount when initialSpawn is enabled", () => {
+    const scene = new THREE.Scene();
+    const sim = createBirdsSimulation(scene, {
+      maxActiveBirds: 6,
+      initialSpawn: true,
+    });
+
+    // Sky is immediately active with soaring and crossing birds
+    expect(sim.getActiveBirdCount()).toBe(2);
+    sim.dispose();
+  });
+
   it("enforces pool allocation, max active limits, and clean spawning", () => {
     const scene = new THREE.Scene();
     const sim = createBirdsSimulation(scene, {
       maxActiveBirds: 3,
       poolSize: 5,
       arenaRadius: 100,
+      initialSpawn: false,
     });
 
     expect(sim.getActiveBirdCount()).toBe(0);
@@ -154,6 +167,7 @@ describe("Birds Simulation Lifecycle & Solar Isolation", () => {
     const sim = createBirdsSimulation(scene, {
       maxActiveBirds: 5,
       poolSize: 6,
+      initialSpawn: false,
     });
 
     sim.spawnFlock(3);
@@ -171,6 +185,7 @@ describe("Birds Simulation Lifecycle & Solar Isolation", () => {
     const sim = createBirdsSimulation(scene, {
       maxActiveBirds: 2,
       minAltitudeAboveRoof: 18,
+      initialSpawn: false,
     });
 
     // Spawn bird at custom lower altitude
