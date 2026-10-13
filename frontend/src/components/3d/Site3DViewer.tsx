@@ -358,7 +358,6 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       dropCount: number;
       span: number;
     } | null>(null);
-    const cloudShadowPlaneRef = useRef<THREE.Mesh | null>(null);
     const weatherPresetRef = useRef<WeatherPreset>(weatherPreset);
     weatherPresetRef.current = weatherPreset;
     const electricityFlowRef = useRef<ElectricityFlowHandle | null>(null);
@@ -482,12 +481,14 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
 
         // Initialize natural flying birds simulation in sky
         const birds = createBirdsSimulation(setup.scene);
-        birds.setVisible(Boolean(layerVisibilityRef.current?.birds));
+        const isRainyInit = weatherPresetRef.current === "rainy";
+        birds.setVisible(!isRainyInit && Boolean(layerVisibilityRef.current?.birds));
         birdsRef.current = birds;
 
         // Initialize dynamic 3D clouds with physical shadow casting
         const clouds = createCloudsSimulation(setup.scene);
-        clouds.setVisible(Boolean(layerVisibilityRef.current?.clouds));
+        clouds.setWeatherPreset(weatherPresetRef.current);
+        clouds.setVisible(!isRainyInit && Boolean(layerVisibilityRef.current?.clouds));
         cloudsRef.current = clouds;
 
         setIsInitialized(true);
@@ -846,24 +847,46 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       if (texturedGroundRef.current?.mesh) {
         texturedGroundRef.current.mesh.visible = layerVisibility?.ground !== false;
       }
+      const isRainyCurr = weatherPresetRef.current === "rainy";
       if (birdsRef.current) {
-        birdsRef.current.setVisible(Boolean(layerVisibility?.birds));
+        birdsRef.current.setVisible(!isRainyCurr && Boolean(layerVisibility?.birds));
       }
       if (cloudsRef.current) {
-        cloudsRef.current.setVisible(Boolean(layerVisibility?.clouds));
+        cloudsRef.current.setVisible(!isRainyCurr && Boolean(layerVisibility?.clouds));
       }
       requestShadowUpdate();
     }, [layerVisibility, isInitialized]);
 
     // Weather effects:
     // 1. Falling rain streaks & wet surface response in Rainy preset.
-    // 2. Soft drifting cloud shadows across ground and building in Cloudy preset.
+    // 2. Coordinated birds, procedural 3D cloud shadows, and sky ambiance response.
     useEffect(() => {
       if (!isInitialized || !sceneRef.current) return;
       const scene = sceneRef.current;
+      const isRainy = weatherPreset === "rainy";
+
+      // 1. Weather preset control for birds and clouds:
+      // In rain: birds and clouds both disappear completely.
+      // In sunny: birds present, clouds appear rarely with subtle localized shadows.
+      // In cloudy: birds present, clouds active with a mix of darker little and lighter cloud shadows.
+      if (birdsRef.current) {
+        birdsRef.current.setVisible(!isRainy && Boolean(layerVisibilityRef.current?.birds));
+      }
+      if (cloudsRef.current) {
+        cloudsRef.current.setWeatherPreset(weatherPreset);
+        cloudsRef.current.setVisible(!isRainy && Boolean(layerVisibilityRef.current?.clouds));
+      }
+
+      // 2. Sky background mood adjustment:
+      if (weatherPreset === "cloudy") {
+        scene.background = new THREE.Color(0x19202a);
+      } else if (isRainy) {
+        scene.background = new THREE.Color(0x13171d);
+      } else {
+        scene.background = new THREE.Color(0x11161d);
+      }
 
       // Handle wet surface response on building roof & panel materials
-      const isRainy = weatherPreset === "rainy";
       if (meshesRef.current) {
         const mat = meshesRef.current.building.material;
         if (Array.isArray(mat) && mat[0]) {
@@ -883,69 +906,6 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
             }
           }
         });
-      }
-
-      // Cloudy mode: moving soft cloud shadow plane hovering above the site
-      if (weatherPreset === "cloudy") {
-        if (!cloudShadowPlaneRef.current) {
-          const maxCoord = localCoords.vertices.reduce((m, v) => Math.max(m, Math.abs(v.x), Math.abs(v.y)), 20);
-          const planeSpan = Math.max(120, maxCoord * 4.5);
-          // Procedural soft cloud noise canvas
-          const cCanvas = document.createElement("canvas");
-          cCanvas.width = 256;
-          cCanvas.height = 256;
-          const cctx = cCanvas.getContext("2d");
-          if (cctx) {
-            cctx.fillStyle = "#ffffff";
-            cctx.fillRect(0, 0, 256, 256);
-            // Draw soft drifting cloud blobs
-            const grad = cctx.createRadialGradient(128, 128, 10, 128, 128, 120);
-            grad.addColorStop(0, "rgba(50, 70, 90, 0.45)");
-            grad.addColorStop(0.5, "rgba(70, 90, 110, 0.28)");
-            grad.addColorStop(1, "rgba(255, 255, 255, 0)");
-            cctx.fillStyle = grad;
-            cctx.beginPath();
-            cctx.arc(128, 128, 120, 0, Math.PI * 2);
-            cctx.fill();
-
-            const grad2 = cctx.createRadialGradient(64, 64, 5, 64, 64, 60);
-            grad2.addColorStop(0, "rgba(40, 60, 80, 0.35)");
-            grad2.addColorStop(1, "rgba(255, 255, 255, 0)");
-            cctx.fillStyle = grad2;
-            cctx.beginPath();
-            cctx.arc(64, 64, 60, 0, Math.PI * 2);
-            cctx.fill();
-          }
-
-          const cTex = new THREE.CanvasTexture(cCanvas);
-          cTex.wrapS = THREE.RepeatWrapping;
-          cTex.wrapT = THREE.RepeatWrapping;
-          cTex.repeat.set(2, 2);
-
-          const cMat = new THREE.MeshBasicMaterial({
-            map: cTex,
-            transparent: true,
-            opacity: 0.38,
-            blending: THREE.MultiplyBlending,
-            depthWrite: false,
-          });
-
-          const cMesh = new THREE.Mesh(new THREE.PlaneGeometry(planeSpan, planeSpan), cMat);
-          cMesh.position.set(0, 0, localCoords.height + 0.15);
-          cMesh.raycast = () => {};
-          cMesh.name = "CloudShadowPlane";
-          scene.add(cMesh);
-          cloudShadowPlaneRef.current = cMesh;
-        }
-      } else {
-        if (cloudShadowPlaneRef.current) {
-          scene.remove(cloudShadowPlaneRef.current);
-          cloudShadowPlaneRef.current.geometry.dispose();
-          const mat = cloudShadowPlaneRef.current.material as THREE.MeshBasicMaterial;
-          mat.map?.dispose();
-          mat.dispose();
-          cloudShadowPlaneRef.current = null;
-        }
       }
 
       if (weatherPreset !== "rainy") {
@@ -1016,14 +976,6 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           rainRef.current.geom.dispose();
           rainRef.current.mat.dispose();
           rainRef.current = null;
-        }
-        if (cloudShadowPlaneRef.current) {
-          scene.remove(cloudShadowPlaneRef.current);
-          cloudShadowPlaneRef.current.geometry.dispose();
-          const m = cloudShadowPlaneRef.current.material as THREE.MeshBasicMaterial;
-          m.map?.dispose();
-          m.dispose();
-          cloudShadowPlaneRef.current = null;
         }
       };
     }, [weatherPreset, isInitialized, localCoords.height, localCoords.vertices]);
@@ -2039,15 +1991,6 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           geom.attributes.position.needsUpdate = true;
         } else {
           lastRainTime = null;
-        }
-
-        // Drift cloud shadows softly across site if cloudy
-        if (cloudShadowPlaneRef.current) {
-          const cMat = cloudShadowPlaneRef.current.material as THREE.MeshBasicMaterial;
-          if (cMat && cMat.map) {
-            cMat.map.offset.x = (now * 0.00003) % 1;
-            cMat.map.offset.y = (now * 0.000018) % 1;
-          }
         }
 
         // Advance animated electricity flow particles along cable routes

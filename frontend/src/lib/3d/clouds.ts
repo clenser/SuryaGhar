@@ -43,6 +43,8 @@ export interface CloudsSimulation {
   update: (dt: number, roofZ: number) => void;
   /** Show or hide all clouds and their shadows */
   setVisible: (visible: boolean) => void;
+  /** Update weather preset (sunny: rare subtle clouds; cloudy: mixed overcast clouds; rainy: none) */
+  setWeatherPreset: (preset: "sunny" | "cloudy" | "rainy") => void;
   /** Update wind parameters */
   setWind: (speed: number, directionDeg: number) => void;
   /** Total number of clouds */
@@ -120,40 +122,40 @@ export function createCumulusGeometry(puffs: PuffDef[]): THREE.BufferGeometry {
  * Generates 3 distinctive organic cumulus cloud geometry variants.
  */
 export function createCloudVariants(): THREE.BufferGeometry[] {
-  // Variant 0: Medium Billowing Cumulus
+  // Variant 0: Compact Balanced Cumulus (span ~21m, puff radii 3.2m - 4.2m)
   const v0Puffs: PuffDef[] = [
-    { x: 0, y: 0, z: 0, radius: 8.5 },
-    { x: -6.5, y: -1.0, z: -0.5, radius: 6.8 },
-    { x: 7.2, y: 1.2, z: -0.5, radius: 7.2 },
-    { x: 1.0, y: 0.5, z: 3.5, radius: 6.2 },
-    { x: -4.0, y: 0.8, z: 2.8, radius: 5.4 },
-    { x: 4.8, y: -0.6, z: 2.4, radius: 5.6 },
-    { x: 2.0, y: 4.5, z: -0.8, radius: 5.2 },
-    { x: -2.2, y: -4.2, z: -0.8, radius: 5.0 },
+    { x: 0, y: 0, z: 0, radius: 4.2 },
+    { x: -4.5, y: -0.8, z: -0.4, radius: 3.4 },
+    { x: 4.8, y: 0.9, z: -0.4, radius: 3.6 },
+    { x: 0.8, y: 0.4, z: 2.2, radius: 3.5 },
+    { x: -2.8, y: 0.6, z: 1.8, radius: 3.0 },
+    { x: 3.2, y: -0.5, z: 1.6, radius: 3.1 },
+    { x: 1.5, y: 3.0, z: -0.5, radius: 2.9 },
+    { x: -1.6, y: -2.8, z: -0.5, radius: 2.8 },
   ];
 
-  // Variant 1: Elongated Cloud Bank
+  // Variant 1: Elongated Cumulus Bank (span ~26m, puff radii 3.0m - 4.5m)
   const v1Puffs: PuffDef[] = [
-    { x: 0, y: 0, z: 0, radius: 9.5 },
-    { x: -10.0, y: 1.5, z: -0.6, radius: 7.8 },
-    { x: 10.5, y: -1.2, z: -0.6, radius: 8.0 },
-    { x: -17.5, y: 2.2, z: -1.2, radius: 5.8 },
-    { x: 18.0, y: -2.0, z: -1.2, radius: 6.0 },
-    { x: -4.5, y: 0.5, z: 3.8, radius: 6.8 },
-    { x: 5.0, y: -0.5, z: 3.6, radius: 7.0 },
-    { x: 0, y: 4.5, z: -0.6, radius: 5.5 },
-    { x: -8.0, y: -4.0, z: -0.6, radius: 5.2 },
-    { x: 8.5, y: 4.0, z: -0.6, radius: 5.4 },
+    { x: 0, y: 0, z: 0, radius: 4.5 },
+    { x: -5.5, y: 1.0, z: -0.4, radius: 3.8 },
+    { x: 5.8, y: -0.8, z: -0.4, radius: 3.9 },
+    { x: -9.5, y: 1.5, z: -0.8, radius: 3.0 },
+    { x: 9.8, y: -1.4, z: -0.8, radius: 3.1 },
+    { x: -2.8, y: 0.4, z: 2.4, radius: 3.6 },
+    { x: 3.2, y: -0.4, z: 2.3, radius: 3.7 },
+    { x: 0, y: 3.0, z: -0.4, radius: 3.0 },
+    { x: -4.5, y: -2.6, z: -0.4, radius: 2.8 },
+    { x: 4.8, y: 2.6, z: -0.4, radius: 2.9 },
   ];
 
-  // Variant 2: Compact Puffy Cumulus
+  // Variant 2: Little Puffy Cumulus (span ~17m, puff radii 2.8m - 3.8m)
   const v2Puffs: PuffDef[] = [
-    { x: 0, y: 0, z: 0, radius: 7.5 },
-    { x: -5.0, y: 0.5, z: -0.4, radius: 5.8 },
-    { x: 5.2, y: -0.4, z: -0.4, radius: 6.0 },
-    { x: 0.5, y: 0.2, z: 3.0, radius: 5.2 },
-    { x: 1.5, y: 3.5, z: -0.5, radius: 4.8 },
-    { x: -1.5, y: -3.5, z: -0.5, radius: 4.6 },
+    { x: 0, y: 0, z: 0, radius: 3.8 },
+    { x: -4.8, y: 0.4, z: -0.3, radius: 3.4 },
+    { x: 5.0, y: -0.3, z: -0.3, radius: 3.4 },
+    { x: 0.4, y: 0.2, z: 2.2, radius: 3.4 },
+    { x: 1.4, y: 2.5, z: -0.4, radius: 2.8 },
+    { x: -1.4, y: -2.5, z: -0.4, radius: 2.8 },
   ];
 
   return [
@@ -185,14 +187,17 @@ export function createCloudsSimulation(
   // Shared geometries and materials
   const variants = createCloudVariants();
 
-  // Clean, bright white/silver daylight cloud material that casts real shadows
-  const cloudMaterial = new THREE.MeshLambertMaterial({
-    color: 0xffffff,
-    emissive: 0x1f2733,
-    transparent: true,
-    opacity: 0.90,
+  // 1. Completely invisible to camera (colorWrite = false, depthWrite = false, transparent = true, opacity = 0)
+  const invisibleCloudMaterial = new THREE.MeshBasicMaterial({
+    colorWrite: false,
     depthWrite: false,
-    side: THREE.DoubleSide,
+    transparent: true,
+    opacity: 0,
+  });
+
+  // 2. Custom depth material for DirectionalLight shadow map pass: casts solid physical shadows
+  const depthCasterMaterial = new THREE.MeshDepthMaterial({
+    depthPacking: THREE.RGBADepthPacking,
   });
 
   const clouds: CloudInstance[] = [];
@@ -209,59 +214,87 @@ export function createCloudsSimulation(
   }
   updateWindVector();
 
-  // Distribute clouds across the sky initially
   let currentRoofZ = 12.0;
+
+  function spawnCloudUpwind(cloud: { position: THREE.Vector3; baseAltitude: number; mesh: THREE.Mesh }, staggeredIdx = 0): void {
+    const windLen = Math.sqrt(windVelX * windVelX + windVelY * windVelY) || 1;
+    const uX = windVelX / windLen;
+    const uY = windVelY / windLen;
+    const perpX = -uY;
+    const perpY = uX;
+
+    // Upwind distance outside the visible arena perimeter (staggered so clouds don't arrive in a line)
+    const upwindDist = arenaRadius * (1.10 + (Math.random() + staggeredIdx) * 0.35);
+    const lateralOffset = (Math.random() - 0.5) * arenaRadius * 1.5;
+
+    cloud.position.x = -uX * upwindDist + perpX * lateralOffset;
+    cloud.position.y = -uY * upwindDist + perpY * lateralOffset;
+    cloud.baseAltitude = minAltAboveRoof + Math.random() * (maxAltAboveRoof - minAltAboveRoof);
+    cloud.position.z = currentRoofZ + cloud.baseAltitude;
+    cloud.mesh.rotation.z = Math.random() * Math.PI * 2;
+  }
 
   for (let i = 0; i < cloudCount; i++) {
     const variantIdx = i % variants.length;
     const geom = variants[variantIdx];
-    const mesh = new THREE.Mesh(geom, cloudMaterial);
+    const mesh = new THREE.Mesh(geom, invisibleCloudMaterial);
 
     // Physical shadow casting onto ground and roof
+    mesh.customDepthMaterial = depthCasterMaterial;
     mesh.castShadow = true;
     mesh.receiveShadow = false;
 
-    // Distribute initial positions across arena
-    // Ensure cloud 0 and 1 pass right over or near the site
-    let initX = 0;
-    let initY = 0;
-
-    if (i === 0) {
-      initX = -15;
-      initY = -10;
-    } else if (i === 1) {
-      initX = 18;
-      initY = 12;
-    } else {
-      initX = (Math.random() - 0.5) * arenaRadius * 1.6;
-      initY = (Math.random() - 0.5) * arenaRadius * 1.6;
-    }
+    // Mixed scales: smaller denser puffs (0.75 - 0.90) and slightly broader puffs (1.05 - 1.25)
+    const scale = (i % 2 === 0 ? 0.82 : 1.15) + (Math.random() - 0.5) * 0.15;
+    mesh.scale.setScalar(scale);
 
     const baseAltitude = minAltAboveRoof + Math.random() * (maxAltAboveRoof - minAltAboveRoof);
-    const scale = 0.9 + Math.random() * 0.35;
+    mesh.position.set(0, 0, currentRoofZ + baseAltitude);
 
-    mesh.scale.setScalar(scale);
-    mesh.rotation.z = Math.random() * Math.PI * 2;
-    mesh.position.set(initX, initY, currentRoofZ + baseAltitude);
-
-    masterGroup.add(mesh);
-
-    clouds.push({
+    const cloudInst: CloudInstance = {
       index: i,
       mesh,
       position: mesh.position,
       baseAltitude,
       scale,
-      rotationSpeed: (Math.random() - 0.5) * 0.008,
+      rotationSpeed: (Math.random() - 0.5) * 0.006,
       bobPhase: Math.random() * Math.PI * 2,
-      bobSpeed: 0.15 + Math.random() * 0.15,
+      bobSpeed: 0.12 + Math.random() * 0.12,
       variant: variantIdx,
-    });
+    };
+
+    // Stagger spawn upwind outside map boundary
+    spawnCloudUpwind(cloudInst, i * 0.4);
+
+    masterGroup.add(mesh);
+    clouds.push(cloudInst);
+  }
+
+  // Preset & layer state
+  let isLayerVisible = true;
+  let currentPreset: "sunny" | "cloudy" | "rainy" = "sunny";
+
+  function applyVisibility(): void {
+    if (!isLayerVisible || currentPreset === "rainy") {
+      masterGroup.visible = false;
+    } else {
+      masterGroup.visible = true;
+      // In sunny mode: rare subtle clouds (max 2 active)
+      // In cloudy mode: all clouds active with full overcast shadow play
+      const maxActive = currentPreset === "sunny" ? 2 : clouds.length;
+      for (let i = 0; i < clouds.length; i++) {
+        clouds[i].mesh.visible = i < maxActive;
+      }
+    }
   }
 
   function update(rawDt: number, roofZ: number): void {
     const dt = Math.max(0.001, Math.min(rawDt, 0.1));
     currentRoofZ = roofZ;
+
+    const windLen = Math.sqrt(windVelX * windVelX + windVelY * windVelY);
+    const uX = windLen > 0.001 ? windVelX / windLen : 1;
+    const uY = windLen > 0.001 ? windVelY / windLen : 0;
 
     for (let i = 0; i < clouds.length; i++) {
       const cloud = clouds[i];
@@ -272,7 +305,7 @@ export function createCloudsSimulation(
 
       // 2. Subtle thermal altitude bobbing
       cloud.bobPhase += cloud.bobSpeed * dt;
-      const targetZ = currentRoofZ + cloud.baseAltitude + Math.sin(cloud.bobPhase) * 1.2;
+      const targetZ = currentRoofZ + cloud.baseAltitude + Math.sin(cloud.bobPhase) * 1.0;
       cloud.position.z += (targetZ - cloud.position.z) * Math.min(1.0, dt * 2.0);
 
       // Hard floor guarantee above building roof level
@@ -284,31 +317,24 @@ export function createCloudsSimulation(
       // 3. Very slow organic yaw rotation
       cloud.mesh.rotation.z += cloud.rotationSpeed * dt;
 
-      // 4. Boundary wrapping: when cloud drifts far downwind, wrap to upwind side
-      // Project position along wind vector
-      const windLen = Math.sqrt(windVelX * windVelX + windVelY * windVelY);
+      // 4. Boundary wrapping: when cloud drifts beyond downwind arena boundary, wrap to upwind side
       if (windLen > 0.001) {
-        const uX = windVelX / windLen;
-        const uY = windVelY / windLen;
         const proj = cloud.position.x * uX + cloud.position.y * uY;
-
-        if (proj > arenaRadius * 1.25) {
-          // Wrap back to upwind perimeter
-          const perpX = -uY;
-          const perpY = uX;
-          const lateralOffset = (Math.random() - 0.5) * arenaRadius * 1.4;
-
-          cloud.position.x = -uX * arenaRadius * 1.2 + perpX * lateralOffset;
-          cloud.position.y = -uY * arenaRadius * 1.2 + perpY * lateralOffset;
-          cloud.baseAltitude = minAltAboveRoof + Math.random() * (maxAltAboveRoof - minAltAboveRoof);
-          cloud.mesh.rotation.z = Math.random() * Math.PI * 2;
+        if (proj > arenaRadius * 1.35) {
+          spawnCloudUpwind(cloud, 0);
         }
       }
     }
   }
 
   function setVisible(visible: boolean): void {
-    masterGroup.visible = visible;
+    isLayerVisible = visible;
+    applyVisibility();
+  }
+
+  function setWeatherPreset(preset: "sunny" | "cloudy" | "rainy"): void {
+    currentPreset = preset;
+    applyVisibility();
   }
 
   function setWind(speed: number, directionDeg: number): void {
@@ -326,12 +352,14 @@ export function createCloudsSimulation(
     for (const v of variants) {
       v.dispose();
     }
-    cloudMaterial.dispose();
+    invisibleCloudMaterial.dispose();
+    depthCasterMaterial.dispose();
   }
 
   return {
     update,
     setVisible,
+    setWeatherPreset,
     setWind,
     getCloudCount: () => clouds.length,
     dispose,

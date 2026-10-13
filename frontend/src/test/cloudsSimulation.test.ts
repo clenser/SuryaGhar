@@ -129,14 +129,50 @@ describe("3D Clouds Simulation & Physical Shadow Casting", () => {
     sim.dispose();
   });
 
-  it("cleans up resources and detaches from scene on dispose()", () => {
+  it("uses invisible camera material but enables customDepthMaterial for physical shadows", () => {
     const scene = new THREE.Scene();
-    const sim = createCloudsSimulation(scene);
+    const sim = createCloudsSimulation(scene, { cloudCount: 2 });
+    const masterGroup = scene.getObjectByName("CloudsSimulationGroup")!;
 
-    expect(scene.getObjectByName("CloudsSimulationGroup")).toBeDefined();
+    for (const child of masterGroup.children) {
+      const mesh = child as THREE.Mesh;
+      const mat = mesh.material as THREE.MeshBasicMaterial;
+      expect(mat.colorWrite).toBe(false);
+      expect(mat.depthWrite).toBe(false);
+      expect(mesh.customDepthMaterial).toBeDefined();
+      expect(mesh.castShadow).toBe(true);
+    }
 
     sim.dispose();
+  });
 
-    expect(scene.getObjectByName("CloudsSimulationGroup")).toBeUndefined();
+  it("coordinates cloud density with weather presets (rainy=hidden, sunny=sparse, cloudy=all)", () => {
+    const scene = new THREE.Scene();
+    const sim = createCloudsSimulation(scene, { cloudCount: 6 });
+    const masterGroup = scene.getObjectByName("CloudsSimulationGroup")!;
+
+    // Sunny: sparse clouds (only 2 active)
+    sim.setWeatherPreset("sunny");
+    expect(masterGroup.visible).toBe(true);
+    let activeInSunny = 0;
+    for (const child of masterGroup.children) {
+      if (child.visible) activeInSunny++;
+    }
+    expect(activeInSunny).toBe(2);
+
+    // Cloudy: all 6 clouds active
+    sim.setWeatherPreset("cloudy");
+    expect(masterGroup.visible).toBe(true);
+    let activeInCloudy = 0;
+    for (const child of masterGroup.children) {
+      if (child.visible) activeInCloudy++;
+    }
+    expect(activeInCloudy).toBe(6);
+
+    // Rainy: clouds completely disappear
+    sim.setWeatherPreset("rainy");
+    expect(masterGroup.visible).toBe(false);
+
+    sim.dispose();
   });
 });

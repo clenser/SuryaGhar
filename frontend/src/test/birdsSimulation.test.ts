@@ -256,4 +256,54 @@ describe("Birds Simulation Lifecycle & Solar Isolation", () => {
     expect(scene.getObjectByName("BirdsSimulationGroup")).toBeUndefined();
     expect(sim.getActiveBirdCount()).toBe(0);
   });
+
+  it("spawns distinct bird species (kite, pigeon, swift) with tailored scales and plumage", () => {
+    const scene = new THREE.Scene();
+    const sim = createBirdsSimulation(scene, {
+      maxActiveBirds: 3,
+      initialSpawn: false,
+    });
+
+    sim.spawnBird({ species: "pigeon" });
+    sim.spawnBird({ species: "kite" });
+    sim.spawnBird({ species: "swift" });
+
+    expect(sim.getActiveBirdCount()).toBe(3);
+
+    const masterGroup = scene.getObjectByName("BirdsSimulationGroup")!;
+    const bird0 = masterGroup.getObjectByName("Bird_0") as THREE.Group;
+    const bird1 = masterGroup.getObjectByName("Bird_1") as THREE.Group;
+    const bird2 = masterGroup.getObjectByName("Bird_2") as THREE.Group;
+
+    // Pigeon scale ~0.76-0.88, Kite scale ~1.20-1.38, Swift scale ~0.52-0.62
+    expect(bird0.scale.x).toBeLessThan(1.0);
+    expect(bird1.scale.x).toBeGreaterThan(1.0);
+    expect(bird2.scale.x).toBeLessThan(bird0.scale.x);
+
+    sim.dispose();
+  });
+
+  it("starts in active flapping mode on spawn and flaps actively during flight", () => {
+    const scene = new THREE.Scene();
+    const sim = createBirdsSimulation(scene, {
+      maxActiveBirds: 2,
+      initialSpawn: false,
+    });
+
+    sim.spawnBird({ species: "pigeon" });
+    const masterGroup = scene.getObjectByName("BirdsSimulationGroup")!;
+    const birdGroup = masterGroup.getObjectByName("Bird_0") as THREE.Group;
+
+    const initialLeftShoulderRotY = birdGroup.children[1].rotation.y;
+
+    // Advance 5 frames
+    for (let f = 0; f < 5; f++) {
+      sim.update(0.05, 12);
+    }
+
+    // Wing shoulder rotation updates actively due to flapping
+    expect(birdGroup.children[1].rotation.y).not.toBe(initialLeftShoulderRotY);
+
+    sim.dispose();
+  });
 });

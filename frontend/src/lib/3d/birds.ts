@@ -37,9 +37,11 @@ export interface BirdsSimulationOptions {
 
 export type BirdFlightMode = "flapping" | "gliding";
 export type BirdFlightPattern = "soaring" | "crossing";
+export type BirdSpecies = "kite" | "pigeon" | "swift";
 
 export interface BirdInstance {
   index: number;
+  species: BirdSpecies;
   active: boolean;
   position: THREE.Vector3;
   velocity: THREE.Vector3;
@@ -89,6 +91,7 @@ export interface BirdsSimulation {
   /** Spawn a single bird (used internally or for testing) */
   spawnBird: (config?: {
     pattern?: BirdFlightPattern;
+    species?: BirdSpecies;
     isLeader?: boolean;
     leaderIndex?: number;
     customPosition?: THREE.Vector3;
@@ -344,18 +347,48 @@ export function createBirdsSimulation(
   const fuselageGeom = createBirdFuselageGeometry();
   const { leftInner, leftOuter, rightInner, rightOuter } = createWingGeometries();
 
-  // Shared reusable avian materials:
-  // Warm Indian black kite plumage with subtle emissive fill so birds are always crisp against dark studio background
-  const plumageMaterial = new THREE.MeshLambertMaterial({
-    color: 0x92806e,
-    emissive: 0x241d17,
-    side: THREE.DoubleSide,
-  });
-  const wingtipMaterial = new THREE.MeshLambertMaterial({
-    color: 0x3f352b,
-    emissive: 0x14100c,
-    side: THREE.DoubleSide,
-  });
+  // Shared reusable avian materials for 3 distinct species:
+  // 1. Kite: dark warm umber/chestnut raptor plumage
+  // 2. Pigeon: urban blue-grey / slate with darker flight feathers
+  // 3. Swift: sleek dark charcoal / soot plumage
+  const speciesMaterials: Record<BirdSpecies, { plumage: THREE.MeshLambertMaterial; wingtip: THREE.MeshLambertMaterial }> = {
+    kite: {
+      plumage: new THREE.MeshLambertMaterial({
+        color: 0x544031,
+        emissive: 0x1e150f,
+        side: THREE.DoubleSide,
+      }),
+      wingtip: new THREE.MeshLambertMaterial({
+        color: 0x2b2018,
+        emissive: 0x0f0a07,
+        side: THREE.DoubleSide,
+      }),
+    },
+    pigeon: {
+      plumage: new THREE.MeshLambertMaterial({
+        color: 0x6d7b8b,
+        emissive: 0x1b2027,
+        side: THREE.DoubleSide,
+      }),
+      wingtip: new THREE.MeshLambertMaterial({
+        color: 0x3d4753,
+        emissive: 0x11161d,
+        side: THREE.DoubleSide,
+      }),
+    },
+    swift: {
+      plumage: new THREE.MeshLambertMaterial({
+        color: 0x2c3138,
+        emissive: 0x0f1115,
+        side: THREE.DoubleSide,
+      }),
+      wingtip: new THREE.MeshLambertMaterial({
+        color: 0x181b1f,
+        emissive: 0x07080a,
+        side: THREE.DoubleSide,
+      }),
+    },
+  };
 
   // Pre-allocate object pool
   const pool: BirdInstance[] = [];
@@ -366,7 +399,7 @@ export function createBirdsSimulation(
     group.visible = false;
 
     // Body mesh
-    const bodyMesh = new THREE.Mesh(fuselageGeom, plumageMaterial);
+    const bodyMesh = new THREE.Mesh(fuselageGeom, speciesMaterials.kite.plumage);
     bodyMesh.castShadow = true;
     bodyMesh.receiveShadow = false;
     group.add(bodyMesh);
@@ -374,7 +407,7 @@ export function createBirdsSimulation(
     // Left shoulder joint: attached at left flank
     const leftShoulder = new THREE.Group();
     leftShoulder.position.set(-0.13, 0.10, 0.02);
-    const liMesh = new THREE.Mesh(leftInner, plumageMaterial);
+    const liMesh = new THREE.Mesh(leftInner, speciesMaterials.kite.plumage);
     liMesh.castShadow = true;
     liMesh.receiveShadow = false;
     leftShoulder.add(liMesh);
@@ -382,7 +415,7 @@ export function createBirdsSimulation(
     // Left wrist joint: child of left shoulder at tip of inner wing
     const leftWrist = new THREE.Group();
     leftWrist.position.set(-0.55, 0.0, 0.0);
-    const loMesh = new THREE.Mesh(leftOuter, wingtipMaterial);
+    const loMesh = new THREE.Mesh(leftOuter, speciesMaterials.kite.wingtip);
     loMesh.castShadow = true;
     loMesh.receiveShadow = false;
     leftWrist.add(loMesh);
@@ -392,7 +425,7 @@ export function createBirdsSimulation(
     // Right shoulder joint: attached at right flank
     const rightShoulder = new THREE.Group();
     rightShoulder.position.set(0.13, 0.10, 0.02);
-    const riMesh = new THREE.Mesh(rightInner, plumageMaterial);
+    const riMesh = new THREE.Mesh(rightInner, speciesMaterials.kite.plumage);
     riMesh.castShadow = true;
     riMesh.receiveShadow = false;
     rightShoulder.add(riMesh);
@@ -400,7 +433,7 @@ export function createBirdsSimulation(
     // Right wrist joint: child of right shoulder at tip of inner wing
     const rightWrist = new THREE.Group();
     rightWrist.position.set(0.55, 0.0, 0.0);
-    const roMesh = new THREE.Mesh(rightOuter, wingtipMaterial);
+    const roMesh = new THREE.Mesh(rightOuter, speciesMaterials.kite.wingtip);
     roMesh.castShadow = true;
     roMesh.receiveShadow = false;
     rightWrist.add(roMesh);
@@ -411,6 +444,7 @@ export function createBirdsSimulation(
 
     pool.push({
       index: i,
+      species: "kite",
       active: false,
       position: new THREE.Vector3(),
       velocity: new THREE.Vector3(),
@@ -424,11 +458,11 @@ export function createBirdsSimulation(
       altitude: 20,
       wingPhase: Math.random() * Math.PI * 2,
       wingFrequency: 3.5 + Math.random() * 0.8,
-      flapAmplitude: 0.50 + Math.random() * 0.10,
-      mode: "gliding",
-      modeTimer: 3.0 + Math.random() * 3.0,
-      flapDuration: 2.2 + Math.random() * 1.5,
-      glideDuration: 4.5 + Math.random() * 3.5,
+      flapAmplitude: 0.60,
+      mode: "flapping",
+      modeTimer: 3.5,
+      flapDuration: 3.8,
+      glideDuration: 1.2,
       pattern: "soaring",
       patternTimer: 25.0,
       soarCenter: new THREE.Vector2(),
@@ -447,6 +481,40 @@ export function createBirdsSimulation(
       rightWrist,
       bodyMesh,
     });
+  }
+
+  function applyBirdSpecies(bird: BirdInstance, species: BirdSpecies): void {
+    bird.species = species;
+    const mats = speciesMaterials[species];
+    bird.bodyMesh.material = mats.plumage;
+    (bird.leftShoulder.children[0] as THREE.Mesh).material = mats.plumage;
+    (bird.rightShoulder.children[0] as THREE.Mesh).material = mats.plumage;
+    (bird.leftWrist.children[0] as THREE.Mesh).material = mats.wingtip;
+    (bird.rightWrist.children[0] as THREE.Mesh).material = mats.wingtip;
+
+    if (species === "pigeon") {
+      bird.scale = 0.76 + Math.random() * 0.12;
+      bird.wingFrequency = 5.2 + Math.random() * 0.8;
+      bird.flapAmplitude = 0.65;
+      bird.flapDuration = 4.5 + Math.random() * 1.5;
+      bird.glideDuration = 0.8 + Math.random() * 0.4;
+      bird.speed = 11.0 + Math.random() * 2.5;
+    } else if (species === "swift") {
+      bird.scale = 0.52 + Math.random() * 0.10;
+      bird.wingFrequency = 7.2 + Math.random() * 1.0;
+      bird.flapAmplitude = 0.70;
+      bird.flapDuration = 4.0 + Math.random() * 1.8;
+      bird.glideDuration = 0.7 + Math.random() * 0.4;
+      bird.speed = 14.0 + Math.random() * 3.0;
+    } else {
+      // Kite
+      bird.scale = 1.20 + Math.random() * 0.18;
+      bird.wingFrequency = 3.0 + Math.random() * 0.5;
+      bird.flapAmplitude = 0.60;
+      bird.flapDuration = 3.5 + Math.random() * 1.5;
+      bird.glideDuration = 1.6 + Math.random() * 0.8;
+      bird.speed = 9.5 + Math.random() * 2.0;
+    }
   }
 
   // Spawning management
@@ -470,6 +538,7 @@ export function createBirdsSimulation(
 
   function spawnBird(config?: {
     pattern?: BirdFlightPattern;
+    species?: BirdSpecies;
     isLeader?: boolean;
     leaderIndex?: number;
     customPosition?: THREE.Vector3;
@@ -480,6 +549,12 @@ export function createBirdsSimulation(
 
     const isFollower = config?.leaderIndex !== undefined && config.leaderIndex !== null;
     const leader = isFollower ? pool[config!.leaderIndex!] : null;
+
+    // Determine species: followers match leader, or pick among pigeon / kite / swift
+    const chosenSpecies: BirdSpecies =
+      config?.species ??
+      (leader ? leader.species : (Math.random() < 0.42 ? "pigeon" : Math.random() < 0.70 ? "kite" : "swift"));
+    applyBirdSpecies(bird, chosenSpecies);
 
     if (isFollower && leader && leader.active) {
       // Follower in loose echelon formation relative to leader
@@ -499,11 +574,12 @@ export function createBirdsSimulation(
       bird.scale = leader.scale * (0.94 + Math.random() * 0.12);
       bird.pattern = leader.pattern;
       bird.patternTimer = leader.patternTimer;
+      bird.mode = "flapping";
+      bird.modeTimer = bird.flapDuration * (0.8 + Math.random() * 0.4);
     } else {
       bird.flockLeaderIndex = null;
-      bird.scale = 1.05 + Math.random() * 0.22;
 
-      // 50% soaring kite circling the rooftop, 50% crossing sky
+      // Soaring circle or crossing sky
       bird.pattern = config?.pattern ?? (Math.random() > 0.45 ? "soaring" : "crossing");
       bird.patternTimer = bird.pattern === "soaring" ? (20.0 + Math.random() * 20.0) : 100.0;
 
@@ -514,7 +590,6 @@ export function createBirdsSimulation(
         bird.soarDir = Math.random() > 0.5 ? 1 : -1;
         bird.soarAngle = Math.random() * Math.PI * 2;
         bird.soarBaseAlt = minAltAboveRoof + 1.5 + Math.random() * (maxAltAboveRoof - minAltAboveRoof - 3.0);
-        bird.speed = 10.0 + Math.random() * 2.5;
 
         if (config?.customPosition) {
           bird.position.copy(config.customPosition);
@@ -535,8 +610,8 @@ export function createBirdsSimulation(
           0,
         );
         bird.bank = -bird.soarDir * 0.28; // Bank inward into the circle
-        bird.mode = "gliding";
-        bird.modeTimer = 5.0 + Math.random() * 4.0;
+        bird.mode = "flapping";
+        bird.modeTimer = bird.flapDuration * (0.8 + Math.random() * 0.4);
       } else {
         // Crossing trajectory: path traverses directly across sky above building
         if (config?.customPosition) {
@@ -556,22 +631,20 @@ export function createBirdsSimulation(
 
         _scratchForward.subVectors(bird.target, bird.position);
         bird.heading = Math.atan2(_scratchForward.y, _scratchForward.x);
-        bird.speed = 11.0 + Math.random() * 3.5;
         bird.velocity.set(
           Math.cos(bird.heading) * bird.speed,
           Math.sin(bird.heading) * bird.speed,
           (bird.target.z - bird.position.z) * 0.04,
         );
         bird.bank = 0;
-        bird.mode = Math.random() > 0.4 ? "gliding" : "flapping";
-        bird.modeTimer = bird.mode === "gliding" ? 4.0 : 2.5;
+        bird.mode = "flapping";
+        bird.modeTimer = bird.flapDuration * (0.8 + Math.random() * 0.4);
       }
     }
 
     bird.active = true;
     bird.age = 0;
     bird.wingPhase = Math.random() * Math.PI * 2;
-    bird.wingFrequency = 3.4 + Math.random() * 0.8;
 
     bird.group.scale.setScalar(bird.scale);
     bird.group.position.copy(bird.position);
@@ -681,20 +754,15 @@ export function createBirdsSimulation(
     bird.group.quaternion.copy(_scratchQuat);
     bird.group.position.copy(bird.position);
 
-    // 2. Wing Flap / Glide Kinematics
+    // 2. Wing Flap / Glide Kinematics: birds flap actively 75-85% of flight time
     bird.modeTimer -= dt;
     if (bird.modeTimer <= 0) {
       if (bird.mode === "flapping") {
         bird.mode = "gliding";
-        // Soaring kites glide much longer than they flap
-        bird.modeTimer = bird.pattern === "soaring"
-          ? (5.0 + Math.random() * 4.0)
-          : bird.glideDuration * (0.8 + Math.random() * 0.4);
+        bird.modeTimer = bird.glideDuration * (0.85 + Math.random() * 0.3);
       } else {
         bird.mode = "flapping";
-        bird.modeTimer = bird.pattern === "soaring"
-          ? (1.4 + Math.random() * 1.0)
-          : bird.flapDuration * (0.8 + Math.random() * 0.4);
+        bird.modeTimer = bird.flapDuration * (0.85 + Math.random() * 0.3);
       }
     }
 
@@ -791,8 +859,10 @@ export function createBirdsSimulation(
     leftOuter.dispose();
     rightInner.dispose();
     rightOuter.dispose();
-    plumageMaterial.dispose();
-    wingtipMaterial.dispose();
+    for (const key of Object.keys(speciesMaterials) as BirdSpecies[]) {
+      speciesMaterials[key].plumage.dispose();
+      speciesMaterials[key].wingtip.dispose();
+    }
   }
 
   // Initial immediate spawn so sky is lively the instant the 3D scene opens
