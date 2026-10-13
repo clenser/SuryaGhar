@@ -1794,6 +1794,33 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         canvas.style.cursor = "grab";
       };
 
+      const commitMove = (ndc?: THREE.Vector2 | null) => {
+        if (!movingEntity) return;
+        const cur = movingEntity;
+        let placeX = cur.currentX;
+        let placeY = cur.currentY;
+        if (ndc) {
+          const hit = cur.type === "tree" ? groundHit(ndc) : (roofHit(ndc) || groundHit(ndc));
+          if (hit) {
+            placeX = hit.x;
+            placeY = hit.y;
+          }
+        }
+        if (cur.type === "obstacle") {
+          onObstacleDragMoveRef.current?.(cur.id, placeX, placeY);
+          onObstacleDragEndRef.current?.(cur.id);
+        } else if (cur.type === "tree") {
+          onTreeDragMoveRef.current?.(cur.id, placeX, placeY);
+          onTreeDragEndRef.current?.(cur.id);
+        } else if (cur.type === "panel") {
+          onMovePanelRef.current?.(cur.setId!, cur.panelIndex!, placeX, placeY);
+        }
+        movingEntity = null;
+        setMovingBanner(null);
+        if (controlsRef.current) controlsRef.current.enabled = true;
+        canvas.style.cursor = "grab";
+      };
+
       const handleContextMenu = (event: MouseEvent) => {
         if (activeToolRef.current === "move") {
           event.preventDefault();
@@ -1884,20 +1911,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         if (event.button === 0 && movingEntity) {
           event.preventDefault();
           event.stopPropagation();
-          const cur = movingEntity;
-          if (cur.type === "obstacle") {
-            onObstacleDragMoveRef.current?.(cur.id, cur.currentX, cur.currentY);
-            onObstacleDragEndRef.current?.(cur.id);
-          } else if (cur.type === "tree") {
-            onTreeDragMoveRef.current?.(cur.id, cur.currentX, cur.currentY);
-            onTreeDragEndRef.current?.(cur.id);
-          } else if (cur.type === "panel") {
-            onMovePanelRef.current?.(cur.setId!, cur.panelIndex!, cur.currentX, cur.currentY);
-          }
-          movingEntity = null;
-          setMovingBanner(null);
-          if (controlsRef.current) controlsRef.current.enabled = true;
-          canvas.style.cursor = "grab";
+          commitMove(ndc);
           return;
         }
       };
@@ -1929,6 +1943,15 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         }
       };
 
+      const handleWindowPointerUp = (event: PointerEvent) => {
+        if (event.button === 0 && movingEntity) {
+          event.preventDefault();
+          event.stopPropagation();
+          const ndc = toNdc(event);
+          commitMove(ndc);
+        }
+      };
+
       const handleKeyDown = (event: KeyboardEvent) => {
         if (event.key === "Escape" && movingEntity) {
           cancelMove();
@@ -1938,12 +1961,14 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       canvas.addEventListener("contextmenu", handleContextMenu);
       canvas.addEventListener("pointerdown", handleDown, true);
       window.addEventListener("pointermove", handleMove);
+      window.addEventListener("pointerup", handleWindowPointerUp, true);
       window.addEventListener("keydown", handleKeyDown);
 
       return () => {
         canvas.removeEventListener("contextmenu", handleContextMenu);
         canvas.removeEventListener("pointerdown", handleDown, true);
         window.removeEventListener("pointermove", handleMove);
+        window.removeEventListener("pointerup", handleWindowPointerUp, true);
         window.removeEventListener("keydown", handleKeyDown);
         if (movingEntity) {
           cancelMove();

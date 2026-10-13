@@ -1061,20 +1061,21 @@ export function createGroundTrackerMountGeometry(
   }
 
   // 2. Continuous Central Torque Tube & Transverse Torque Arms
-  const torqueTubeWidth = 0.13;
-  const torqueTubeCenterZ = centerH - 0.10;
+  const torqueTubeWidth = 0.12;
+  const torqueTubeCenterZ = centerH - 0.18;
 
   for (let r = 0; r < setRows; r++) {
     const rowCenterY = (r - (setRows - 1) / 2) * stepV;
 
-    // Continuous Torque Tube along X axis
+    // Continuous Torque Tube along X axis (strictly underneath purlins)
     const torqueTube = box(totalWidth + 0.20, torqueTubeWidth, torqueTubeWidth, 0, rowCenterY, torqueTubeCenterZ, SUPPORT_COLOR);
     parts.push(torqueTube);
 
-    // Central Slew Drive Motor Enclosure at row center
-    const motorBox = box(0.36, 0.36, 0.34, 0, rowCenterY, torqueTubeCenterZ, FOOTING_COLOR);
+    // Central Slew Drive Motor Enclosure suspended safely BELOW torque tube at row center
+    const motorBoxZ = torqueTubeCenterZ - torqueTubeWidth / 2 - 0.15;
+    const motorBox = box(0.30, 0.30, 0.24, 0, rowCenterY, motorBoxZ, FOOTING_COLOR);
     parts.push(motorBox);
-    const motorCanister = box(0.16, 0.22, 0.16, 0.18, rowCenterY, torqueTubeCenterZ, FRAME_COLOR);
+    const motorCanister = box(0.14, 0.20, 0.14, 0.16, rowCenterY, motorBoxZ, FRAME_COLOR);
     parts.push(motorCanister);
 
     // Driven Foundation Piers with Bearing Pillow Blocks
@@ -1095,7 +1096,7 @@ export function createGroundTrackerMountGeometry(
       parts.push(beamBetweenPoints({ x: px, y: rowCenterY, z: groundElevationM + 0.20 }, pierTop, 0.10, 0.10, SUPPORT_COLOR));
 
       // Bearing Pillow Block housing supporting torque tube
-      const pillowBlock = box(0.16, 0.20, 0.12, px, rowCenterY, torqueTubeCenterZ, FRAME_COLOR);
+      const pillowBlock = box(0.16, 0.20, 0.12, px, rowCenterY, torqueTubeCenterZ - 0.04, FRAME_COLOR);
       parts.push(pillowBlock);
 
       // Transverse torque arm bracket connecting torque tube to purlins
@@ -1299,8 +1300,6 @@ export function createGroundPoleMountGeometry(
   const mastRadius = 0.11;
   const mastXs = totalWidth > 3.6 ? [-totalWidth * 0.25, totalWidth * 0.25] : [0];
   const strongbackLength = Math.max(1.8, totalWidth * 0.85);
-  const collarZ = centerH - 0.22;
-  const mastHeight = Math.max(0.4, collarZ - (groundElevationM + 0.25));
 
   for (let r = 0; r < setRows; r++) {
     const rowCenterY = (r - (setRows - 1) / 2) * stepV;
@@ -1334,35 +1333,49 @@ export function createGroundPoleMountGeometry(
 
     // 3. Masts, Collars, and Braces for this row
     for (const mx of mastXs) {
+      // Longitudinal strongback rafter along Y (sloped with the panels)
+      const rafterY = box(0.09, l * 0.85, 0.08, mx, 0, purlinBottomLocalZ - 0.04, SUPPORT_COLOR);
+      rafterY.applyMatrix4(tiltMatrix);
+      rafterY.translate(0, rowCenterY, centerH);
+      parts.push(rafterY);
+
       // Concrete foundation pedestal
       parts.push(box(0.55, 0.55, 0.25, mx, rowCenterY, groundElevationM + 0.125, FOOTING_COLOR));
+
+      // Mast height up to pivot head sleeve below the rafter
+      const mastHeadZ = centerH + purlinBottomLocalZ - 0.12;
+      const mastHeight = Math.max(0.35, mastHeadZ - (groundElevationM + 0.25));
 
       // Vertical tubular steel mast column
       parts.push(box(mastRadius * 2, mastRadius * 2, mastHeight, mx, rowCenterY, groundElevationM + 0.25 + mastHeight / 2, SUPPORT_COLOR));
 
-      // Top-of-Pole Azimuth Collar Sleeve
-      parts.push(box(0.30, 0.30, 0.22, mx, rowCenterY, collarZ, FOOTING_COLOR));
-      parts.push(box(0.20, 0.26, 0.14, mx, rowCenterY, collarZ + 0.09, FRAME_COLOR));
+      // Top-of-Pole Azimuth Pivot Sleeve
+      parts.push(box(0.30, 0.30, 0.20, mx, rowCenterY, mastHeadZ - 0.05, FOOTING_COLOR));
+      parts.push(box(0.20, 0.24, 0.12, mx, rowCenterY, mastHeadZ + 0.05, FRAME_COLOR));
 
-      // Pitch / Elevation Truss Braces in YZ plane for this row (strictly below purlins)
-      const collarNode = { x: mx, y: rowCenterY, z: collarZ };
+      // Lower elevation strut collar on mast
+      const strutCollarZ = Math.min(mastHeadZ - 0.30, groundElevationM + 0.35 + mastHeight * 0.4);
+      parts.push(box(0.26, 0.26, 0.12, mx, rowCenterY, strutCollarZ, FRAME_COLOR));
 
-      const frontPitchTip = new THREE.Vector3(mx, -l * 0.28, purlinBottomLocalZ - 0.04)
+      const collarNode = { x: mx, y: rowCenterY, z: strutCollarZ };
+
+      // Diagonal elevation struts in YZ plane connected strictly to the underside of the longitudinal rafter
+      const frontPitchTip = new THREE.Vector3(mx, -l * 0.15, purlinBottomLocalZ - 0.08)
         .applyMatrix4(tiltMatrix)
         .add(new THREE.Vector3(0, rowCenterY, centerH));
-      const rearPitchTip = new THREE.Vector3(mx, l * 0.28, purlinBottomLocalZ - 0.04)
+      const rearPitchTip = new THREE.Vector3(mx, l * 0.25, purlinBottomLocalZ - 0.08)
         .applyMatrix4(tiltMatrix)
         .add(new THREE.Vector3(0, rowCenterY, centerH));
 
-      parts.push(beamBetweenPoints(collarNode, { x: frontPitchTip.x, y: frontPitchTip.y, z: frontPitchTip.z }, 0.06, 0.06, FRAME_COLOR));
-      parts.push(beamBetweenPoints(collarNode, { x: rearPitchTip.x, y: rearPitchTip.y, z: rearPitchTip.z }, 0.06, 0.06, FRAME_COLOR));
+      parts.push(beamBetweenPoints(collarNode, { x: frontPitchTip.x, y: frontPitchTip.y, z: frontPitchTip.z }, 0.05, 0.05, FRAME_COLOR));
+      parts.push(beamBetweenPoints(collarNode, { x: rearPitchTip.x, y: rearPitchTip.y, z: rearPitchTip.z }, 0.05, 0.05, FRAME_COLOR));
 
-      // Lateral Outrigger Truss Arms to strongback outer tips
+      // Lateral Outrigger Truss Arms to transverse strongback outer tips
       const outriggerSpanX = mastXs.length > 1 ? totalWidth * 0.35 : strongbackLength / 2 - 0.15;
-      const leftTip = new THREE.Vector3(mx - outriggerSpanX, 0, purlinBottomLocalZ - 0.04)
+      const leftTip = new THREE.Vector3(mx - outriggerSpanX, 0, purlinBottomLocalZ - 0.08)
         .applyMatrix4(tiltMatrix)
         .add(new THREE.Vector3(0, rowCenterY, centerH));
-      const rightTip = new THREE.Vector3(mx + outriggerSpanX, 0, purlinBottomLocalZ - 0.04)
+      const rightTip = new THREE.Vector3(mx + outriggerSpanX, 0, purlinBottomLocalZ - 0.08)
         .applyMatrix4(tiltMatrix)
         .add(new THREE.Vector3(0, rowCenterY, centerH));
 
@@ -1373,12 +1386,14 @@ export function createGroundPoleMountGeometry(
 
   // 4. Inter-row structural tie beams at collar level when setRows > 1
   if (setRows > 1) {
+    const mastHeadZ = centerH + purlinBottomLocalZ - 0.12;
+    const tieZ = Math.min(mastHeadZ - 0.30, groundElevationM + 0.35);
     for (const mx of mastXs) {
       for (let r = 0; r < setRows - 1; r++) {
         const y1 = (r - (setRows - 1) / 2) * stepV;
         const y2 = (r + 1 - (setRows - 1) / 2) * stepV;
         // Collar level tie tube
-        parts.push(beamBetweenPoints({ x: mx, y: y1, z: collarZ }, { x: mx, y: y2, z: collarZ }, 0.08, 0.08, SUPPORT_COLOR));
+        parts.push(beamBetweenPoints({ x: mx, y: y1, z: tieZ }, { x: mx, y: y2, z: tieZ }, 0.08, 0.08, SUPPORT_COLOR));
         // Footing level tie beam
         parts.push(beamBetweenPoints({ x: mx, y: y1, z: groundElevationM + 0.15 }, { x: mx, y: y2, z: groundElevationM + 0.15 }, 0.12, 0.12, FOOTING_COLOR));
       }
@@ -1387,9 +1402,11 @@ export function createGroundPoleMountGeometry(
 
   // 5. Cross tie beam connecting twin masts along X when table is wide
   if (mastXs.length > 1) {
+    const mastHeadZ = centerH + purlinBottomLocalZ - 0.12;
+    const tieZ = Math.min(mastHeadZ - 0.30, groundElevationM + 0.35);
     for (let r = 0; r < setRows; r++) {
       const rowCenterY = (r - (setRows - 1) / 2) * stepV;
-      parts.push(beamBetweenPoints({ x: mastXs[0], y: rowCenterY, z: collarZ }, { x: mastXs[1], y: rowCenterY, z: collarZ }, 0.08, 0.08, SUPPORT_COLOR));
+      parts.push(beamBetweenPoints({ x: mastXs[0], y: rowCenterY, z: tieZ }, { x: mastXs[1], y: rowCenterY, z: tieZ }, 0.08, 0.08, SUPPORT_COLOR));
     }
   }
 

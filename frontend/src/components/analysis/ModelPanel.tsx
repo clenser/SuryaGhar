@@ -902,6 +902,7 @@ export function ModelPanel({
         ((set.config.setRows > 1 || set.config.setCols > 1) && set.mode === "auto");
 
       return {
+        setId: set.id,
         config: set.config,
         panels: set.panels.map(
           (p) => ({ ...p }) as PlacedPanel,
@@ -1761,9 +1762,18 @@ export function ModelPanel({
   const handleMovePanel = (setId: string, panelIndex: number, x: number, y: number) => {
     const rx = Math.round(x * 100) / 100;
     const ry = Math.round(y * 100) / 100;
-    setPanelSets((sets) =>
-      sets.map((s) => {
-        if (s.id !== setId) return s;
+    setPanelSets((sets) => {
+      let targetSet = sets.find((s) => s.id === setId);
+      if (!targetSet) {
+        targetSet =
+          sets.find((s) => s.id === activeSetId) ??
+          sets.find((s) => s.panels.length > panelIndex) ??
+          sets[0];
+      }
+      if (!targetSet) return sets;
+      const targetId = targetSet.id;
+      return sets.map((s) => {
+        if (s.id !== targetId) return s;
         const updatedPanels = s.panels.map((p, idx) =>
           idx === panelIndex ? { ...p, x: rx, y: ry } : p,
         );
@@ -1772,8 +1782,8 @@ export function ModelPanel({
           panels: updatedPanels,
           userModified: true,
         };
-      }),
-    );
+      });
+    });
   };
 
   /**
