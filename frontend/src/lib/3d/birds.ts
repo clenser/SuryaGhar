@@ -367,7 +367,7 @@ export function createBirdsSimulation(
 
     // Body mesh
     const bodyMesh = new THREE.Mesh(fuselageGeom, plumageMaterial);
-    bodyMesh.castShadow = false;
+    bodyMesh.castShadow = true;
     bodyMesh.receiveShadow = false;
     group.add(bodyMesh);
 
@@ -375,7 +375,7 @@ export function createBirdsSimulation(
     const leftShoulder = new THREE.Group();
     leftShoulder.position.set(-0.13, 0.10, 0.02);
     const liMesh = new THREE.Mesh(leftInner, plumageMaterial);
-    liMesh.castShadow = false;
+    liMesh.castShadow = true;
     liMesh.receiveShadow = false;
     leftShoulder.add(liMesh);
 
@@ -383,7 +383,7 @@ export function createBirdsSimulation(
     const leftWrist = new THREE.Group();
     leftWrist.position.set(-0.55, 0.0, 0.0);
     const loMesh = new THREE.Mesh(leftOuter, wingtipMaterial);
-    loMesh.castShadow = false;
+    loMesh.castShadow = true;
     loMesh.receiveShadow = false;
     leftWrist.add(loMesh);
     leftShoulder.add(leftWrist);
@@ -393,7 +393,7 @@ export function createBirdsSimulation(
     const rightShoulder = new THREE.Group();
     rightShoulder.position.set(0.13, 0.10, 0.02);
     const riMesh = new THREE.Mesh(rightInner, plumageMaterial);
-    riMesh.castShadow = false;
+    riMesh.castShadow = true;
     riMesh.receiveShadow = false;
     rightShoulder.add(riMesh);
 
@@ -401,7 +401,7 @@ export function createBirdsSimulation(
     const rightWrist = new THREE.Group();
     rightWrist.position.set(0.55, 0.0, 0.0);
     const roMesh = new THREE.Mesh(rightOuter, wingtipMaterial);
-    roMesh.castShadow = false;
+    roMesh.castShadow = true;
     roMesh.receiveShadow = false;
     rightWrist.add(roMesh);
     rightShoulder.add(rightWrist);

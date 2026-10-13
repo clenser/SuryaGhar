@@ -220,7 +220,7 @@ export function sunColorHex(elevationDeg: number): number {
  * direction, with a floor so tiny roofs still use the map sensibly.
  */
 export function shadowCameraExtent(footprint: number, height: number): number {
-  return Math.max(40, Math.max(footprint, 1) * 1.15 + Math.max(height, 0) * 0.5);
+  return Math.max(55, Math.max(footprint, 1) * 1.30 + Math.max(height, 0) * 0.7);
 }
 
 /**

@@ -74,6 +74,7 @@ import type { WeatherPreset } from "../../lib/3d/lighting";
 import { buildElectricalTopology } from "../../lib/3d/electricityFlow";
 import { createElectricityFlowVisualizer, type ElectricityFlowHandle } from "../../lib/3d/electricityFlowMeshes";
 import { createBirdsSimulation, type BirdsSimulation } from "../../lib/3d/birds";
+import { createCloudsSimulation, type CloudsSimulation } from "../../lib/3d/clouds";
 
 /**
  * Attributes used for the capability probe. They mirror what Three.js requests,
@@ -237,6 +238,7 @@ export interface Site3DViewerProps {
     ground: boolean;
     electricityFlow?: boolean;
     birds?: boolean;
+    clouds?: boolean;
   };
   /** Whether dragging trees is enabled */
   treeDragEnabled?: boolean;
@@ -361,6 +363,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
     weatherPresetRef.current = weatherPreset;
     const electricityFlowRef = useRef<ElectricityFlowHandle | null>(null);
     const birdsRef = useRef<BirdsSimulation | null>(null);
+    const cloudsRef = useRef<CloudsSimulation | null>(null);
     const obstaclesRef = useRef(obstacles);
     obstaclesRef.current = obstacles;
     const treesRef = useRef(trees);
@@ -479,10 +482,13 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
 
         // Initialize natural flying birds simulation in sky
         const birds = createBirdsSimulation(setup.scene);
-        if (layerVisibilityRef.current?.birds === false) {
-          birds.setVisible(false);
-        }
+        birds.setVisible(Boolean(layerVisibilityRef.current?.birds));
         birdsRef.current = birds;
+
+        // Initialize dynamic 3D clouds with physical shadow casting
+        const clouds = createCloudsSimulation(setup.scene);
+        clouds.setVisible(Boolean(layerVisibilityRef.current?.clouds));
+        cloudsRef.current = clouds;
 
         setIsInitialized(true);
         preloadTreeModels().catch(() => {});
@@ -543,6 +549,10 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         if (birdsRef.current) {
           birdsRef.current.dispose();
           birdsRef.current = null;
+        }
+        if (cloudsRef.current) {
+          cloudsRef.current.dispose();
+          cloudsRef.current = null;
         }
         disposeTexturedGround();
         if (rainRef.current) {
@@ -837,7 +847,10 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         texturedGroundRef.current.mesh.visible = layerVisibility?.ground !== false;
       }
       if (birdsRef.current) {
-        birdsRef.current.setVisible(layerVisibility?.birds !== false);
+        birdsRef.current.setVisible(Boolean(layerVisibility?.birds));
+      }
+      if (cloudsRef.current) {
+        cloudsRef.current.setVisible(Boolean(layerVisibility?.clouds));
       }
       requestShadowUpdate();
     }, [layerVisibility, isInitialized]);
@@ -1971,6 +1984,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       let lastRainTime: number | null = null;
       let lastFlowTime: number | null = null;
       let lastBirdsTime: number | null = null;
+      let lastCloudsTime: number | null = null;
       let lastFlowIntensityCheck = 0;
       let lastAppliedSunState: { azimuthDeg: number; elevationDeg: number; weatherPreset: string } | null = null;
 
@@ -2069,16 +2083,33 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         }
         lastFlowTime = now;
 
-        // Advance natural flying bird animation in sky when layer is visible
-        if (birdsRef.current) {
-          const isBirdsActive = layerVisibilityRef.current?.birds !== false;
-          if (isBirdsActive) {
-            const dt = lastBirdsTime === null ? 0.016 : Math.min(Math.max((now - lastBirdsTime) / 1000, 0.001), 0.1);
-            const roofZ = localCoordsRef.current ? localCoordsRef.current.height : 12;
-            birdsRef.current.update(dt, roofZ);
-          }
+        // Advance natural flying bird animation in sky when layer is active
+        const isBirdsActive = Boolean(layerVisibilityRef.current?.birds);
+        if (birdsRef.current && isBirdsActive) {
+          const dt = lastBirdsTime === null ? 0.016 : Math.min(Math.max((now - lastBirdsTime) / 1000, 0.001), 0.1);
+          const roofZ = localCoordsRef.current ? localCoordsRef.current.height : 12;
+          birdsRef.current.update(dt, roofZ);
         }
         lastBirdsTime = now;
+
+        // Advance dynamic 3D clouds animation in sky when layer is active
+        const isCloudsActive = Boolean(layerVisibilityRef.current?.clouds);
+        if (cloudsRef.current && isCloudsActive) {
+          const dt = lastCloudsTime === null ? 0.016 : Math.min(Math.max((now - lastCloudsTime) / 1000, 0.001), 0.1);
+          const roofZ = localCoordsRef.current ? localCoordsRef.current.height : 12;
+          cloudsRef.current.update(dt, roofZ);
+        }
+        lastCloudsTime = now;
+
+        // When moving dynamic shadow casters (flying birds, drifting clouds) or sun playback are active,
+        // continuously refresh shadow maps so their moving shadows project onto the roof and ground
+        const dynamicShadows =
+          (isBirdsActive && birdsRef.current) ||
+          (isCloudsActive && cloudsRef.current) ||
+          sunRef.current?.playing;
+        if (dynamicShadows && rendererRef.current) {
+          rendererRef.current.shadowMap.needsUpdate = true;
+        }
 
         rendererRef.current?.render(sceneRef.current!, cameraRef.current!);
       };

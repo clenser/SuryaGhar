@@ -208,7 +208,7 @@ describe("Birds Simulation Lifecycle & Solar Isolation", () => {
     sim.dispose();
   });
 
-  it("strictly isolates from solar physics: all bird meshes have castShadow=false and receiveShadow=false", () => {
+  it("casts moving dynamic shadows from flying birds with receiveShadow=false", () => {
     const scene = new THREE.Scene();
     const sim = createBirdsSimulation(scene, { maxActiveBirds: 4 });
     sim.spawnFlock(2);
@@ -220,7 +220,7 @@ describe("Birds Simulation Lifecycle & Solar Isolation", () => {
     masterGroup!.traverse((child) => {
       if ((child as THREE.Mesh).isMesh) {
         meshCount++;
-        expect(child.castShadow).toBe(false);
+        expect(child.castShadow).toBe(true);
         expect(child.receiveShadow).toBe(false);
       }
     });
