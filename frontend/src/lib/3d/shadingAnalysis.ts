@@ -254,14 +254,13 @@ export function projectObstacleShadowToRoof(
   solarElevationDeg: number,
   receiverElevationAboveRoof: number = 0,
 ): Point2[] {
-  if (solarElevationDeg <= 1.0) return []; // Sun at or below horizon
+  if (solarElevationDeg <= 0.1) return []; // Sun at or below horizon
   const receiverZ = roofZ + Math.max(0, receiverElevationAboveRoof);
   if (topZ <= receiverZ) return []; // Obstacle does not reach receiver plane height
 
   const elRad = (solarElevationDeg * Math.PI) / 180;
   const azRad = (solarAzimuthDeg * Math.PI) / 180;
-  const tanEl = Math.tan(elRad);
-  if (tanEl <= 1e-4) return [];
+  const tanEl = Math.max(0.005, Math.tan(elRad));
 
   // Elevation span above receiver plane
   const effectiveTopH = topZ - receiverZ;
@@ -304,12 +303,11 @@ export function computeParapetShadowPolygons(
   receiverElevationAboveRoof: number = 0,
 ): Point2[][] {
   const effectiveParapetH = Math.max(0, parapetHeightM - Math.max(0, receiverElevationAboveRoof));
-  if (effectiveParapetH <= 0 || solarElevationDeg <= 1.0 || terraceRing.length < 3) return [];
+  if (effectiveParapetH <= 0 || solarElevationDeg <= 0.1 || terraceRing.length < 3) return [];
 
   const elRad = (solarElevationDeg * Math.PI) / 180;
   const azRad = (solarAzimuthDeg * Math.PI) / 180;
-  const tanEl = Math.tan(elRad);
-  if (tanEl <= 1e-4) return [];
+  const tanEl = Math.max(0.005, Math.tan(elRad));
 
   const shadowLen = effectiveParapetH / tanEl;
   const dxTop = -Math.sin(azRad) * shadowLen;
@@ -357,12 +355,11 @@ export function computePanelSelfShadowPolygons(
   solarElevationDeg: number,
 ): Map<string, Point2[][]> {
   const panelShadowMap = new Map<string, Point2[][]>();
-  if (solarElevationDeg <= 1.0 || panels.length < 2) return panelShadowMap;
+  if (solarElevationDeg <= 0.1 || panels.length < 2) return panelShadowMap;
 
   const elRad = (solarElevationDeg * Math.PI) / 180;
   const azRad = (solarAzimuthDeg * Math.PI) / 180;
-  const tanEl = Math.tan(elRad);
-  if (tanEl <= 1e-4) return panelShadowMap;
+  const tanEl = Math.max(0.005, Math.tan(elRad));
 
   // Pre-compute geometric metadata per panel:
   const metadata = panels.map((p) => {
@@ -374,6 +371,7 @@ export function computePanelSelfShadowPolygons(
     const receiverZ = mountH + 0.5 * elevatedSpan;
     const corners = rectangleCorners(p.x, p.y, dims.widthM, dims.lengthM, p.rotationDeg);
 
+    // The elevated high edge of the panel (corners[0] and corners[1] where local y = -hl)
     const topEdge = [corners[0], corners[1]];
 
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
@@ -386,6 +384,11 @@ export function computePanelSelfShadowPolygons(
 
     return {
       id: p.id,
+      x: p.x,
+      y: p.y,
+      rotationDeg: p.rotationDeg,
+      mountH,
+      dims,
       corners,
       topEdge,
       topZ,
@@ -407,6 +410,17 @@ export function computePanelSelfShadowPolygons(
       if (i === j) continue;
       const receiver = metadata[j];
 
+      // Coplanar modules in the same row do not self-shadow each other
+      const slopeDx = -Math.sin((caster.rotationDeg * Math.PI) / 180);
+      const slopeDy = -Math.cos((caster.rotationDeg * Math.PI) / 180);
+      const deltaSlope = (receiver.x - caster.x) * slopeDx + (receiver.y - caster.y) * slopeDy;
+      if (
+        Math.abs(deltaSlope) < 0.3 * caster.dims.lengthM &&
+        Math.abs(caster.mountH - receiver.mountH) < 0.05
+      ) {
+        continue;
+      }
+
       const deltaZ = caster.topZ - receiver.receiverZ;
       if (deltaZ <= 0.05) continue; // Caster is not higher than receiver
 
@@ -416,11 +430,20 @@ export function computePanelSelfShadowPolygons(
       const dx = -Math.sin(azRad) * shadowLen;
       const dy = -Math.cos(azRad) * shadowLen;
 
-      // Shadow bounding box of caster:
-      const sMinX = Math.min(caster.minX, caster.minX + dx);
-      const sMaxX = Math.max(caster.maxX, caster.maxX + dx);
-      const sMinY = Math.min(caster.minY, caster.minY + dy);
-      const sMaxY = Math.max(caster.maxY, caster.maxY + dy);
+      // Receiver must be downstream along the shadow vector
+      const dotDownstream = (receiver.x - caster.x) * dx + (receiver.y - caster.y) * dy;
+      if (dotDownstream < -1e-3) continue;
+
+      // Shadow bounding box of caster's elevated edge:
+      const edgeMinX = Math.min(caster.topEdge[0].x, caster.topEdge[1].x);
+      const edgeMaxX = Math.max(caster.topEdge[0].x, caster.topEdge[1].x);
+      const edgeMinY = Math.min(caster.topEdge[0].y, caster.topEdge[1].y);
+      const edgeMaxY = Math.max(caster.topEdge[0].y, caster.topEdge[1].y);
+
+      const sMinX = Math.min(edgeMinX, edgeMinX + dx);
+      const sMaxX = Math.max(edgeMaxX, edgeMaxX + dx);
+      const sMinY = Math.min(edgeMinY, edgeMinY + dy);
+      const sMaxY = Math.max(edgeMaxY, edgeMaxY + dy);
 
       // Fast AABB intersection test with receiver:
       if (sMaxX < receiver.minX || sMinX > receiver.maxX || sMaxY < receiver.minY || sMinY > receiver.maxY) {
@@ -429,7 +452,7 @@ export function computePanelSelfShadowPolygons(
 
       // Compute shadow polygon cast by caster's elevated top edge onto receiver plane:
       const displacedTopEdge = caster.topEdge.map((c) => ({ x: c.x + dx, y: c.y + dy }));
-      const shadowPoly = computeConvexHull([...caster.corners, ...displacedTopEdge]);
+      const shadowPoly = computeConvexHull([...caster.topEdge, ...displacedTopEdge]);
 
       if (shadowPoly.length >= 3) {
         let list = panelShadowMap.get(receiver.id);
@@ -963,7 +986,7 @@ export function computeInstantaneousShade(params: {
 }): InstantaneousPanelShade[] {
   const { panels, terraceRing, roofZ, solarAzimuthDeg, solarElevationDeg, obstacles, trees, parapetHeightM } = params;
 
-  if (solarElevationDeg <= 1.0 || panels.length === 0) {
+  if (solarElevationDeg <= 0.1 || panels.length === 0) {
     const isNight = solarElevationDeg <= 0;
     return panels.map((p) => {
       const dims = effectivePanelDims(p.config);
@@ -972,8 +995,8 @@ export function computeInstantaneousShade(params: {
         panelId: p.id,
         setId: p.setId,
         index: p.index,
-        shadeFraction: 0,
-        shadedAreaM2: 0,
+        shadeFraction: isNight ? 0 : 1.0,
+        shadedAreaM2: isNight ? 0 : totalArea,
         totalAreaM2: totalArea,
         isNight,
       };

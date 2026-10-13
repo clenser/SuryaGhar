@@ -668,26 +668,48 @@ export function ModelPanel({
       !panelsEnabled ||
       !shadingVisualizationActive ||
       heatmapMode !== "instantaneous" ||
-      panelSets.length === 0 ||
       !sun.state
     ) {
       return new Map<string, number>();
     }
-    let globalIdx = 0;
-    const simPanels = panelSets.flatMap((set) =>
-      set.panels.map((p) => {
-        const idx = globalIdx++;
-        return {
-          id: `p-${idx}`,
-          setId: set.id,
-          index: p.index,
-          x: p.x,
-          y: p.y,
-          rotationDeg: p.rotationDeg,
-          config: set.config,
-        };
-      }),
-    );
+
+    let simPanels: Array<{
+      id: string;
+      setId: string;
+      index: number;
+      x: number;
+      y: number;
+      rotationDeg: number;
+      config: PanelLayoutConfig;
+    }> = [];
+
+    if (previewCandidate) {
+      simPanels = previewCandidate.panels.map((p, idx) => ({
+        id: `prev-${idx}`,
+        setId: "preview",
+        index: idx,
+        x: p.x,
+        y: p.y,
+        rotationDeg: p.rotationDeg,
+        config: previewCandidate.config,
+      }));
+    } else {
+      let globalIdx = 0;
+      simPanels = panelSets.flatMap((set) =>
+        set.panels.map((p) => {
+          const idx = globalIdx++;
+          return {
+            id: `p-${idx}`,
+            setId: set.id,
+            index: p.index,
+            x: p.x,
+            y: p.y,
+            rotationDeg: p.rotationDeg,
+            config: set.config,
+          };
+        }),
+      );
+    }
 
     if (simPanels.length === 0) return new Map<string, number>();
 
@@ -706,6 +728,7 @@ export function ModelPanel({
     panelsEnabled,
     shadingVisualizationActive,
     heatmapMode,
+    previewCandidate,
     panelSets,
     sun.state,
     terraceRing,
@@ -724,12 +747,16 @@ export function ModelPanel({
     if (previewCandidate) {
       const isNightTime = Boolean(sun.state?.night || (sun.state?.elevationDeg ?? 0) <= 0);
       const metrics = shadingVisualizationActive
-        ? previewCandidate.shadingSummary.panels.map((p) => ({
-            annualLossPercent: p.annualLossPercent,
-            severity: p.severity,
-            instantaneousShadeFraction: heatmapMode === "instantaneous" ? p.annualMeanShadeFraction : undefined,
-            isNight: heatmapMode === "instantaneous" ? isNightTime : false,
-          }))
+        ? previewCandidate.panels.map((_, idx) => {
+            const match = previewCandidate.shadingSummary.panels[idx];
+            const instantShade = instantaneousShades.get(`prev-${idx}`);
+            return {
+              annualLossPercent: match ? match.annualLossPercent : 0,
+              severity: match ? match.severity : "none",
+              instantaneousShadeFraction: heatmapMode === "instantaneous" ? (instantShade ?? 0) : undefined,
+              isNight: heatmapMode === "instantaneous" ? isNightTime : false,
+            };
+          })
         : undefined;
 
       const isSet =
