@@ -97,6 +97,8 @@ export interface PanelShadingMetric {
   severity?: "none" | "moderate" | "severe";
   /** Optional instantaneous shade fraction (0.0 to 1.0) when in Current Sun / Shadow View mode */
   instantaneousShadeFraction?: number;
+  /** True when the sun is below the horizon (night) */
+  isNight?: boolean;
 }
 
 /**
@@ -164,8 +166,12 @@ export function getShadingHeatmapColor(lossPercent: number | undefined): THREE.C
  * 0.50 = yellow (50% obstructed)
  * 0.75 = orange (75% obstructed)
  * 1.00 = crimson red (100% in shade)
+ * isNight = dark slate/charcoal (#1e293b)
  */
-export function getInstantaneousShadeColor(fraction: number | undefined): THREE.Color {
+export function getInstantaneousShadeColor(fraction: number | undefined, isNight = false): THREE.Color {
+  if (isNight) {
+    return new THREE.Color(0x1e293b); // Dark slate/charcoal at night
+  }
   if (fraction === undefined || fraction === null || !Number.isFinite(fraction) || fraction < 0) {
     return new THREE.Color(0x1d4ed8); // Default to unshaded blue
   }
@@ -1043,8 +1049,8 @@ export function createPanelGroup(
 
       let color: THREE.Color;
       const metric = shadingMetrics ? shadingMetrics[i] : undefined;
-      if (metric && Number.isFinite(metric.instantaneousShadeFraction)) {
-        color = getInstantaneousShadeColor(metric.instantaneousShadeFraction);
+      if (metric && (metric.isNight || Number.isFinite(metric.instantaneousShadeFraction))) {
+        color = getInstantaneousShadeColor(metric.instantaneousShadeFraction, metric.isNight);
       } else if (metric && Number.isFinite(metric.annualLossPercent)) {
         color = getShadingHeatmapColor(metric.annualLossPercent);
       } else if (shadingSeverities && shadingSeverities[i]) {
@@ -1106,8 +1112,8 @@ export function updatePanelGroupShading(
   for (let i = 0; i < panels.length; i++) {
     let color: THREE.Color;
     const metric = shadingMetrics ? shadingMetrics[i] : undefined;
-    if (metric && Number.isFinite(metric.instantaneousShadeFraction)) {
-      color = getInstantaneousShadeColor(metric.instantaneousShadeFraction);
+    if (metric && (metric.isNight || Number.isFinite(metric.instantaneousShadeFraction))) {
+      color = getInstantaneousShadeColor(metric.instantaneousShadeFraction, metric.isNight);
     } else if (metric && Number.isFinite(metric.annualLossPercent)) {
       color = getShadingHeatmapColor(metric.annualLossPercent);
     } else if (shadingSeverities && shadingSeverities[i]) {

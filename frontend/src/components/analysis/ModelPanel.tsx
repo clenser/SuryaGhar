@@ -644,6 +644,7 @@ export function ModelPanel({
       trees,
       parapetHeightM,
       parapetClearanceM,
+      timezone: sun.timezone,
     });
   }, [
     panelsEnabled,
@@ -657,6 +658,7 @@ export function ModelPanel({
     trees,
     parapetHeightM,
     parapetClearanceM,
+    sun.timezone,
   ]);
 
   // Instantaneous shade fraction per panel at current simulated sun position.
@@ -753,6 +755,7 @@ export function ModelPanel({
         annualLossPercent: number;
         severity?: "none" | "moderate" | "severe";
         instantaneousShadeFraction?: number;
+        isNight?: boolean;
       }> | undefined = undefined;
 
       if (shadingVisualizationActive) {
@@ -762,6 +765,7 @@ export function ModelPanel({
           return match ? match.severity : "none";
         });
 
+        const isNightTime = Boolean(sun.state?.night || (sun.state?.elevationDeg ?? 0) <= 0);
         metrics = set.panels.map((_, localIdx) => {
           const globalIdx = globalPanelOffset + localIdx;
           const match = annualShading?.panels[globalIdx];
@@ -770,6 +774,7 @@ export function ModelPanel({
             annualLossPercent: match ? match.annualLossPercent : 0,
             severity: match ? match.severity : "none",
             instantaneousShadeFraction: heatmapMode === "instantaneous" ? (instantShade ?? 0) : undefined,
+            isNight: heatmapMode === "instantaneous" ? isNightTime : false,
           };
         });
       }
@@ -2050,7 +2055,12 @@ export function ModelPanel({
               dateTimeLabel={dateTimeLabel}
               onDateChange={sun.setDate}
               onTimeChange={sun.setTime}
-              onTogglePlay={sun.togglePlay}
+              onTogglePlay={() => {
+                if (!sun.playing && shadingVisualizationActive) {
+                  setHeatmapMode("instantaneous");
+                }
+                sun.togglePlay();
+              }}
             />
             
           </CollapsibleSection>
@@ -2519,6 +2529,10 @@ export function ModelPanel({
               solarResourceError={solarResourceError}
               onFetchSolarResource={handleFetchSolarResource}
               onApplyRecommendedOrientation={handleApplyRecommendedOrientation}
+              sunElevationDeg={sun.state?.elevationDeg}
+              sunAzimuthDeg={sun.state?.azimuthDeg}
+              isNight={Boolean(sun.state?.night || (sun.state?.elevationDeg ?? 0) <= 0)}
+              isSimulatingSun={sun.playing}
             />
           </CollapsibleSection>
 

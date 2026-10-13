@@ -48,6 +48,12 @@ interface ShadingAnalysisSectionProps {
   solarResourceError?: string | null;
   onFetchSolarResource?: () => void;
   onApplyRecommendedOrientation?: (tilt: number, azimuth: number) => void;
+
+  /** Live simulation sun parameters for real-time shadow feedback */
+  sunElevationDeg?: number;
+  sunAzimuthDeg?: number;
+  isNight?: boolean;
+  isSimulatingSun?: boolean;
 }
 
 export const ShadingAnalysisSection: React.FC<ShadingAnalysisSectionProps> = ({
@@ -69,6 +75,10 @@ export const ShadingAnalysisSection: React.FC<ShadingAnalysisSectionProps> = ({
   solarResourceError = null,
   onFetchSolarResource,
   onApplyRecommendedOrientation,
+  sunElevationDeg,
+  sunAzimuthDeg,
+  isNight = false,
+  isSimulatingSun = false,
 }) => {
   if (!shadingResult) {
     return (
@@ -130,6 +140,32 @@ export const ShadingAnalysisSection: React.FC<ShadingAnalysisSectionProps> = ({
             >
               Current Sun / Shadow
             </button>
+          </div>
+        )}
+
+        {heatmapMode === "instantaneous" && (
+          <div
+            style={{
+              padding: "5px 8px",
+              background: isNight ? "rgba(30, 41, 59, 0.6)" : "rgba(56, 189, 248, 0.12)",
+              borderRadius: "5px",
+              border: isNight ? "1px solid rgba(148, 163, 184, 0.25)" : "1px solid rgba(56, 189, 248, 0.25)",
+              fontSize: "0.72rem",
+              color: isNight ? "var(--color-warning, #f59e0b)" : "var(--color-primary, #38bdf8)",
+              marginBottom: "8px",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <span>
+              {isNight
+                ? "Night: Sun below horizon (panels in night state)"
+                : `Live Sun: ${sunElevationDeg !== undefined ? Math.round(sunElevationDeg * 10) / 10 : 0}° elevation · Azimuth ${sunAzimuthDeg !== undefined ? Math.round(sunAzimuthDeg * 10) / 10 : 0}°`}
+            </span>
+            {isSimulatingSun && (
+              <span style={{ fontSize: "0.68rem", opacity: 0.9, fontWeight: 600 }}>Simulating Live</span>
+            )}
           </div>
         )}
 

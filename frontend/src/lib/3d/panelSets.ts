@@ -419,10 +419,8 @@ export function rotatePanelsForAzimuth(
   const result: PlacedSetPanel[] = [];
 
   // 1. Process multi-panel tables
-  for (const [tableId, members] of byTable.entries()) {
+  for (const [, members] of byTable.entries()) {
     const first = members[0];
-    const tRows = first.tableRows ?? config.setRows;
-    const tCols = first.tableCols ?? config.setCols;
     const oldRotRad = (first.rotationDeg * Math.PI) / 180;
     const oldCos = Math.cos(oldRotRad);
     const oldSin = Math.sin(oldRotRad);

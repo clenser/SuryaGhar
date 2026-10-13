@@ -25,6 +25,7 @@ import { treeFootprint } from "./treeTypes";
 import { effectivePanelDims, panelTypeDefinition, type PanelLayoutConfig } from "./panels";
 import { rectangleCorners } from "./panelPlacement";
 import { solarPosition } from "../solar/solarPosition";
+import { localWallClockToUtc, resolveSiteTimezone } from "../solar/timezone";
 
 /** Point in 3D local metric coordinates (X = East, Y = North, Z = Up). */
 export interface Point3 {
@@ -242,6 +243,7 @@ export function clipPolygonConvex(subject: Point2[], clipper: Point2[]): Point2[
  * @param roofZ Elevation of the roof surface in local metres
  * @param solarAzimuthDeg Solar azimuth degrees clockwise from North
  * @param solarElevationDeg Solar elevation degrees above horizon
+ * @param receiverElevationAboveRoof Elevation of the receiver plane above the roof (e.g. panel surface elevation)
  */
 export function projectObstacleShadowToRoof(
   footprint: Point2[],
@@ -250,18 +252,20 @@ export function projectObstacleShadowToRoof(
   roofZ: number,
   solarAzimuthDeg: number,
   solarElevationDeg: number,
+  receiverElevationAboveRoof: number = 0,
 ): Point2[] {
   if (solarElevationDeg <= 1.0) return []; // Sun at or below horizon
-  if (topZ <= roofZ) return []; // Obstacle does not reach roof height
+  const receiverZ = roofZ + Math.max(0, receiverElevationAboveRoof);
+  if (topZ <= receiverZ) return []; // Obstacle does not reach receiver plane height
 
   const elRad = (solarElevationDeg * Math.PI) / 180;
   const azRad = (solarAzimuthDeg * Math.PI) / 180;
   const tanEl = Math.tan(elRad);
   if (tanEl <= 1e-4) return [];
 
-  // Elevation span above roof plane
-  const effectiveTopH = topZ - roofZ;
-  const effectiveBaseH = Math.max(0, baseZ - roofZ);
+  // Elevation span above receiver plane
+  const effectiveTopH = topZ - receiverZ;
+  const effectiveBaseH = Math.max(0, baseZ - receiverZ);
 
   const lenTop = effectiveTopH / tanEl;
   const lenBase = effectiveBaseH / tanEl;
@@ -281,7 +285,7 @@ export function projectObstacleShadowToRoof(
 }
 
 /**
- * Projects parapet wall shadows onto the roof surface along the sun ray.
+ * Projects parapet wall shadows onto the receiver surface along the sun ray.
  * 
  * Unlike solid obstacles whose entire footprint casts a single shadow hull,
  * a rooftop parapet is a thin perimeter wall standing on the outer edge of the roof.
@@ -297,15 +301,17 @@ export function computeParapetShadowPolygons(
   parapetHeightM: number,
   solarAzimuthDeg: number,
   solarElevationDeg: number,
+  receiverElevationAboveRoof: number = 0,
 ): Point2[][] {
-  if (parapetHeightM <= 0 || solarElevationDeg <= 1.0 || terraceRing.length < 3) return [];
+  const effectiveParapetH = Math.max(0, parapetHeightM - Math.max(0, receiverElevationAboveRoof));
+  if (effectiveParapetH <= 0 || solarElevationDeg <= 1.0 || terraceRing.length < 3) return [];
 
   const elRad = (solarElevationDeg * Math.PI) / 180;
   const azRad = (solarAzimuthDeg * Math.PI) / 180;
   const tanEl = Math.tan(elRad);
   if (tanEl <= 1e-4) return [];
 
-  const shadowLen = parapetHeightM / tanEl;
+  const shadowLen = effectiveParapetH / tanEl;
   const dxTop = -Math.sin(azRad) * shadowLen;
   const dyTop = -Math.cos(azRad) * shadowLen;
 
@@ -317,8 +323,8 @@ export function computeParapetShadowPolygons(
     const b = cw[(i + 1) % cw.length];
     // Check if shadow displacement points inward into the clockwise polygon:
     // For clockwise winding, (B - A) x d < 0 indicates inward displacement.
-    const cross = (b.x - a.x) * dyTop - (b.y - a.y) * dxTop;
-    if (cross < -1e-4) {
+    const crossVal = (b.x - a.x) * dyTop - (b.y - a.y) * dxTop;
+    if (crossVal < -1e-4) {
       const quad = ensureClockwise([
         a,
         b,
@@ -332,6 +338,108 @@ export function computeParapetShadowPolygons(
   }
 
   return shadowQuads;
+}
+
+/**
+ * Computes inter-row panel shadow polygons cast by tilted panels onto neighboring panels.
+ * In a tilted solar array, the raised back edge of a front row casts a shadow towards the back row
+ * during low sun angles (e.g. morning, evening, or winter solstice).
+ */
+export function computePanelSelfShadowPolygons(
+  panels: Array<{
+    id: string;
+    x: number;
+    y: number;
+    rotationDeg: number;
+    config: PanelLayoutConfig;
+  }>,
+  solarAzimuthDeg: number,
+  solarElevationDeg: number,
+): Map<string, Point2[][]> {
+  const panelShadowMap = new Map<string, Point2[][]>();
+  if (solarElevationDeg <= 1.0 || panels.length < 2) return panelShadowMap;
+
+  const elRad = (solarElevationDeg * Math.PI) / 180;
+  const azRad = (solarAzimuthDeg * Math.PI) / 180;
+  const tanEl = Math.tan(elRad);
+  if (tanEl <= 1e-4) return panelShadowMap;
+
+  // Pre-compute geometric metadata per panel:
+  const metadata = panels.map((p) => {
+    const dims = effectivePanelDims(p.config);
+    const tiltRad = (p.config.tiltDeg * Math.PI) / 180;
+    const mountH = p.config.mountHeightM ?? 0.4;
+    const elevatedSpan = dims.lengthM * Math.sin(tiltRad);
+    const topZ = mountH + elevatedSpan;
+    const receiverZ = mountH + 0.5 * elevatedSpan;
+    const corners = rectangleCorners(p.x, p.y, dims.widthM, dims.lengthM, p.rotationDeg);
+
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const c of corners) {
+      if (c.x < minX) minX = c.x;
+      if (c.x > maxX) maxX = c.x;
+      if (c.y < minY) minY = c.y;
+      if (c.y > maxY) maxY = c.y;
+    }
+
+    return {
+      id: p.id,
+      corners,
+      topZ,
+      receiverZ,
+      elevatedSpan,
+      minX,
+      maxX,
+      minY,
+      maxY,
+    };
+  });
+
+  // For each caster panel, determine its shadow polygon on neighboring panels' receiver planes
+  for (let i = 0; i < metadata.length; i++) {
+    const caster = metadata[i];
+    if (caster.elevatedSpan <= 0.05) continue; // Flat panel doesn't cast significant elevated shadow
+
+    for (let j = 0; j < metadata.length; j++) {
+      if (i === j) continue;
+      const receiver = metadata[j];
+
+      const deltaZ = caster.topZ - receiver.receiverZ;
+      if (deltaZ <= 0.05) continue; // Caster is not higher than receiver
+
+      const shadowLen = deltaZ / tanEl;
+      if (shadowLen <= 0.01) continue;
+
+      const dx = -Math.sin(azRad) * shadowLen;
+      const dy = -Math.cos(azRad) * shadowLen;
+
+      // Shadow bounding box of caster:
+      const sMinX = Math.min(caster.minX, caster.minX + dx);
+      const sMaxX = Math.max(caster.maxX, caster.maxX + dx);
+      const sMinY = Math.min(caster.minY, caster.minY + dy);
+      const sMaxY = Math.max(caster.maxY, caster.maxY + dy);
+
+      // Fast AABB intersection test with receiver:
+      if (sMaxX < receiver.minX || sMinX > receiver.maxX || sMaxY < receiver.minY || sMinY > receiver.maxY) {
+        continue;
+      }
+
+      // Compute shadow polygon cast by caster onto receiver plane:
+      const displacedCorners = caster.corners.map((c) => ({ x: c.x + dx, y: c.y + dy }));
+      const shadowPoly = computeConvexHull([...caster.corners, ...displacedCorners]);
+
+      if (shadowPoly.length >= 3) {
+        let list = panelShadowMap.get(receiver.id);
+        if (!list) {
+          list = [];
+          panelShadowMap.set(receiver.id, list);
+        }
+        list.push(shadowPoly);
+      }
+    }
+  }
+
+  return panelShadowMap;
 }
 
 
@@ -489,6 +597,7 @@ export function runAnnualShadingAnalysis(params: {
   parapetHeightM: number;
   parapetClearanceM?: number;
   surroundingBuildings?: SurroundingBuildingRef[];
+  timezone?: string;
 }): AnnualShadingResult {
   const {
     panels,
@@ -500,7 +609,28 @@ export function runAnnualShadingAnalysis(params: {
     trees,
     parapetHeightM,
     surroundingBuildings = [],
+    timezone,
   } = params;
+
+  // Resolve site timezone: explicit parameter -> Indian coordinates -> browser zone
+  const tz =
+    timezone ||
+    (latitude >= 6 && latitude <= 38 && longitude >= 68 && longitude <= 98
+      ? "Asia/Kolkata"
+      : resolveSiteTimezone());
+
+  // Average receiver elevation above roof across placed panels (mounting height + half tilted length)
+  let avgReceiverElev = 0.45;
+  if (panels.length > 0) {
+    let sumElev = 0;
+    for (const p of panels) {
+      const dims = effectivePanelDims(p.config);
+      const tRad = (p.config.tiltDeg * Math.PI) / 180;
+      const mountH = p.config.mountHeightM ?? 0.4;
+      sumElev += mountH + (dims.lengthM / 2) * Math.sin(tRad);
+    }
+    avgReceiverElev = sumElev / panels.length;
+  }
 
   const notes: string[] = [];
   let missingBuildingHeight = false;
@@ -520,7 +650,7 @@ export function runAnnualShadingAnalysis(params: {
   }
 
   for (const t of trees) {
-    if (t.height > roofZ) {
+    if (t.height > roofZ + avgReceiverElev) {
       estimatedTreeCanopiesCount++;
     }
   }
@@ -605,15 +735,15 @@ export function runAnnualShadingAnalysis(params: {
     let seasonUnshadedKwh = 0;
     let seasonShadedKwh = 0;
 
-    // Simulate 24 hours of the representative day
+    // Simulate daylight hours in the site's local wall-clock time
     for (let hour = 6; hour <= 18; hour++) {
-      // Calculate sun position at this date & hour
-      const instant = new Date(`${season.date}T${String(hour).padStart(2, "0")}:00:00Z`);
+      // Calculate sun position at this date & local hour
+      const instant = localWallClockToUtc(season.date, hour * 60, tz);
       const sun = solarPosition(latitude, longitude, instant);
 
       if (sun.apparentElevationDeg <= 1.0) continue;
 
-      // Project all shadows on the roof plane
+      // Project all shadows on the panel receiver plane
       const shadowPolygons: Point2[][] = [];
 
       for (const obs of obstacleGeoms) {
@@ -624,12 +754,13 @@ export function runAnnualShadingAnalysis(params: {
           roofZ,
           sun.azimuthDeg,
           sun.apparentElevationDeg,
+          avgReceiverElev,
         );
         if (shadow.length >= 3) shadowPolygons.push(shadow);
       }
 
       for (const tree of treeGeoms) {
-        if (tree.topZ > roofZ) {
+        if (tree.topZ > roofZ + avgReceiverElev) {
           const shadow = projectObstacleShadowToRoof(
             tree.footprint,
             tree.baseZ,
@@ -637,24 +768,39 @@ export function runAnnualShadingAnalysis(params: {
             roofZ,
             sun.azimuthDeg,
             sun.apparentElevationDeg,
+            avgReceiverElev,
           );
           if (shadow.length >= 3) shadowPolygons.push(shadow);
         }
       }
 
-      if (parapetHeightM > 0) {
+      if (parapetHeightM > avgReceiverElev) {
         const parapetShadows = computeParapetShadowPolygons(
           terraceRing,
           parapetHeightM,
           sun.azimuthDeg,
           sun.apparentElevationDeg,
+          avgReceiverElev,
         );
         for (const s of parapetShadows) shadowPolygons.push(s);
       }
 
+      // Inter-row panel self-shading
+      const interPanelShadows = computePanelSelfShadowPolygons(
+        panels,
+        sun.azimuthDeg,
+        sun.apparentElevationDeg,
+      );
+
       // Check each panel against the shadow polygons
       for (const entry of panelMap.values()) {
-        const shade = computePanelShadeFraction(entry.corners, shadowPolygons);
+        const selfShadows = interPanelShadows.get(entry.panel.id);
+        const allShadows =
+          selfShadows && selfShadows.length > 0
+            ? [...shadowPolygons, ...selfShadows]
+            : shadowPolygons;
+
+        const shade = computePanelShadeFraction(entry.corners, allShadows);
         entry.totalShadeFractionSum += shade;
         entry.daylightHoursCount += 1;
         if (shade > entry.peakShade) entry.peakShade = shade;
@@ -788,6 +934,7 @@ export interface InstantaneousPanelShade {
   shadeFraction: number; // 0 (unshaded) to 1.0 (fully shaded)
   shadedAreaM2: number;
   totalAreaM2: number;
+  isNight?: boolean;
 }
 
 /**
@@ -815,6 +962,7 @@ export function computeInstantaneousShade(params: {
   const { panels, terraceRing, roofZ, solarAzimuthDeg, solarElevationDeg, obstacles, trees, parapetHeightM } = params;
 
   if (solarElevationDeg <= 1.0 || panels.length === 0) {
+    const isNight = solarElevationDeg <= 0;
     return panels.map((p) => {
       const dims = effectivePanelDims(p.config);
       const totalArea = dims.widthM * dims.lengthM;
@@ -825,11 +973,25 @@ export function computeInstantaneousShade(params: {
         shadeFraction: 0,
         shadedAreaM2: 0,
         totalAreaM2: totalArea,
+        isNight,
       };
     });
   }
 
-  // 1. Obstacle shadows
+  // Average receiver elevation above roof across placed panels (mounting height + half tilted length)
+  let avgReceiverElev = 0.45;
+  if (panels.length > 0) {
+    let sumElev = 0;
+    for (const p of panels) {
+      const dims = effectivePanelDims(p.config);
+      const tRad = (p.config.tiltDeg * Math.PI) / 180;
+      const mountH = p.config.mountHeightM ?? 0.4;
+      sumElev += mountH + (dims.lengthM / 2) * Math.sin(tRad);
+    }
+    avgReceiverElev = sumElev / panels.length;
+  }
+
+  // 1. Obstacle shadows projected to the elevated panel receiver plane
   const shadowPolygons: Point2[][] = [];
   for (const obs of obstacles) {
     let footprint: Point2[];
@@ -850,13 +1012,14 @@ export function computeInstantaneousShade(params: {
       roofZ,
       solarAzimuthDeg,
       solarElevationDeg,
+      avgReceiverElev,
     );
     if (shadow.length >= 3) shadowPolygons.push(shadow);
   }
 
-  // 2. Tree canopy shadows
+  // 2. Tree canopy shadows projected to the elevated panel receiver plane
   for (const tree of trees) {
-    if (tree.height > roofZ) {
+    if (tree.height > roofZ + avgReceiverElev) {
       const footprint = treeFootprint(tree);
       const trunkFraction = tree.type === "broadleaf" ? 0.35 : tree.type === "conifer" ? 0.20 : 0.40;
       const canopyBaseZ = tree.height * trunkFraction;
@@ -867,28 +1030,44 @@ export function computeInstantaneousShade(params: {
         roofZ,
         solarAzimuthDeg,
         solarElevationDeg,
+        avgReceiverElev,
       );
       if (shadow.length >= 3) shadowPolygons.push(shadow);
     }
   }
 
-  // 3. Parapet shadows
-  if (parapetHeightM > 0) {
+  // 3. Parapet shadows projected to the elevated panel receiver plane
+  if (parapetHeightM > avgReceiverElev) {
     const parapetShadows = computeParapetShadowPolygons(
       terraceRing,
       parapetHeightM,
       solarAzimuthDeg,
       solarElevationDeg,
+      avgReceiverElev,
     );
     for (const s of parapetShadows) shadowPolygons.push(s);
   }
 
-  // 4. Panel geometric shade evaluation
+  // 4. Inter-row panel self-shading
+  const interPanelShadows = computePanelSelfShadowPolygons(
+    panels,
+    solarAzimuthDeg,
+    solarElevationDeg,
+  );
+
+  // 5. Panel geometric shade evaluation
   return panels.map((p) => {
     const dims = effectivePanelDims(p.config);
     const corners = rectangleCorners(p.x, p.y, dims.widthM, dims.lengthM, p.rotationDeg);
     const totalAreaM2 = dims.widthM * dims.lengthM;
-    const shadeFraction = computePanelShadeFraction(corners, shadowPolygons);
+
+    const selfShadows = interPanelShadows.get(p.id);
+    const allShadows =
+      selfShadows && selfShadows.length > 0
+        ? [...shadowPolygons, ...selfShadows]
+        : shadowPolygons;
+
+    const shadeFraction = computePanelShadeFraction(corners, allShadows);
     return {
       panelId: p.id,
       setId: p.setId,
@@ -896,6 +1075,7 @@ export function computeInstantaneousShade(params: {
       shadeFraction: Math.round(shadeFraction * 1000) / 1000,
       shadedAreaM2: Math.round(shadeFraction * totalAreaM2 * 100) / 100,
       totalAreaM2,
+      isNight: false,
     };
   });
 }

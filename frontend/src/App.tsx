@@ -18,7 +18,6 @@ import { useObstacles } from "./hooks/useObstacles";
 import { useValidation } from "./hooks/useValidation";
 import { BACKEND_WAITING_LABEL, useBackendReady } from "./hooks/useBackendStatus";
 import { formatPlaceContext } from "./services/geocode";
-import { activeImageryProvider } from "./providers/imagery";
 import { KOLKATA_PLACE } from "./config/locations";
 import { SelectionPanel } from "./components/selection/SelectionPanel";
 import { ValidatePanel } from "./components/analysis/ValidatePanel";
