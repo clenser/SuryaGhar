@@ -2285,7 +2285,7 @@ export function ModelPanel({
                         type="number"
                         step="0.5"
                         min="1"
-                        max="30"
+                        max="50"
                         value={treePlaceHeight}
                         onChange={(e) => setTreePlaceHeight(Number(e.target.value) || 8)}
                         style={{ fontSize: "0.85rem" }}
@@ -2301,7 +2301,7 @@ export function ModelPanel({
                         type="number"
                         step="0.5"
                         min="0.5"
-                        max="20"
+                        max="35"
                         value={treePlaceCanopyWidth}
                         onChange={(e) => setTreePlaceCanopyWidth(Number(e.target.value) || 5)}
                         style={{ fontSize: "0.85rem" }}

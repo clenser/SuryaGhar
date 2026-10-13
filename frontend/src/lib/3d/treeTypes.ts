@@ -67,12 +67,12 @@ export interface TreeTypeDefinition {
 
 /** Minimum tree dimension accepted (metres). */
 export const MIN_TREE_HEIGHT_M = 1.0;
-/** Maximum tree height accepted (metres) ï¿½ site-scale sanity limit. */
-export const MAX_TREE_HEIGHT_M = 30;
+/** Maximum tree height accepted (metres) — site-scale sanity limit. */
+export const MAX_TREE_HEIGHT_M = 50;
 /** Minimum canopy width accepted (metres). */
 export const MIN_TREE_CANOPY_WIDTH_M = 0.5;
-/** Maximum canopy width accepted (metres) ï¿½ roof-scale sanity limit. */
-export const MAX_TREE_CANOPY_WIDTH_M = 20;
+/** Maximum canopy width accepted (metres) — site/ground-scale limit. */
+export const MAX_TREE_CANOPY_WIDTH_M = 35;
 
 /** Initial presets; dimensions are metres. */
 export const TREE_TYPES: TreeTypeDefinition[] = [
@@ -354,8 +354,9 @@ export function validateTree(
     return { valid: false, error: "Tree trunk intersects building interior" };
   }
 
-  // 4. Overlap and collision with other trees
-  const footprint = treeFootprint(tree);
+  // 4. Collision with other trees:
+  // Tree canopies may touch or overlap naturally (forming groves, clusters, or touching canopies of any type).
+  // Trunks must not occupy the same space (trunk collision check: d < r1 + r2).
   for (const other of others) {
     if (other.id === tree.id) continue;
     // Trunk collision check: trunks must not collide with other trunks (d < r1 + r2)
@@ -365,14 +366,6 @@ export function validateTree(
       return {
         valid: false,
         error: `Tree trunk collides with the ${treeTypeLabel(other.type).toLowerCase()}`,
-      };
-    }
-
-    const otherFootprint = treeFootprint(other);
-    if (polygonsOverlap(footprint, otherFootprint)) {
-      return {
-        valid: false,
-        error: `Tree footprint overlaps the ${treeTypeLabel(other.type).toLowerCase()}`,
       };
     }
   }

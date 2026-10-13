@@ -67,14 +67,18 @@ describe("Ground tree validation", () => {
     }
   });
 
-  it("rejects trees that overlap with existing trees", () => {
+  it("accepts trees whose canopies overlap and touch each other", () => {
+    // Two trees placed with overlapping canopies (existing centered at 16, candidate at 17, canopies 4m wide)
     const existing = makeTree({ id: "tree-1", position: { x: 16, y: 0 }, canopyWidth: 4 });
     const candidate = makeTree({ id: "tree-2", position: { x: 17, y: 0 }, canopyWidth: 4 });
     const result = validateTree(candidate, TERRACE, [existing]);
-    expect(result.valid).toBe(false);
-    if (!result.valid) {
-      expect(result.error).toContain("overlaps");
-    }
+    expect(result.valid).toBe(true);
+  });
+
+  it("accepts large trees up to the expanded limits (50m height, 35m canopy)", () => {
+    const largeTree = makeTree({ position: { x: 25, y: 0 }, height: 45, canopyWidth: 30 });
+    const result = validateTree(largeTree, TERRACE, []);
+    expect(result.valid).toBe(true);
   });
 
   it("accepts adjacent trees whose canopies touch along an edge without gap", () => {
