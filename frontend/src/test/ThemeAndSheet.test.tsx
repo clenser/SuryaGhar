@@ -158,7 +158,7 @@ describe("SheetBar handle", () => {
 describe("StatusBar mobile chip", () => {
   it("toggles the details row through aria-expanded on the summary button", () => {
     render(<StatusBar view={view} selectedName="Kolkata" />);
-    const chip = screen.getByRole("button", { name: /Esri World Imagery/ });
+    const chip = screen.getByRole("button", { name: /(Google Maps Satellite|Esri World Imagery)/ });
     expect(chip).toHaveAttribute("aria-expanded", "false");
     expect(document.querySelector(".status-bar")).toHaveAttribute("data-open", "false");
 

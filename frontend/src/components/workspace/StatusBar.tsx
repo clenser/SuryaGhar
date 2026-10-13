@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ChevronUp } from "lucide-react";
 import type { MapViewState } from "../../types";
 import { activeImageryProvider } from "../../providers/imagery";
+import { useMapProvider } from "../../services/mapProvider";
 
 interface StatusBarProps {
   view: MapViewState | null;
@@ -27,6 +28,10 @@ export function formatScale(lat: number, zoom: number): { width: number; label: 
 }
 
 export function StatusBar({ view, selectedName }: StatusBarProps) {
+  const mapState = useMapProvider();
+  const isGoogleActive = mapState === "google-ready" || mapState === "google-loading";
+  const providerName = isGoogleActive ? "Google Maps Satellite" : activeImageryProvider.getDisplayName();
+
   const scale = view ? formatScale(view.center.lat, view.zoom) : null;
   // Phone only: the three-segment GIS footer collapses into a single floating
   // chip that expands on tap. Desktop keeps the full row (CSS hides the chip).
@@ -42,7 +47,7 @@ export function StatusBar({ view, selectedName }: StatusBarProps) {
       >
         <span className="status-bar__dot" aria-hidden="true" />
         <span className="status-bar__summary-text">
-          {activeImageryProvider.getDisplayName()}
+          {providerName}
           {selectedName ? ` · ${selectedName}` : ""}
         </span>
         {view && <span className="mono status-bar__summary-zoom">z {view.zoom.toFixed(1)}</span>}
@@ -51,7 +56,7 @@ export function StatusBar({ view, selectedName }: StatusBarProps) {
       <div className="status-bar__row" id="status-details">
       <div className="status-bar__segment status-bar__segment--primary">
         <span className="status-bar__dot" aria-hidden="true" />
-        <span className="status-bar__text">{activeImageryProvider.getDisplayName()}</span>
+        <span className="status-bar__text">{providerName}</span>
         {selectedName && <span className="status-bar__muted">· {selectedName}</span>}
       </div>
       <div className="status-bar__segment status-bar__segment--center">

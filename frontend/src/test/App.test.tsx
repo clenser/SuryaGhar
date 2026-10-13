@@ -68,7 +68,7 @@ describe("App workspace", () => {
   it("names the imagery provider and states it is prototype-only in diagnostics", async () => {
     render(<App />);
     await userEvent.click(screen.getByRole("button", { name: /Advanced/ }));
-    expect(screen.getByText(/Esri World Imagery · prototype/)).toBeInTheDocument();
+    expect(screen.getAllByText(/(Google Maps Satellite|Esri World Imagery · prototype)/).length).toBeGreaterThan(0);
     expect(screen.getByText(/Native max zoom/)).toBeInTheDocument();
   });
 

@@ -4,6 +4,7 @@ import { activeImageryProvider } from "../../providers/imagery";
 import { activeTerrainProvider } from "../../providers/terrain";
 import { INDIAN_TEST_SITES } from "../../config/locations";
 import type { LocationResult } from "../../types";
+import { useMapProvider } from "../../services/mapProvider";
 
 interface LayerPanelProps {
   open: boolean;
@@ -17,6 +18,8 @@ interface LayerPanelProps {
 }
 
 export function LayerPanel({ open, layers, advanced, errors, onChange, onAdvancedChange, onClose, onJumpTo }: LayerPanelProps) {
+  const mapState = useMapProvider();
+  const isGoogleActive = mapState === "google-ready" || mapState === "google-loading";
   const imageryCoverage = activeImageryProvider.getCoverageInfo();
   const terrainCoverage = activeTerrainProvider.getCoverage();
 
@@ -110,11 +113,20 @@ export function LayerPanel({ open, layers, advanced, errors, onChange, onAdvance
             <section className="layer-group" aria-labelledby="diag-heading">
               <h3 id="diag-heading" className="layer-group__title"><Stethoscope size={13} aria-hidden="true" /> Diagnostics</h3>
               <dl className="meta-list">
-                <div><dt>Imagery</dt><dd>{activeImageryProvider.getDisplayName()}{imageryCoverage.prototypeOnly ? " · prototype" : ""}</dd></div>
-                <div><dt>Native max zoom</dt><dd>{imageryCoverage.nativeMaxZoom}</dd></div>
+                <div>
+                  <dt>Imagery</dt>
+                  <dd>
+                    {isGoogleActive ? "Google Maps Satellite" : `${activeImageryProvider.getDisplayName()}${imageryCoverage.prototypeOnly ? " · prototype" : ""}`}
+                  </dd>
+                </div>
+                <div><dt>Native max zoom</dt><dd>{isGoogleActive ? 22 : imageryCoverage.nativeMaxZoom}</dd></div>
                 <div><dt>Terrain</dt><dd>{activeTerrainProvider.getDisplayName()} · max z{terrainCoverage.maxZoom}</dd></div>
               </dl>
-              <p className="layer-group__hint">{imageryCoverage.notes}</p>
+              <p className="layer-group__hint">
+                {isGoogleActive
+                  ? "High-resolution satellite imagery powered by Google Maps with precision zoom up to z22."
+                  : imageryCoverage.notes}
+              </p>
               <p className="layer-group__hint">{terrainCoverage.resolutionNote}</p>
 
               <h4 className="layer-group__subtitle">Test sites</h4>

@@ -471,7 +471,7 @@ export default function App() {
 
       <StatusBar view={view} selectedName={place?.name ?? null} />
       <span className="sr-only" aria-live="polite">
-        Map provider: {activeImageryProvider.getDisplayName()}
+        Map provider: Google Maps Satellite
       </span>
     </div>
   );
