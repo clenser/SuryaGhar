@@ -1,16 +1,20 @@
 import { ChevronDown, Satellite } from "lucide-react";
 import { activeImageryProvider } from "../../providers/imagery";
+import { useMapProvider } from "../../services/mapProvider";
 
 interface ImagerySelectorProps {
   onOpenLayers: () => void;
 }
 
 /**
- * Compact floating imagery control. The app ships a single satellite
- * provider, so this surfaces the current source and opens the existing
- * layer panel for any changes — no providers are invented here.
+ * Compact floating imagery control. Shows the active satellite imagery source
+ * and opens the existing layer panel for any adjustments.
  */
 export function ImagerySelector({ onOpenLayers }: ImagerySelectorProps) {
+  const mapState = useMapProvider();
+  const isGoogleActive = mapState === "google-ready" || mapState === "google-loading";
+  const providerName = isGoogleActive ? "Google Maps Satellite" : activeImageryProvider.getDisplayName();
+
   return (
     <button
       type="button"
@@ -24,7 +28,7 @@ export function ImagerySelector({ onOpenLayers }: ImagerySelectorProps) {
       </span>
       <span className="imagery-selector__text">
         <span className="imagery-selector__title">Satellite view</span>
-        <span className="imagery-selector__subtitle">{activeImageryProvider.getDisplayName()}</span>
+        <span className="imagery-selector__subtitle">{providerName}</span>
       </span>
       <ChevronDown size={14} strokeWidth={2} aria-hidden="true" className="imagery-selector__chevron" />
     </button>

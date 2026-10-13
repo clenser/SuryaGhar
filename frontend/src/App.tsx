@@ -1,4 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
+import { ChevronRight } from "lucide-react";
 import { MapView, type MapViewHandle } from "./components/map/MapView";
 import { MapControls } from "./components/map/MapControls";
 import { MapToolbar } from "./components/map/MapToolbar";
@@ -37,6 +38,7 @@ export default function App() {
   const { layers, updateLayers, view, setView, errors, recordError } = useMapState();
   const [advanced, setAdvanced] = useState(false);
   const [layersOpen, setLayersOpen] = useState(false);
+  const [panelCollapsed, setPanelCollapsed] = useState(false);
   // Default initial location: Kolkata. Replaced as soon as the user searches
   // elsewhere; never re-applied afterwards.
   const [place, setPlace] = useState<LocationResult | null>(KOLKATA_PLACE);
@@ -252,7 +254,23 @@ export default function App() {
         />
         )}
 
-        <div className="stage-panel" data-sheet={sheetCtl.sheet}>
+        <div className={`stage-panel${panelCollapsed && !inDesignWorkspace ? " is-collapsed" : ""}`} data-sheet={sheetCtl.sheet}>
+          {!inDesignWorkspace && (
+            <button
+              type="button"
+              className="stage-panel__toggle"
+              onClick={() => setPanelCollapsed((c) => !c)}
+              aria-label={panelCollapsed ? "Expand control panel" : "Collapse control panel"}
+              title={panelCollapsed ? "Expand control panel" : "Collapse control panel"}
+            >
+              <ChevronRight
+                size={16}
+                strokeWidth={2}
+                aria-hidden="true"
+                className={`stage-panel__toggle-icon${panelCollapsed ? " is-collapsed" : ""}`}
+              />
+            </button>
+          )}
           <SheetBar
             sheet={sheetCtl.sheet}
             stageLabel={
