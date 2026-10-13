@@ -297,6 +297,7 @@ export function ModelPanel({
     trees: true,
     ground: true,
     electricityFlow: false,
+    birds: true,
   });
   const handleToggleLayer = (layer: keyof typeof layerVisibility) => {
     setLayerVisibility((prev) => ({ ...prev, [layer]: !prev[layer] }));

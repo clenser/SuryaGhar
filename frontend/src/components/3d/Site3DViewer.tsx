@@ -73,6 +73,7 @@ import {
 import type { WeatherPreset } from "../../lib/3d/lighting";
 import { buildElectricalTopology } from "../../lib/3d/electricityFlow";
 import { createElectricityFlowVisualizer, type ElectricityFlowHandle } from "../../lib/3d/electricityFlowMeshes";
+import { createBirdsSimulation, type BirdsSimulation } from "../../lib/3d/birds";
 
 /**
  * Attributes used for the capability probe. They mirror what Three.js requests,
@@ -235,6 +236,7 @@ export interface Site3DViewerProps {
     trees: boolean;
     ground: boolean;
     electricityFlow?: boolean;
+    birds?: boolean;
   };
   /** Whether dragging trees is enabled */
   treeDragEnabled?: boolean;
@@ -358,6 +360,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
     const weatherPresetRef = useRef<WeatherPreset>(weatherPreset);
     weatherPresetRef.current = weatherPreset;
     const electricityFlowRef = useRef<ElectricityFlowHandle | null>(null);
+    const birdsRef = useRef<BirdsSimulation | null>(null);
     const obstaclesRef = useRef(obstacles);
     obstaclesRef.current = obstacles;
     const treesRef = useRef(trees);
@@ -474,6 +477,13 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         // First shadow pass happens on the first rendered frame.
         setup.renderer.shadowMap.needsUpdate = true;
 
+        // Initialize natural flying birds simulation in sky
+        const birds = createBirdsSimulation(setup.scene);
+        if (layerVisibilityRef.current?.birds === false) {
+          birds.setVisible(false);
+        }
+        birdsRef.current = birds;
+
         setIsInitialized(true);
         preloadTreeModels().catch(() => {});
         onReadyRef.current?.();
@@ -529,6 +539,10 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           sceneRef.current?.remove(electricityFlowRef.current.group);
           electricityFlowRef.current.dispose();
           electricityFlowRef.current = null;
+        }
+        if (birdsRef.current) {
+          birdsRef.current.dispose();
+          birdsRef.current = null;
         }
         disposeTexturedGround();
         if (rainRef.current) {
@@ -821,6 +835,9 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       }
       if (texturedGroundRef.current?.mesh) {
         texturedGroundRef.current.mesh.visible = layerVisibility?.ground !== false;
+      }
+      if (birdsRef.current) {
+        birdsRef.current.setVisible(layerVisibility?.birds !== false);
       }
       requestShadowUpdate();
     }, [layerVisibility, isInitialized]);
@@ -1953,6 +1970,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
 
       let lastRainTime: number | null = null;
       let lastFlowTime: number | null = null;
+      let lastBirdsTime: number | null = null;
       let lastFlowIntensityCheck = 0;
       let lastAppliedSunState: { azimuthDeg: number; elevationDeg: number; weatherPreset: string } | null = null;
 
@@ -2050,6 +2068,17 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           }
         }
         lastFlowTime = now;
+
+        // Advance natural flying bird animation in sky when layer is visible
+        if (birdsRef.current) {
+          const isBirdsActive = layerVisibilityRef.current?.birds !== false;
+          if (isBirdsActive) {
+            const dt = lastBirdsTime === null ? 0.016 : Math.min(Math.max((now - lastBirdsTime) / 1000, 0.001), 0.1);
+            const roofZ = localCoordsRef.current ? localCoordsRef.current.height : 12;
+            birdsRef.current.update(dt, roofZ);
+          }
+        }
+        lastBirdsTime = now;
 
         rendererRef.current?.render(sceneRef.current!, cameraRef.current!);
       };

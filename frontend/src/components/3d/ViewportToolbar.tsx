@@ -47,6 +47,7 @@ export interface LayerVisibility {
   trees: boolean;
   ground: boolean;
   electricityFlow?: boolean;
+  birds?: boolean;
 }
 
 interface ViewportToolbarProps {
@@ -390,6 +391,14 @@ export function ViewportToolbar({
               onChange={() => onToggleLayer("electricityFlow")}
             />
             <span>Electricity Flow</span>
+          </label>
+          <label className="viewport-layers-menu__item">
+            <input
+              type="checkbox"
+              checked={layerVisibility.birds ?? true}
+              onChange={() => onToggleLayer("birds")}
+            />
+            <span>Birds in sky</span>
           </label>
         </div>
       )}
