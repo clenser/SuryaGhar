@@ -186,6 +186,17 @@ describe("ValidatePanel surface assessment", () => {
     expect(onBackToModel).toHaveBeenCalledTimes(1);
   });
 
+  it("provides Proceed without analysis to advance directly to the next step", async () => {
+    const onContinue = vi.fn();
+    renderPanel({ kind: "idle" }, { onContinue });
+
+    const bypassBtn = screen.getByRole("button", { name: "Proceed without analysis" });
+    expect(bypassBtn).toBeInTheDocument();
+
+    await userEvent.click(bypassBtn);
+    expect(onContinue).toHaveBeenCalledTimes(1);
+  });
+
   it("renders long assessment results with visual preview and static footer actions that do not obscure content", () => {
     const bodyWithImages = {
       ...resultBody(),

@@ -3960,6 +3960,8 @@
   margin-top: var(--space-1);
   accent-color: var(--color-primary);
   min-height: 24px;
+  cursor: pointer;
+  touch-action: manipulation;
 }
 
 /* ---------- Viewport Toolbar (M3.5) ----------

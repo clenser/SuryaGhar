@@ -218,8 +218,7 @@ describe("Cable Specification Advisor Engine", () => {
       expect(dcString!.missingInputs).toBeDefined();
       expect(dcString!.missingInputs!.length).toBeGreaterThan(0);
 
-      expect(report.disclaimer).toContain("Preliminary planning aid only");
-      expect(report.disclaimer).toContain("IS 732");
+      expect(report.disclaimer).toBe("");
     });
 
     it("calculates exact circuit sizing with placed panels and 3D topology routes", () => {

@@ -919,7 +919,85 @@ export function buildElectricalTopology(params: {
     }
   }
 
-  // Level 3: Consolidated DC Collection
+  // Level 3: Consolidated DC Collection with Periodic Subarray Hubs
+  // In real-world commercial & residential arrays, strings feed into periodic local combiner/subarray hubs,
+  // which then aggregate along the DC cable trays toward the central DC junction and inverter.
+  // When there are multiple string combiners (> 2), group nearby combiners into periodic hubs.
+  interface PeriodicHub {
+    id: string;
+    position: THREE.Vector3;
+    combinerIndices: number[];
+  }
+
+  const periodicHubs: PeriodicHub[] = [];
+
+  if (stringCombiners.length > 2) {
+    // Cluster string combiners into periodic hubs (approx 2 to 3 combiners per periodic hub)
+    const targetHubCount = Math.max(2, Math.ceil(stringCombiners.length / 3));
+    const assigned = new Set<number>();
+
+    for (let h = 0; h < targetHubCount; h++) {
+      // Find unassigned combiner furthest from existing hubs, or first unassigned
+      let seedIdx = -1;
+      for (let i = 0; i < stringCombiners.length; i++) {
+        if (!assigned.has(i)) {
+          seedIdx = i;
+          break;
+        }
+      }
+      if (seedIdx === -1) break;
+
+      const clusterMembers = [seedIdx];
+      assigned.add(seedIdx);
+
+      // Find nearest unassigned combiners to cluster with this seed
+      const maxMembers = Math.ceil(stringCombiners.length / targetHubCount);
+      while (clusterMembers.length < maxMembers) {
+        let nearestDist = Number.POSITIVE_INFINITY;
+        let nearestIdx = -1;
+        for (let i = 0; i < stringCombiners.length; i++) {
+          if (assigned.has(i)) continue;
+          for (const m of clusterMembers) {
+            const d = Math.hypot(
+              stringCombiners[i].x - stringCombiners[m].x,
+              stringCombiners[i].y - stringCombiners[m].y,
+            );
+            if (d < nearestDist) {
+              nearestDist = d;
+              nearestIdx = i;
+            }
+          }
+        }
+        if (nearestIdx !== -1) {
+          clusterMembers.push(nearestIdx);
+          assigned.add(nearestIdx);
+        } else {
+          break;
+        }
+      }
+
+      // Compute hub location safely inside usable roof
+      let sumX = 0;
+      let sumY = 0;
+      for (const idx of clusterMembers) {
+        sumX += stringCombiners[idx].x;
+        sumY += stringCombiners[idx].y;
+      }
+      const rawHub2D: Point2 = { x: sumX / clusterMembers.length, y: sumY / clusterMembers.length };
+      const safeHub2D = clampPointToInterior(rawHub2D, usableRing, 0.2);
+      const hubPos = new THREE.Vector3(safeHub2D.x, safeHub2D.y, roofZ + 0.04);
+
+      periodicHubs.push({
+        id: `hub-${h + 1}`,
+        position: hubPos,
+        combinerIndices: clusterMembers,
+      });
+
+      // Register the periodic hub box in combinerPositions so it is rendered in 3D
+      combinerPositions.push(hubPos);
+    }
+  }
+
   // Locate a central, reachable DC collection junction strictly inside usableRing.
   // Avoids centroid averaging across separate wings which would land in the open courtyard.
   let bestJunction2D: Point2 = stringCombiners.length > 0
@@ -929,6 +1007,7 @@ export function buildElectricalTopology(params: {
   if (stringCombiners.length > 1) {
     const junctionCandidates: Point2[] = [
       ...stringCombiners.map((c) => ({ x: c.x, y: c.y })),
+      ...periodicHubs.map((h) => ({ x: h.position.x, y: h.position.y })),
       { x: endpointPosition.x, y: endpointPosition.y },
     ];
     for (let i = 0; i < usableRing.length; i++) {
@@ -964,32 +1043,93 @@ export function buildElectricalTopology(params: {
   const safeJunction2D = clampPointToInterior(bestJunction2D, usableRing, 0.2);
   const mainJunction = new THREE.Vector3(safeJunction2D.x, safeJunction2D.y, roofZ + 0.04);
 
-  // Route string combiners to the main collection junction
-  for (let i = 0; i < stringCombiners.length; i++) {
-    const cPos = stringCombiners[i];
-    const stringInt = stringIntensities[i] ?? 0.5;
+  // Route string combiners either through periodic subarray hubs or directly to main junction
+  if (periodicHubs.length > 0) {
+    // 1. Route each string combiner to its periodic subarray hub
+    for (const hub of periodicHubs) {
+      let hubAvgIntensity = 0;
+      for (const cIdx of hub.combinerIndices) {
+        const cPos = stringCombiners[cIdx];
+        const stringInt = stringIntensities[cIdx] ?? 0.5;
+        hubAvgIntensity += stringInt;
 
-    const path2D = routeInteriorPath(
-      { x: cPos.x, y: cPos.y },
-      { x: mainJunction.x, y: mainJunction.y },
-      usableRing,
-      obstacles,
-    );
+        const path2D = routeInteriorPath(
+          { x: cPos.x, y: cPos.y },
+          { x: hub.position.x, y: hub.position.y },
+          usableRing,
+          obstacles,
+        );
 
-    if (path2D.length >= 2) {
-      const trunkPoints: THREE.Vector3[] = path2D.map(
-        (pt) => new THREE.Vector3(pt.x, pt.y, roofZ + 0.04),
+        if (path2D.length >= 2) {
+          const trunkPoints: THREE.Vector3[] = path2D.map(
+            (pt) => new THREE.Vector3(pt.x, pt.y, roofZ + 0.04),
+          );
+
+          const trunkDist = computeCumulativeDistances(trunkPoints);
+          routes.push({
+            id: `route-combiner-${cIdx + 1}-to-${hub.id}`,
+            type: "combiner-trunk",
+            points: trunkPoints,
+            cumulativeDistances: trunkDist.cumulative,
+            totalLength: trunkDist.total,
+            flowIntensity: stringInt,
+          });
+        }
+      }
+      hubAvgIntensity /= (hub.combinerIndices.length || 1);
+
+      // 2. Route each periodic subarray hub to the main DC collection junction
+      const hubToMainPath2D = routeInteriorPath(
+        { x: hub.position.x, y: hub.position.y },
+        { x: mainJunction.x, y: mainJunction.y },
+        usableRing,
+        obstacles,
       );
 
-      const trunkDist = computeCumulativeDistances(trunkPoints);
-      routes.push({
-        id: `route-combiner-${i + 1}`,
-        type: "combiner-trunk",
-        points: trunkPoints,
-        cumulativeDistances: trunkDist.cumulative,
-        totalLength: trunkDist.total,
-        flowIntensity: stringInt,
-      });
+      if (hubToMainPath2D.length >= 2) {
+        const hubTrunkPoints: THREE.Vector3[] = hubToMainPath2D.map(
+          (pt) => new THREE.Vector3(pt.x, pt.y, roofZ + 0.04),
+        );
+
+        const hubTrunkDist = computeCumulativeDistances(hubTrunkPoints);
+        routes.push({
+          id: `route-${hub.id}-to-main-junction`,
+          type: "combiner-trunk",
+          points: hubTrunkPoints,
+          cumulativeDistances: hubTrunkDist.cumulative,
+          totalLength: hubTrunkDist.total,
+          flowIntensity: hubAvgIntensity,
+        });
+      }
+    }
+  } else {
+    // Standard direct string combiner to main collection junction routing
+    for (let i = 0; i < stringCombiners.length; i++) {
+      const cPos = stringCombiners[i];
+      const stringInt = stringIntensities[i] ?? 0.5;
+
+      const path2D = routeInteriorPath(
+        { x: cPos.x, y: cPos.y },
+        { x: mainJunction.x, y: mainJunction.y },
+        usableRing,
+        obstacles,
+      );
+
+      if (path2D.length >= 2) {
+        const trunkPoints: THREE.Vector3[] = path2D.map(
+          (pt) => new THREE.Vector3(pt.x, pt.y, roofZ + 0.04),
+        );
+
+        const trunkDist = computeCumulativeDistances(trunkPoints);
+        routes.push({
+          id: `route-combiner-${i + 1}`,
+          type: "combiner-trunk",
+          points: trunkPoints,
+          cumulativeDistances: trunkDist.cumulative,
+          totalLength: trunkDist.total,
+          flowIntensity: stringInt,
+        });
+      }
     }
   }
 

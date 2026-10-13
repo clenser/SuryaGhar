@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft, Check, Play } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, Play } from "lucide-react";
 import { BACKEND_WAITING_LABEL } from "../../hooks/useBackendStatus";
 import {
   SEGMENTATION_MODELS,
@@ -162,6 +162,16 @@ export function ValidatePanel({
           <Play size={15} strokeWidth={2} aria-hidden="true" />
           {state.kind === "loading" ? "Analyzing site..." : state.kind === "ok" ? "Re-analyze" : "Proceed with analysis"}
         </button>
+        <button
+          type="button"
+          className="btn btn--secondary btn--block"
+          onClick={onContinue}
+          disabled={state.kind === "loading"}
+          title="Proceed directly to the next step without running surface analysis"
+        >
+          <ArrowRight size={15} strokeWidth={2} aria-hidden="true" />
+          Proceed without analysis
+        </button>
       </div>
 
       {showTimer && (
@@ -181,6 +191,14 @@ export function ValidatePanel({
               title={backendReady ? undefined : BACKEND_WAITING_LABEL}
             >
               Retry
+            </button>
+            <button
+              type="button"
+              className="btn btn--secondary"
+              onClick={onContinue}
+              title="Proceed directly to the next step without analysis"
+            >
+              Proceed without analysis
             </button>
             <button type="button" className="btn" onClick={onRedraw}>Back to selection</button>
           </div>

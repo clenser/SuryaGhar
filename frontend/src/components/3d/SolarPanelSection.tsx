@@ -155,11 +155,9 @@ function SliderNumberField({
     setLocalVal(val);
     if (rafRef.current !== null) {
       cancelAnimationFrame(rafRef.current);
-    }
-    rafRef.current = requestAnimationFrame(() => {
-      onChange(val);
       rafRef.current = null;
-    });
+    }
+    onChange(val);
   };
 
   const handleCommit = (val: number) => {
@@ -907,6 +905,26 @@ export function SolarPanelSection({
           step={0.05}
           unit="m"
           onChange={(value) => onConfigChange({ spacingM: value })}
+        />
+        <SliderNumberField
+          id="panel-row-spacing"
+          label="Vertical (row) spacing"
+          value={config.rowSpacingM ?? config.spacingM}
+          min={PANEL_SPACING_MIN_M}
+          max={PANEL_SPACING_MAX_M}
+          step={0.05}
+          unit="m"
+          onChange={(value) => onConfigChange({ rowSpacingM: value })}
+        />
+        <SliderNumberField
+          id="panel-col-spacing"
+          label="Horizontal (col) spacing"
+          value={config.colSpacingM ?? config.spacingM}
+          min={PANEL_SPACING_MIN_M}
+          max={PANEL_SPACING_MAX_M}
+          step={0.05}
+          unit="m"
+          onChange={(value) => onConfigChange({ colSpacingM: value })}
         />
       </div>
 

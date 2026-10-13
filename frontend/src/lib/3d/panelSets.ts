@@ -113,6 +113,8 @@ export interface PlacedPanelPeer {
   rotationDeg: number;
   width: number;
   length: number;
+  /** Optional table id if this peer belongs to a shared mounting table/set. */
+  tableId?: string;
 }
 
 /**
@@ -130,6 +132,7 @@ export function validatePanelPlacement(
   rotationDeg: number,
   config: PanelLayoutConfig,
   context: PlacementContext,
+  tableId?: string,
 ): PlacementValidation {
   if (!Number.isFinite(x) || !Number.isFinite(y)) {
     return { valid: false, error: "Panel position is not a valid number" };
@@ -203,7 +206,12 @@ export function validatePanelPlacement(
 
   // Panel-to-panel spacing.
   for (const peer of context.peers) {
+    // Skip self
     if (Math.abs(peer.x - x) < 1e-9 && Math.abs(peer.y - y) < 1e-9) continue;
+    // Panels within the same structured multi-panel mounting table / block share structured spacing
+    // and must not reject each other as collisions.
+    if (tableId && peer.tableId && tableId === peer.tableId) continue;
+
     const peerRect = rectangleCorners(peer.x, peer.y, peer.width, peer.length, peer.rotationDeg);
     if (footprintsOverlap(rect, peerRect)) {
       return { valid: false, error: "Panel overlaps another panel" };
@@ -365,6 +373,120 @@ export function rotateSetAboutCentroid(
   };
 }
 
+/**
+ * Rigidly update panel positions and rotation when azimuth changes.
+ *
+ * For structured multi-panel tables (e.g. 2x5 tables), rotating each panel
+ * in-place independently distorts the table frame and causes peer overlaps.
+ * Instead, this helper identifies each table's center and rotates the table
+ * rigidly around its center to the target panel rotation.
+ * For standalone / single panels, the panel rotates around its own center.
+ */
+export function rotatePanelsForAzimuth(
+  panels: PlacedSetPanel[],
+  config: PanelLayoutConfig,
+  targetRotationDeg: number,
+): PlacedSetPanel[] {
+  if (panels.length === 0) return [];
+  const dims = effectivePanelDims(config);
+  const stepU = dims.widthM + effectiveColSpacingM(config);
+  const stepV = dims.lengthM + effectiveRowSpacingM(config);
+
+  const radNew = (targetRotationDeg * Math.PI) / 180;
+  const cosNew = Math.cos(radNew);
+  const sinNew = Math.sin(radNew);
+  const uxNew = cosNew;
+  const uyNew = sinNew;
+  const vxNew = -sinNew;
+  const vyNew = cosNew;
+
+  // Group by tableId
+  const byTable = new Map<string, PlacedSetPanel[]>();
+  const standalone: PlacedSetPanel[] = [];
+
+  for (const p of panels) {
+    const tRows = p.tableRows ?? config.setRows;
+    const tCols = p.tableCols ?? config.setCols;
+    if (p.tableId && (tRows > 1 || tCols > 1)) {
+      const list = byTable.get(p.tableId);
+      if (list) list.push(p);
+      else byTable.set(p.tableId, [p]);
+    } else {
+      standalone.push(p);
+    }
+  }
+
+  const result: PlacedSetPanel[] = [];
+
+  // 1. Process multi-panel tables
+  for (const [tableId, members] of byTable.entries()) {
+    const first = members[0];
+    const tRows = first.tableRows ?? config.setRows;
+    const tCols = first.tableCols ?? config.setCols;
+    const oldRotRad = (first.rotationDeg * Math.PI) / 180;
+    const oldCos = Math.cos(oldRotRad);
+    const oldSin = Math.sin(oldRotRad);
+
+    // Compute table center
+    let sumCx = 0;
+    let sumCy = 0;
+    for (const m of members) {
+      if (
+        m.tableRow !== undefined &&
+        m.tableCol !== undefined &&
+        m.tableRows !== undefined &&
+        m.tableCols !== undefined
+      ) {
+        const du = (m.tableCol - (m.tableCols - 1) / 2) * stepU;
+        const dv = (m.tableRow - (m.tableRows - 1) / 2) * stepV;
+        sumCx += m.x - (du * oldCos - dv * oldSin);
+        sumCy += m.y - (du * oldSin + dv * oldCos);
+      } else {
+        sumCx += m.x;
+        sumCy += m.y;
+      }
+    }
+    const centerX = sumCx / members.length;
+    const centerY = sumCy / members.length;
+
+    // Rigidly place each panel around table center at target rotation
+    for (const m of members) {
+      if (
+        m.tableRow !== undefined &&
+        m.tableCol !== undefined &&
+        m.tableRows !== undefined &&
+        m.tableCols !== undefined
+      ) {
+        const du = (m.tableCol - (m.tableCols - 1) / 2) * stepU;
+        const dv = (m.tableRow - (m.tableRows - 1) / 2) * stepV;
+        result.push({
+          ...m,
+          x: centerX + du * uxNew + dv * vxNew,
+          y: centerY + du * uyNew + dv * vyNew,
+          rotationDeg: targetRotationDeg,
+        });
+      } else {
+        result.push({
+          ...m,
+          rotationDeg: targetRotationDeg,
+        });
+      }
+    }
+  }
+
+  // 2. Standalone panels rotate in-place around own center
+  for (const s of standalone) {
+    result.push({
+      ...s,
+      rotationDeg: targetRotationDeg,
+    });
+  }
+
+  // Re-sort to preserve original indexing
+  result.sort((a, b) => a.index - b.index);
+  return result;
+}
+
 /** Reindex a set's panels into 0..n-1 after a deletion or insertion. */
 export function reindexSet(panels: PlacedSetPanel[]): PlacedSetPanel[] {
   return panels.map((p, i) => ({ ...p, index: i }));
@@ -410,14 +532,28 @@ export function findInvalidPanels(
   const invalid: Array<{ panel: PlacedSetPanel; error: string }> = [];
   const dims = effectivePanelDims(set.config);
   for (const panel of set.panels) {
-    // Every OTHER panel of this set, with resolved dimensions.
+    // Every OTHER panel of this set, with resolved dimensions and tableId.
     const peers: PlacedPanelPeer[] = set.panels
       .filter((p) => p.index !== panel.index)
-      .map((p) => ({ x: p.x, y: p.y, rotationDeg: p.rotationDeg, width: dims.widthM, length: dims.lengthM }));
-    const result = validatePanelPlacement(panel.x, panel.y, panel.rotationDeg, set.config, {
-      ...context,
-      peers,
-    });
+      .map((p) => ({
+        x: p.x,
+        y: p.y,
+        rotationDeg: p.rotationDeg,
+        width: dims.widthM,
+        length: dims.lengthM,
+        tableId: p.tableId,
+      }));
+    const result = validatePanelPlacement(
+      panel.x,
+      panel.y,
+      panel.rotationDeg,
+      set.config,
+      {
+        ...context,
+        peers,
+      },
+      panel.tableId,
+    );
     if (!result.valid) invalid.push({ panel, error: result.error ?? "Invalid panel" });
   }
   return invalid;

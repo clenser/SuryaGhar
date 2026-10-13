@@ -12,7 +12,7 @@
  */
 
 import { useState } from "react";
-import { AlertTriangle, ChevronDown, ChevronUp, Info, ShieldAlert } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronUp, Info } from "lucide-react";
 import type { CableSpecificationReport } from "../../lib/3d/cableAdvisor";
 
 export interface CableAdvisorSectionProps {
@@ -175,12 +175,6 @@ export function CableAdvisorSection({ report, hasPlacedPanels }: CableAdvisorSec
             </div>
           );
         })}
-      </div>
-
-      {/* Engineering Disclaimer */}
-      <div className="cable-advisor__disclaimer" role="note">
-        <ShieldAlert size={14} aria-hidden="true" />
-        <p>{report.disclaimer}</p>
       </div>
     </div>
   );

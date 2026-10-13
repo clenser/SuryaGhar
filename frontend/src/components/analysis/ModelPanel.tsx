@@ -84,6 +84,7 @@ import {
   findInvalidPanels,
   maxSetGrid,
   reindexSet,
+  rotatePanelsForAzimuth,
   totalCapacityKw as totalSetsCapacityKw,
   validatePanelPlacement,
   validateSetPlacement,
@@ -1009,18 +1010,12 @@ export function ModelPanel({
         };
         if (!valid) return updated;
 
-        // When azimuthDeg changes: rotate each placed panel around its OWN center
-        // in-place (x, y remain fixed; rotationDeg updates) without rotating around collective centroid,
-        // without translating panels, and without triggering repacking/auto-place.
+        // When azimuthDeg changes: rotate each placed panel / multi-panel table rigidly
+        // around its table anchor / center without rotating around collective set centroid,
+        // without translating panels arbitrarily, and without triggering repacking/auto-place.
         if (rest.azimuthDeg !== undefined && updated.panels.length > 0) {
           const rotation = panelRotationForAzimuth(nextConfig.azimuthDeg);
-          const rotatedPanels = updated.panels.map((p, i) => ({
-            ...p,
-            index: i,
-            x: p.x,
-            y: p.y,
-            rotationDeg: rotation,
-          }));
+          const rotatedPanels = rotatePanelsForAzimuth(updated.panels, nextConfig, rotation);
 
           const candidateSet: PanelSet = {
             ...updated,
@@ -1722,8 +1717,8 @@ export function ModelPanel({
           previewValid={isReadOnlyViewport ? true : drawing ? drawnValid : draftResult.valid}
 
           onObstacleSelect={isReadOnlyViewport ? undefined : handleObstacleSelect}
-          obstacleDragEnabled={!isReadOnlyViewport && (obstacleMode === "editing" || activeTool === "move")}
-          treeDragEnabled={!isReadOnlyViewport && (treeMode === "editing" || activeTool === "move")}
+          obstacleDragEnabled={!isReadOnlyViewport && activeTool === "move"}
+          treeDragEnabled={!isReadOnlyViewport && activeTool === "move"}
           onObstacleDragMove={isReadOnlyViewport ? undefined : handleObstacleDragMove}
           onObstacleDragEnd={isReadOnlyViewport ? undefined : handleObstacleDragEnd}
           onTreeDragMove={isReadOnlyViewport ? undefined : handleTreeDragMove}

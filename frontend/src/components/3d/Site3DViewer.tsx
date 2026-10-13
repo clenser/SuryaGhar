@@ -1663,6 +1663,8 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       // phase, so disabling the controls here wins before it reads the event.
       const handleDown = (event: PointerEvent) => {
         if (event.button !== 0 || event.ctrlKey || event.metaKey) return;
+        // Objects can be moved ONLY when the Move tool is active in the collapsing viewport menu
+        if (activeToolRef.current !== "move") return;
         if (!obstacleDragEnabledRef.current && !treeDragEnabledRef.current) return;
         if (manualPanelPreviewRef.current) return;
         if (previewActiveRef.current || onRoofFinishRef.current) return;

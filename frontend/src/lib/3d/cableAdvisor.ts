@@ -568,7 +568,6 @@ export function computeCableRecommendations(params: {
     panelsPerStringTypical: typicalStringPanels,
     inverterCapacityKw,
     circuits,
-    disclaimer:
-      "Preliminary planning aid only. Not an electrical compliance or safety certification. Final cable sizing, protective device coordination (MCBs/MCCBs/fuses/SPDs), and containment must be engineered and verified by a qualified electrical engineer in accordance with applicable Indian Standards (IS 732, IS/IEC 60364, IS 17293), Central Electricity Authority (CEA) Regulations, and local DISCOM interconnection rules.",
+    disclaimer: "",
   };
 }
