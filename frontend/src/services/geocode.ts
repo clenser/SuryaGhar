@@ -13,7 +13,6 @@ const cache = new Map<string, { at: number; results: LocationResult[] }>();
 const CACHE_LIMIT = 50;
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
-const GOOGLE_GEOCODE_ENDPOINT = "https://maps.googleapis.com/maps/api/geocode/json";
 const SKIP_NAME_TYPES = new Set(["plus_code", "postal_code", "postal_code_prefix", "street_number", "country"]);
 const LOCALITY_TYPES = [
   "sublocality_level_1",
@@ -24,11 +23,6 @@ const LOCALITY_TYPES = [
   "administrative_area_level_3",
   "administrative_area_level_2",
 ];
-
-function getFrontendGoogleGeocodingKey(): string {
-  const env = import.meta.env as Record<string, string | undefined>;
-  return (env.VITE_GOOGLE_GEOCODING_API_KEY ?? env.GOOGLE_GEOCODING_API_KEY ?? "").trim();
-}
 
 export function parseGoogleGeocodeResults(payload: unknown, limit = 6): LocationResult[] | null {
   if (!payload || typeof payload !== "object") return null;
@@ -117,31 +111,7 @@ export function parseGoogleGeocodeResults(payload: unknown, limit = 6): Location
   return parsed;
 }
 
-async function tryDirectGoogleGeocode(query: string, signal?: AbortSignal): Promise<LocationResult[] | null> {
-  const apiKey = getFrontendGoogleGeocodingKey();
-  if (!apiKey) return null;
-  const params = new URLSearchParams({
-    address: query,
-    region: "in",
-    components: "country:IN",
-    language: "en",
-    key: apiKey,
-  });
-  try {
-    const response = await fetch(`${GOOGLE_GEOCODE_ENDPOINT}?${params.toString()}`, {
-      signal,
-      referrerPolicy: "no-referrer",
-    });
-    if (!response.ok) return null;
-    const payload = await response.json();
-    return parseGoogleGeocodeResults(payload);
-  } catch (err) {
-    if (signal?.aborted) throw err;
-    return null;
-  }
-}
-
-/** Calls the backend geocoder, with direct Google Geocoding fallback when configured. */
+/** Calls the backend geocoder proxy. The browser never contacts the upstream provider directly or exposes the geocoding key (AGENTS.md §43). */
 export async function searchLocations(query: string, signal?: AbortSignal): Promise<LocationResult[]> {
   const key = query.trim().toLowerCase();
   const cached = cache.get(key);
@@ -164,12 +134,6 @@ export async function searchLocations(query: string, signal?: AbortSignal): Prom
     });
   } catch (err) {
     if (signal?.aborted) throw err;
-    const fallbackResults = await tryDirectGoogleGeocode(query, combined);
-    if (fallbackResults !== null) {
-      if (cache.size >= CACHE_LIMIT) cache.delete(cache.keys().next().value as string);
-      cache.set(key, { at: Date.now(), results: fallbackResults });
-      return fallbackResults;
-    }
     if (timeoutController.signal.aborted) throw new GeocodeError("Search timed out", "timeout");
     throw new GeocodeError("Search is unreachable. Check your connection.", "network");
   } finally {
@@ -181,22 +145,10 @@ export async function searchLocations(query: string, signal?: AbortSignal): Prom
     throw new GeocodeError("Enter a place name to search", "validation");
   }
   if (response.status === 429) {
-    const fallbackResults = await tryDirectGoogleGeocode(query, signal);
-    if (fallbackResults !== null) {
-      if (cache.size >= CACHE_LIMIT) cache.delete(cache.keys().next().value as string);
-      cache.set(key, { at: Date.now(), results: fallbackResults });
-      return fallbackResults;
-    }
     console.error(`[API] /geocode 429`, await response.json().catch(() => null));
     throw new GeocodeError("Location search is temporarily unavailable.", "server");
   }
   if (response.status >= 500) {
-    const fallbackResults = await tryDirectGoogleGeocode(query, signal);
-    if (fallbackResults !== null) {
-      if (cache.size >= CACHE_LIMIT) cache.delete(cache.keys().next().value as string);
-      cache.set(key, { at: Date.now(), results: fallbackResults });
-      return fallbackResults;
-    }
     console.error(`[API] /geocode HTTP ${response.status}`, await response.json().catch(() => null));
     throw new GeocodeError("Location search is temporarily unavailable.", "server");
   }
