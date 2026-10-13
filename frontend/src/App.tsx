@@ -254,7 +254,7 @@ export default function App() {
         />
         )}
 
-        <div className={`stage-panel${panelCollapsed && !inDesignWorkspace ? " is-collapsed" : ""}`} data-sheet={sheetCtl.sheet}>
+        <div className={`stage-panel-wrapper${panelCollapsed && !inDesignWorkspace ? " is-collapsed" : ""}`}>
           {!inDesignWorkspace && (
             <button
               type="button"
@@ -271,6 +271,8 @@ export default function App() {
               />
             </button>
           )}
+
+          <div className="stage-panel" data-sheet={sheetCtl.sheet}>
           <SheetBar
             sheet={sheetCtl.sheet}
             stageLabel={
@@ -421,6 +423,7 @@ export default function App() {
           )}
           </div>
         </div>
+      </div>
 
         {showBanner && (
           <div className="map-banner" role="status">
