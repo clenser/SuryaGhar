@@ -310,10 +310,12 @@ export function createPanelUnitGeometry(
   legRows = 2,
   legCols = 2,
   withoutLegs = false,
+  config?: PanelLayoutConfig,
 ): THREE.BufferGeometry {
   const type = panelTypeDefinition(panelTypeId);
-  const w = type.widthM;
-  const l = type.lengthM;
+  const dims = config ? effectivePanelDims(config) : { widthM: type.widthM, lengthM: type.lengthM };
+  const w = dims.widthM;
+  const l = dims.lengthM;
   const t = type.thicknessM;
   const tilt = ((tiltDeg * Math.PI) / 180);
   const mountHeight = Number.isFinite(mountHeightM) && mountHeightM > 0
@@ -456,15 +458,15 @@ export function createPanelUnitGeometry(
         panelTypeId,
         mounting,
         tiltDeg,
-        azimuthDeg: 180,
+        azimuthDeg: config?.azimuthDeg ?? 180,
         spacingM: 0.05,
         rowSpacingM: null,
         colSpacingM: null,
-        setbackM: 1.0,
+        setbackM: config?.setbackM ?? 1.0,
         mountHeightM,
-        orientation: "portrait",
-        customWidthM: null,
-        customLengthM: null,
+        orientation: config?.orientation ?? "portrait",
+        customWidthM: config?.customWidthM ?? null,
+        customLengthM: config?.customLengthM ?? null,
         setRows: 1,
         setCols: 1,
         legRows: 2,
@@ -1897,6 +1899,7 @@ export function createPanelGroup(
       legRows,
       legCols,
       withoutLegs,
+      options?.config,
     );
     const material = new THREE.MeshStandardMaterial({
       vertexColors: true,

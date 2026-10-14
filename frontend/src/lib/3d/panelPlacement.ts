@@ -576,11 +576,29 @@ function computePlacePanels(request: PlacementRequest): PlacementResult {
         }
       }
     }
+    const isMultiPanelTable = rows > 1 || cols > 1;
+    const tableId = isMultiPanelTable
+      ? `auto-table-${bu.toFixed(2)}-${bv.toFixed(2)}-${rotation.toFixed(1)}-${rows}x${cols}`
+      : undefined;
     return rects.map((_, i) => {
       const r = Math.floor(i / cols);
       const c = i % cols;
       const centre = toWorld(bu + c * stepU, bv + r * stepV);
-      return { index: -1, x: centre.x, y: centre.y, rotationDeg: rotation };
+      return {
+        index: -1,
+        x: centre.x,
+        y: centre.y,
+        rotationDeg: rotation,
+        ...(isMultiPanelTable
+          ? {
+              tableId,
+              tableRow: r,
+              tableCol: c,
+              tableRows: rows,
+              tableCols: cols,
+            }
+          : {}),
+      };
     });
   }
 

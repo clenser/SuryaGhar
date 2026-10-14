@@ -83,6 +83,7 @@ import {
   defaultPanelSet,
   findInvalidPanels,
   maxSetGrid,
+  realignPanelsForConfig,
   reindexSet,
   rotatePanelsForAzimuth,
   totalCapacityKw as totalSetsCapacityKw,
@@ -1151,12 +1152,26 @@ export function ModelPanel({
         };
         if (!valid) return updated;
 
+        let currentPanels = updated.panels;
+        if (
+          (rest.panelTypeId !== undefined ||
+            rest.spacingM !== undefined ||
+            rest.rowSpacingM !== undefined ||
+            rest.colSpacingM !== undefined ||
+            rest.orientation !== undefined ||
+            rest.customWidthM !== undefined ||
+            rest.customLengthM !== undefined) &&
+          currentPanels.length > 0
+        ) {
+          currentPanels = realignPanelsForConfig(currentPanels, set.config, nextConfig);
+        }
+
         // When azimuthDeg changes: rotate each placed panel / multi-panel table rigidly
         // around its table anchor / center without rotating around collective set centroid,
         // without translating panels arbitrarily, and without triggering repacking/auto-place.
-        if (rest.azimuthDeg !== undefined && updated.panels.length > 0) {
+        if (rest.azimuthDeg !== undefined && currentPanels.length > 0) {
           const rotation = panelRotationForAzimuth(nextConfig.azimuthDeg);
-          const rotatedPanels = rotatePanelsForAzimuth(updated.panels, nextConfig, rotation);
+          const rotatedPanels = rotatePanelsForAzimuth(currentPanels, nextConfig, rotation);
 
           const candidateSet: PanelSet = {
             ...updated,
@@ -1190,8 +1205,8 @@ export function ModelPanel({
           return { ...updated, panels: rotatedPanels };
         }
 
-        if (set.mode !== "auto" || set.userModified || set.panels.length === 0) {
-          return updated;
+        if (set.mode !== "auto" || set.userModified || currentPanels.length === 0) {
+          return { ...updated, panels: currentPanels };
         }
         const result = placePanels({ terrace: usableRing, obstacles, config: nextConfig });
         setTargetPlacementStatus(result.targetStatus ?? null);

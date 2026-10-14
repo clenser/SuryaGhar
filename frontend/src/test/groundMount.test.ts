@@ -19,6 +19,7 @@ import {
   createGroundPoleMountGeometry,
   createPanelUnitGeometry,
 } from "../lib/3d/panelMeshes";
+import { setBlockPanels, realignPanelsForConfig, type PlacedSetPanel } from "../lib/3d/panelSets";
 import type { LngLat } from "../lib/geo";
 
 describe("Ground-Mounted Solar Installation", () => {
@@ -291,4 +292,71 @@ describe("Ground-Mounted Solar Installation", () => {
       }
     });
   });
+
+  describe("Mounting Structure Alignment on Wattage & Spacing Adjustments", () => {
+    it("realigns panel positions around table center when changing wattage / panel type", () => {
+      const cfg450: PanelLayoutConfig = {
+        ...DEFAULT_GROUND_PANEL_CONFIG,
+        panelTypeId: "panel-450w",
+        setRows: 2,
+        setCols: 4,
+        rowSpacingM: 1.5,
+        colSpacingM: 0.1,
+      };
+      const rawPanels = setBlockPanels(cfg450, 10, 20, 0);
+      const panels450: PlacedSetPanel[] = rawPanels.map((p, idx) => ({ ...p, index: idx }));
+
+      const cfg550: PanelLayoutConfig = {
+        ...cfg450,
+        panelTypeId: "panel-550w",
+      };
+
+      const realigned = realignPanelsForConfig(panels450, cfg450, cfg550);
+      expect(realigned.length).toBe(panels450.length);
+
+      // Table center must stay at (10, 20)
+      const avgX = realigned.reduce((sum, p) => sum + p.x, 0) / realigned.length;
+      const avgY = realigned.reduce((sum, p) => sum + p.y, 0) / realigned.length;
+      expect(Math.abs(avgX - 10)).toBeLessThan(1e-4);
+      expect(Math.abs(avgY - 20)).toBeLessThan(1e-4);
+
+      // With 550W (2.28m length vs 1.72m), row pitch is larger so outer rows are further apart
+      const origSpanY = Math.max(...panels450.map((p) => p.y)) - Math.min(...panels450.map((p) => p.y));
+      const newSpanY = Math.max(...realigned.map((p) => p.y)) - Math.min(...realigned.map((p) => p.y));
+      expect(newSpanY).toBeGreaterThan(origSpanY);
+    });
+
+    it("realigns panel positions when adjusting row or column spacing", () => {
+      const cfgInitial: PanelLayoutConfig = {
+        ...DEFAULT_GROUND_PANEL_CONFIG,
+        panelTypeId: "panel-550w",
+        setRows: 2,
+        setCols: 4,
+        rowSpacingM: 1.0,
+        colSpacingM: 0.05,
+      };
+      const rawPanels = setBlockPanels(cfgInitial, 0, 0, 0);
+      const panels: PlacedSetPanel[] = rawPanels.map((p, idx) => ({ ...p, index: idx }));
+
+      const cfgExpanded: PanelLayoutConfig = {
+        ...cfgInitial,
+        rowSpacingM: 2.0,
+        colSpacingM: 0.20,
+      };
+
+      const realigned = realignPanelsForConfig(panels, cfgInitial, cfgExpanded);
+      expect(realigned.length).toBe(panels.length);
+
+      // Table center stays at (0, 0)
+      const avgX = realigned.reduce((sum, p) => sum + p.x, 0) / realigned.length;
+      const avgY = realigned.reduce((sum, p) => sum + p.y, 0) / realigned.length;
+      expect(Math.abs(avgX)).toBeLessThan(1e-4);
+      expect(Math.abs(avgY)).toBeLessThan(1e-4);
+
+      const origSpanX = Math.max(...panels.map((p) => p.x)) - Math.min(...panels.map((p) => p.x));
+      const newSpanX = Math.max(...realigned.map((p) => p.x)) - Math.min(...realigned.map((p) => p.x));
+      expect(newSpanX).toBeGreaterThan(origSpanX);
+    });
+  });
 });
+

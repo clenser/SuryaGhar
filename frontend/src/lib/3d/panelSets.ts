@@ -697,3 +697,156 @@ export function maxSetGrid(
     maxCols: fit(usableW - 2 * setback, dims.widthM, colSpacing),
   };
 }
+
+/**
+ * Realign placed panel coordinates when panel dimensions or spacings change.
+ *
+ * For multi-panel tables (shared mounting structures), keeps the table's
+ * physical anchor/center stationary in the world and recalculates each panel's
+ * offset using the new panel dimensions (width/length/orientation) and new
+ * column/row spacings. This guarantees that panel unit meshes and shared
+ * mounting frames (purlins, rafters, torque tubes, legs) stay mathematically
+ * aligned without floating, detaching, or protruding through modules.
+ */
+export function realignPanelsForConfig(
+  panels: PlacedSetPanel[],
+  oldConfig: PanelLayoutConfig,
+  newConfig: PanelLayoutConfig,
+): PlacedSetPanel[] {
+  if (panels.length === 0) return panels;
+
+  const oldDims = effectivePanelDims(oldConfig);
+  const oldStepU = oldDims.widthM + effectiveColSpacingM(oldConfig);
+  const oldStepV = oldDims.lengthM + effectiveRowSpacingM(oldConfig);
+
+  const newDims = effectivePanelDims(newConfig);
+  const newStepU = newDims.widthM + effectiveColSpacingM(newConfig);
+  const newStepV = newDims.lengthM + effectiveRowSpacingM(newConfig);
+
+  if (
+    Math.abs(oldStepU - newStepU) < 1e-4 &&
+    Math.abs(oldStepV - newStepV) < 1e-4 &&
+    Math.abs(oldDims.widthM - newDims.widthM) < 1e-4 &&
+    Math.abs(oldDims.lengthM - newDims.lengthM) < 1e-4
+  ) {
+    return panels;
+  }
+
+  const hasTableIds = panels.some((p) => Boolean(p.tableId));
+
+  if (!hasTableIds && (oldConfig.setRows > 1 || oldConfig.setCols > 1)) {
+    const blockSize = oldConfig.setRows * oldConfig.setCols;
+    if (panels.length === blockSize) {
+      const rotDeg = panels[0].rotationDeg;
+      const rad = (rotDeg * Math.PI) / 180;
+      const cos = Math.cos(rad);
+      const sin = Math.sin(rad);
+      const ux = cos;
+      const uy = sin;
+      const vx = -sin;
+      const vy = cos;
+
+      let sumX = 0;
+      let sumY = 0;
+      for (const p of panels) {
+        sumX += p.x;
+        sumY += p.y;
+      }
+      const centreX = sumX / panels.length;
+      const centreY = sumY / panels.length;
+
+      return panels.map((p, i) => {
+        const r = Math.floor(i / oldConfig.setCols);
+        const c = i % oldConfig.setCols;
+        const newDu = (c - (oldConfig.setCols - 1) / 2) * newStepU;
+        const newDv = (r - (oldConfig.setRows - 1) / 2) * newStepV;
+        return {
+          ...p,
+          x: centreX + newDu * ux + newDv * vx,
+          y: centreY + newDu * uy + newDv * vy,
+          tableRow: r,
+          tableCol: c,
+          tableRows: oldConfig.setRows,
+          tableCols: oldConfig.setCols,
+        };
+      });
+    }
+  }
+
+  const byTable = new Map<string, PlacedSetPanel[]>();
+  const standalone: PlacedSetPanel[] = [];
+
+  for (const p of panels) {
+    const tRows = p.tableRows ?? oldConfig.setRows;
+    const tCols = p.tableCols ?? oldConfig.setCols;
+    if (p.tableId && (tRows > 1 || tCols > 1)) {
+      const list = byTable.get(p.tableId);
+      if (list) list.push(p);
+      else byTable.set(p.tableId, [p]);
+    } else {
+      standalone.push(p);
+    }
+  }
+
+  const realignedMap = new Map<number, PlacedSetPanel>();
+  for (const p of standalone) {
+    realignedMap.set(p.index, { ...p });
+  }
+
+  for (const [, members] of byTable.entries()) {
+    if (members.length === 0) continue;
+    const first = members[0];
+    const rotDeg = first.rotationDeg;
+    const rad = (rotDeg * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    const ux = cos;
+    const uy = sin;
+    const vx = -sin;
+    const vy = cos;
+
+    let sumCx = 0;
+    let sumCy = 0;
+    let count = 0;
+
+    for (const m of members) {
+      if (
+        m.tableRow !== undefined &&
+        m.tableCol !== undefined &&
+        m.tableRows !== undefined &&
+        m.tableCols !== undefined
+      ) {
+        const du = (m.tableCol - (m.tableCols - 1) / 2) * oldStepU;
+        const dv = (m.tableRow - (m.tableRows - 1) / 2) * oldStepV;
+        sumCx += m.x - (du * ux + dv * vx);
+        sumCy += m.y - (du * uy + dv * vy);
+        count++;
+      }
+    }
+
+    const tableCx = count > 0 ? sumCx / count : first.x;
+    const tableCy = count > 0 ? sumCy / count : first.y;
+
+    for (const m of members) {
+      if (
+        m.tableRow !== undefined &&
+        m.tableCol !== undefined &&
+        m.tableRows !== undefined &&
+        m.tableCols !== undefined
+      ) {
+        const newDu = (m.tableCol - (m.tableCols - 1) / 2) * newStepU;
+        const newDv = (m.tableRow - (m.tableRows - 1) / 2) * newStepV;
+        realignedMap.set(m.index, {
+          ...m,
+          x: tableCx + newDu * ux + newDv * vx,
+          y: tableCy + newDu * uy + newDv * vy,
+        });
+      } else {
+        realignedMap.set(m.index, { ...m });
+      }
+    }
+  }
+
+  return panels.map((p) => realignedMap.get(p.index) ?? p);
+}
+

@@ -899,10 +899,14 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
     useEffect(() => {
       if (!isInitialized) return;
       if (meshesRef.current) {
-        const showBuilding = layerVisibility?.building !== false;
+        const isGround = installationType === "ground";
+        const showBuilding = !isGround && layerVisibility?.building !== false;
         meshesRef.current.building.visible = showBuilding;
         if (meshesRef.current.parapet) meshesRef.current.parapet.visible = showBuilding;
         if (meshesRef.current.wireframe) meshesRef.current.wireframe.visible = showBuilding;
+        if (usableAreaBoundaryRef.current) {
+          usableAreaBoundaryRef.current.group.visible = isGround && layerVisibility?.building !== false;
+        }
         if (!texturedGroundRef.current) {
           meshesRef.current.ground.visible = layerVisibility?.ground !== false;
         }
@@ -929,7 +933,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         cloudsRef.current.setVisible(!isRainyCurr && Boolean(layerVisibility?.clouds));
       }
       requestShadowUpdate();
-    }, [layerVisibility, isInitialized]);
+    }, [layerVisibility, isInitialized, installationType]);
 
     // Weather effects:
     // 1. Falling rain streaks & wet surface response in Rainy preset.
