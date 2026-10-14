@@ -10,6 +10,11 @@ if (typeof URL !== "undefined" && typeof URL.createObjectURL !== "function") {
   URL.revokeObjectURL = () => {};
 }
 
+// Three.js GLTFExporter references global FileReader
+if (typeof FileReader === "undefined" && typeof window !== "undefined" && window.FileReader) {
+  (globalThis as any).FileReader = window.FileReader;
+}
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();

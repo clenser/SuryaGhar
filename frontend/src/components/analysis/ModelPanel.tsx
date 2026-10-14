@@ -15,7 +15,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, cloneElement, isValidElement, type ReactNode } from "react";
-import { RotateCcw, ArrowRight, Plus, Pencil, Trash2, AlertTriangle, Sun, TreePine, Eye, Moon, Grid3x3, X, Sparkles, Zap, Building2, Loader2 } from "lucide-react";
+import { RotateCcw, ArrowRight, Plus, Pencil, Trash2, AlertTriangle, Sun, TreePine, Eye, Moon, Grid3x3, X, Sparkles, Zap, Building2, Loader2, Download, Check } from "lucide-react";
 import { BACKEND_WAITING_LABEL } from "../../hooks/useBackendStatus";
 import type { LngLat, PolygonMetrics } from "../../lib/geo";
 import { formatArea } from "../../lib/geo";
@@ -112,6 +112,7 @@ import { buildElectricalTopology, type ElectricalTopology, type PanelFlowData } 
 import { computeCableRecommendations, type CableSpecificationReport } from "../../lib/3d/cableAdvisor";
 import { CableAdvisorSection } from "../3d/CableAdvisorSection";
 import { ObjectDetailsHUD } from "../3d/ObjectDetailsHUD";
+import { exportSolarInstallation3D, type ExportResult } from "../../lib/3d/modelExport";
 import { Vector3 } from "three";
 
 interface ModelPanelProps {
@@ -432,6 +433,8 @@ export function ModelPanel({
   const [panelsEnabled, setPanelsEnabled] = useState(false);
   const [isPlacing, setIsPlacing] = useState(false);
   const [isContinuingValidate, setIsContinuingValidate] = useState(false);
+  const [isExporting3D, setIsExporting3D] = useState(false);
+  const [exportFeedback, setExportFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
   // Inspector collapsed state (mobile)
   const [inspectorCollapsed] = useState(false);
 
@@ -629,6 +632,46 @@ export function ModelPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [model],
   );
+
+  const handleExport3DModel = useCallback(async () => {
+    if (isExporting3D || !model) return;
+    setIsExporting3D(true);
+    setExportFeedback(null);
+    try {
+      let result: ExportResult;
+      if (viewerRef.current) {
+        result = await viewerRef.current.exportGLB();
+      } else {
+        result = await exportSolarInstallation3D({
+          localCoords: model.coords,
+          installationType,
+          parapet: parapetHeightM > 0 ? { heightM: parapetHeightM, thicknessM: 0.2 } : undefined,
+          obstacles,
+          panelLayers: panelSets.map((s) => ({
+            config: s.config,
+            panels: s.panels,
+            isPanelSet: true,
+          })),
+          trees,
+        });
+      }
+      setExportFeedback({
+        type: "success",
+        message: `Exported ${result.filename} (${(result.byteLength / 1024).toFixed(1)} KB, ${result.objectCount} components).`,
+      });
+      setTimeout(() => {
+        setExportFeedback((current) => (current?.type === "success" ? null : current));
+      }, 6000);
+    } catch (err) {
+      console.error("3D model export error:", err);
+      setExportFeedback({
+        type: "error",
+        message: err instanceof Error ? err.message : "Failed to export 3D model",
+      });
+    } finally {
+      setIsExporting3D(false);
+    }
+  }, [isExporting3D, model, installationType, parapetHeightM, obstacles, panelSets, trees]);
 
   // Deterministic panel placement, derived from the roof, the obstacles and
   // the each set's configuration â€” recomputed when any of them change (the
@@ -2034,6 +2077,8 @@ export function ModelPanel({
             onToggleTrees={() => handleToggleLayer("trees")}
             natureActive={natureActive}
             onToggleNature={handleToggleNature}
+            onExport3DModel={handleExport3DModel}
+            isExporting3D={isExporting3D}
             onBackToDesign={onBackToDesign}
             onBackToMap={onBackToMap}
           />
@@ -2058,6 +2103,8 @@ export function ModelPanel({
             hasSelectedObject={selectedObstacleId !== null || selectedTreeId !== null || selectedPanelInfo !== null || selectedBuilding}
             natureActive={natureActive}
             onToggleNature={handleToggleNature}
+            onExport3DModel={handleExport3DModel}
+            isExporting3D={isExporting3D}
           />
         )}
         {!finalView && designMode && !isValidateStage && activeTool === "select" && (
@@ -2139,6 +2186,8 @@ export function ModelPanel({
                   panelTypeId: activeSet?.config.panelTypeId ?? "panel-550w",
                   mountingType: activeSet?.config.mounting ?? (installationType === "ground" ? "ground_fixed" : "tilted"),
                   installationType,
+                  onExport3DModel: handleExport3DModel,
+                  isExporting3D: isExporting3D,
                 })
               : validationPanel}
             {onReset && (
@@ -2981,6 +3030,20 @@ export function ModelPanel({
               </button>
               <button
                 type="button"
+                className="btn btn--secondary"
+                onClick={handleExport3DModel}
+                disabled={isExporting3D}
+                title="Export complete 3D solar installation as a GLB model"
+              >
+                {isExporting3D ? (
+                  <Loader2 size={15} className="spin" aria-hidden="true" />
+                ) : (
+                  <Download size={15} strokeWidth={2} aria-hidden="true" />
+                )}
+                {isExporting3D ? "Exporting…" : "Export 3D"}
+              </button>
+              <button
+                type="button"
                 className="btn btn--primary"
                 onClick={() => {
                   setIsContinuingValidate(true);
@@ -3003,6 +3066,39 @@ export function ModelPanel({
                 {isContinuingValidate ? "Loading Assessment…" : "Continue to Validate"}
               </button>
             </div>
+
+            {exportFeedback && (
+              <div
+                role="status"
+                style={{
+                  padding: "6px 10px",
+                  marginTop: "var(--space-2)",
+                  borderRadius: "4px",
+                  fontSize: "0.78rem",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  background:
+                    exportFeedback.type === "success"
+                      ? "rgba(16, 185, 129, 0.15)"
+                      : "rgba(239, 68, 68, 0.15)",
+                  color:
+                    exportFeedback.type === "success"
+                      ? "var(--color-primary, #10b981)"
+                      : "var(--color-danger, #ef4444)",
+                  border: `1px solid ${
+                    exportFeedback.type === "success"
+                      ? "rgba(16, 185, 129, 0.3)"
+                      : "rgba(239, 68, 68, 0.3)"
+                  }`,
+                }}
+              >
+                {exportFeedback.type === "success" ? (
+                  <Check size={14} strokeWidth={2} />
+                ) : null}
+                <span>{exportFeedback.message}</span>
+              </div>
+            )}
 
             {onReset && (
               <div className="inspector-actions__reset" style={{ marginTop: "var(--space-2)" }}>

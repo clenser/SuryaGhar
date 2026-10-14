@@ -12,3 +12,4 @@ coverage/
 backend/runtime/
 *.pem
 infrastructure/aws/lambda/*.zip
+.vite/

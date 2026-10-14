@@ -73,6 +73,7 @@ import {
 } from "../../lib/3d/treeMeshes";
 import { validateTree, type Tree, type TreeType } from "../../lib/3d/treeTypes";
 import { fetchSatelliteGround } from "../../lib/3d/satelliteGround";
+import { exportSolarInstallation3D, type ExportResult } from "../../lib/3d/modelExport";
 import type { LngLat } from "../../lib/geo";
 import {
   SUN_UI_TICK_MS,
@@ -286,6 +287,8 @@ export interface Site3DViewerProps {
 export interface Site3DViewerHandle {
   /** Reset the camera to the default framing of the building */
   resetCamera: () => void;
+  /** Export the complete currently assembled 3D scene as an isolated GLB binary */
+  exportGLB: (filename?: string) => Promise<ExportResult>;
 }
 
 /**
@@ -2449,6 +2452,25 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           frameControls(controlsRef.current, framing);
           controlsRef.current.update();
         },
+        exportGLB: async (filename?: string) => {
+          return exportSolarInstallation3D({
+            localCoords: localCoordsRef.current,
+            installationType,
+            parapet,
+            obstacles,
+            panelLayers,
+            trees,
+            filename,
+            liveScene: {
+              building: meshesRef.current?.building,
+              parapet: meshesRef.current?.parapet,
+              obstacleGroup: obstacleGroupRef.current,
+              panelGroups: panelGroupRef.current,
+              treeGroup: treeGroupRef.current,
+              usableAreaBoundary: usableAreaBoundaryRef.current?.group,
+            },
+          });
+        },
       };
       if (typeof ref === "function") ref(handle);
       else if (ref && typeof ref === "object") ref.current = handle;
@@ -2456,7 +2478,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         if (typeof ref === "function") ref(null);
         else if (ref && typeof ref === "object") ref.current = null;
       };
-    }, [ref]);
+    }, [ref, installationType, parapet, obstacles, panelLayers, trees]);
 
     if (webglError) {
       return (

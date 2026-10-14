@@ -27,6 +27,8 @@ import {
   Zap,
   Building2,
   Bird,
+  Download,
+  Loader2,
 } from "lucide-react";
 import type { ObstacleType } from "../../lib/3d/obstacles";
 
@@ -92,6 +94,10 @@ interface ViewportToolbarProps {
   natureActive?: boolean;
   /** Toggle nature animations */
   onToggleNature?: () => void;
+  /** Export 3D model action */
+  onExport3DModel?: () => void;
+  /** Whether 3D export is generating */
+  isExporting3D?: boolean;
 }
 
 const TOOL_CONFIG: Record<Exclude<ViewportTool, "draw-obstacle">, { icon: React.ReactNode; label: string; title: string }> = {
@@ -135,6 +141,8 @@ export function ViewportToolbar({
   hasSelectedObject = false,
   natureActive = false,
   onToggleNature,
+  onExport3DModel,
+  isExporting3D = false,
 }: ViewportToolbarProps) {
   const [collapsed, setCollapsed] = useState(false);
 
@@ -363,6 +371,33 @@ export function ViewportToolbar({
         <div className="viewport-toolbar__group" aria-label="View tools">
           {viewTools.map((tool) => renderToolButton(tool, activeTool === tool))}
         </div>
+
+        {onExport3DModel && (
+          <>
+            <div className="viewport-toolbar__divider" aria-hidden="true" />
+            <div className="viewport-toolbar__group" aria-label="Export tools">
+              <button
+                type="button"
+                className="viewport-tool"
+                onClick={onExport3DModel}
+                disabled={isExporting3D}
+                title="Export complete 3D solar installation as a GLB model"
+                aria-label="Export 3D Model"
+              >
+                <span className="viewport-tool__icon">
+                  {isExporting3D ? (
+                    <Loader2 size={16} className="spin" />
+                  ) : (
+                    <Download size={16} strokeWidth={2} />
+                  )}
+                </span>
+                <span className="viewport-tool__label">
+                  {isExporting3D ? "Exporting…" : "Export 3D"}
+                </span>
+              </button>
+            </div>
+          </>
+        )}
 
         {inspectorCollapsed && (
           <button

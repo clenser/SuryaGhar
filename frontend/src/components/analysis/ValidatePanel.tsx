@@ -34,6 +34,10 @@ interface ValidatePanelProps {
   panelTypeId?: PanelTypeId;
   mountingType?: MountingType;
   installationType?: InstallationType;
+  /** Export 3D model action */
+  onExport3DModel?: () => void;
+  /** Whether 3D model export is currently generating */
+  isExporting3D?: boolean;
 }
 
 /** Stage 3: surface assessment. Pure view over persisted validation state:
@@ -55,6 +59,8 @@ export function ValidatePanel({
   panelTypeId,
   mountingType,
   installationType,
+  onExport3DModel,
+  isExporting3D = false,
 }: ValidatePanelProps) {
   // Draft selection only; committed to App on Proceed so it survives remounts.
   const [draft, setDraft] = useState<SegmentationModel>(segmentationModel);
@@ -209,6 +215,24 @@ export function ValidatePanel({
         )}
         {isDownloadingBOM ? "Generating CSV…" : "Download Bill of Materials (CSV)"}
       </button>
+
+      {onExport3DModel && (
+        <button
+          type="button"
+          className="btn btn--secondary"
+          disabled={isExporting3D}
+          onClick={onExport3DModel}
+          title="Export complete 3D solar installation as a GLB model"
+          style={{ width: "100%", justifyContent: "center", marginTop: "6px" }}
+        >
+          {isExporting3D ? (
+            <Loader2 size={14} className="spin" aria-hidden="true" />
+          ) : (
+            <Download size={14} strokeWidth={2} aria-hidden="true" />
+          )}
+          <span>{isExporting3D ? "Exporting GLB Model…" : "Export 3D Model (GLB)"}</span>
+        </button>
+      )}
     </div>
   );
 

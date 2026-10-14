@@ -6,7 +6,9 @@ import {
   ChevronUp,
   Cloud,
   CloudSun,
+  Download,
   Layers,
+  Loader2,
   MapPin,
   Moon,
   Pause,
@@ -33,6 +35,10 @@ export interface FinalModelControlsProps {
   /** Whether nature animations (birds & clouds) are active in presentation view */
   natureActive?: boolean;
   onToggleNature?: () => void;
+  /** Export 3D model action */
+  onExport3DModel?: () => void;
+  /** Whether 3D model export is currently generating */
+  isExporting3D?: boolean;
   onBackToDesign?: () => void;
   onBackToMap?: () => void;
 }
@@ -59,6 +65,8 @@ export function FinalModelControls({
   onToggleTrees,
   natureActive = false,
   onToggleNature,
+  onExport3DModel,
+  isExporting3D = false,
   onBackToDesign,
   onBackToMap,
 }: FinalModelControlsProps) {
@@ -336,8 +344,27 @@ export function FinalModelControls({
             </div>
           </div>
 
-          {/* Navigation Controls */}
+          {/* Navigation & Export Controls */}
           <div className="final-model-nav">
+            {onExport3DModel && (
+              <button
+                type="button"
+                className="btn btn--primary btn--block"
+                onClick={onExport3DModel}
+                disabled={isExporting3D}
+                title="Export the complete assembled 3D solar installation as a GLB file"
+                style={{ marginBottom: "var(--space-2)" }}
+              >
+                {isExporting3D ? (
+                  <Loader2 size={15} className="spin" aria-hidden="true" />
+                ) : (
+                  <Download size={15} strokeWidth={2} aria-hidden="true" />
+                )}
+                <span style={{ marginLeft: "6px" }}>
+                  {isExporting3D ? "Exporting GLB Model…" : "Export 3D Model (GLB)"}
+                </span>
+              </button>
+            )}
             {onBackToDesign && (
               <button
                 type="button"
