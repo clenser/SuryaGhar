@@ -15,6 +15,51 @@ if (typeof FileReader === "undefined" && typeof window !== "undefined" && window
   (globalThis as any).FileReader = window.FileReader;
 }
 
+// Canvas 2d context stub for Three.js texture export in jsdom
+if (typeof HTMLCanvasElement !== "undefined") {
+  HTMLCanvasElement.prototype.getContext = function (type: string) {
+    if (type === "2d") {
+      return {
+        drawImage: () => {},
+        putImageData: () => {},
+        getImageData: () => ({ data: new Uint8ClampedArray(4) }),
+        translate: () => {},
+        scale: () => {},
+        fillRect: () => {},
+        clearRect: () => {},
+      } as any;
+    }
+    return null;
+  };
+  HTMLCanvasElement.prototype.toBlob = function (cb: (blob: Blob | null) => void) {
+    if (typeof cb === "function") {
+      cb(new Blob([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], { type: "image/png" }));
+    }
+  };
+}
+
+// Image and createImageBitmap stub for GLTF texture parsing in jsdom
+if (typeof HTMLImageElement !== "undefined") {
+  Object.defineProperty(HTMLImageElement.prototype, "src", {
+    set(src: string) {
+      this.setAttribute("src", src);
+      setTimeout(() => {
+        this.dispatchEvent(new Event("load"));
+      }, 0);
+    },
+    get() {
+      return this.getAttribute("src") || "";
+    },
+  });
+}
+if (typeof (globalThis as any).createImageBitmap === "undefined") {
+  (globalThis as any).createImageBitmap = async () => ({
+    width: 520,
+    height: 122,
+    close: () => {},
+  });
+}
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();

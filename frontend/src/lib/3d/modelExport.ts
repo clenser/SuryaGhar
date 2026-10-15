@@ -41,6 +41,7 @@ import type { InstallationType, PanelLayoutConfig } from "./panels";
 import type { PlacedSetPanel } from "./panelSets";
 import { createTreeMesh } from "./treeMeshes";
 import type { Tree } from "./treeTypes";
+import { createSiteBranding } from "./branding";
 
 export interface BuildExportSceneOptions {
   localCoords: LocalCoords3D;
@@ -53,6 +54,8 @@ export interface BuildExportSceneOptions {
     isPanelSet?: boolean;
   }> | null;
   trees?: Tree[];
+  /** Whether to include enerzyAI 3D scene branding (default: true) */
+  branding?: boolean;
   /** Optional live scene mesh references to reuse active rendered meshes */
   liveScene?: {
     building?: THREE.Mesh | null;
@@ -61,6 +64,7 @@ export interface BuildExportSceneOptions {
     panelGroups?: THREE.Group[];
     treeGroup?: THREE.Group | null;
     usableAreaBoundary?: THREE.Group | null;
+    brandingGroup?: THREE.Group | null;
   };
 }
 
@@ -80,6 +84,7 @@ export interface ExportResult {
     solarPanels: number;
     mountingStructures: number;
     trees: number;
+    brandingMarks: number;
   };
 }
 
@@ -394,6 +399,25 @@ export function buildExportScene(options: BuildExportSceneOptions): THREE.Group 
     }
   }
 
+  // 5. enerzyAI 3D Scene Branding (Building, Rooftop, Ground, Mounting)
+  if (options.branding !== false) {
+    if (options.liveScene?.brandingGroup && options.liveScene.brandingGroup.children.length > 0) {
+      for (const child of options.liveScene.brandingGroup.children) {
+        root.add(child.clone(true));
+      }
+    } else {
+      const brandRoot = createSiteBranding({
+        localCoords: options.localCoords,
+        buildingHeight: options.localCoords.height,
+        installationType: options.installationType,
+        panelLayers: options.panelLayers,
+      });
+      while (brandRoot.children.length > 0) {
+        root.add(brandRoot.children[0]);
+      }
+    }
+  }
+
   return root;
 }
 
@@ -469,6 +493,7 @@ export async function exportSolarInstallation3D(
   let solarPanels = 0;
   let mountingStructures = 0;
   let trees = 0;
+  let brandingMarks = 0;
 
   scene.traverse((obj) => {
     if (obj.name === "Building" || obj.name === "GroundPlot_Boundary") buildings++;
@@ -476,9 +501,10 @@ export async function exportSolarInstallation3D(
     else if (obj.name.startsWith("SolarPanel_")) solarPanels++;
     else if (obj.name.startsWith("MountingStructure_")) mountingStructures++;
     else if (obj.name.startsWith("Tree_")) trees++;
+    else if (obj.name.startsWith("enerzyAI_") && (obj.name.endsWith("Mark") || obj.name.includes("Mark_"))) brandingMarks++;
   });
 
-  const totalObjects = buildings + obstacles + solarPanels + mountingStructures + trees;
+  const totalObjects = buildings + obstacles + solarPanels + mountingStructures + trees + brandingMarks;
 
   const rawFilename =
     options.filename ??
@@ -502,6 +528,7 @@ export async function exportSolarInstallation3D(
       solarPanels,
       mountingStructures,
       trees,
+      brandingMarks,
     },
   };
 }

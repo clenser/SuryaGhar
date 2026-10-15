@@ -18,7 +18,9 @@
  */
 
 import * as THREE from "three";
-import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
+import { mergeGeometries, mergeVertices } from "three/examples/jsm/utils/BufferGeometryUtils.js";
+import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";
+import { BRANDING_TEXT, getEnerzyAIFont } from "./brandingAssets";
 import {
   effectiveColSpacingM,
   effectivePanelDims,
@@ -191,6 +193,33 @@ function paint(geometry: THREE.BufferGeometry, color: number): THREE.BufferGeome
   return geometry;
 }
 
+/**
+ * Creates 3D TextGeometry for "enerzyAI" painted with vertex colors,
+ * ready to be merged directly into panel and structural geometries.
+ */
+function createPaintedBrandTextGeometry(
+  size: number,
+  depth: number,
+  color = 0xffffff,
+): THREE.BufferGeometry {
+  const font = getEnerzyAIFont();
+  const rawGeom = new TextGeometry(BRANDING_TEXT, {
+    font,
+    size,
+    depth,
+    curveSegments: 2,
+    bevelEnabled: false,
+  });
+  rawGeom.computeBoundingBox();
+  const bb = rawGeom.boundingBox!;
+  const midX = (bb.min.x + bb.max.x) / 2;
+  const midY = (bb.min.y + bb.max.y) / 2;
+  rawGeom.translate(-midX, -midY, -depth / 2);
+  const geom = mergeVertices(rawGeom);
+  rawGeom.dispose();
+  return paint(geom, color);
+}
+
 function box(
   w: number,
   l: number,
@@ -350,6 +379,18 @@ export function createPanelUnitGeometry(
     panelParts.push(box(0.06, l - 0.1, 0.04, w / 2 - 0.14, 0, -t / 2 - 0.02, SUPPORT_COLOR));
   }
 
+  // 3D enerzyAI manufacturer watermark directly embedded on the solar panel module (on each and every panel)
+  const panelMarkSize = Math.max(0.024, Math.min(0.038, w * 0.032));
+  const panelMarkDepth = 0.0016;
+  const panelBrand = createPaintedBrandTextGeometry(panelMarkSize, panelMarkDepth, 0xffffff);
+  // Positioned on the lower right corner of the module glass, flush on the front face
+  panelBrand.translate(
+    w / 2 - 0.16,
+    -l / 2 + 0.08,
+    t * 0.5 + panelMarkDepth / 2 + 0.0005,
+  );
+  panelParts.push(panelBrand);
+
   // Tilt about X: the +Y edge dips toward the sun (normal leans to +Y).
   const tiltMatrix = new THREE.Matrix4().makeRotationX(-tilt);
   for (const part of panelParts) {
@@ -423,6 +464,14 @@ export function createPanelUnitGeometry(
             underside + SUPPORT_OVERLAP_M - ROOF_STANDOFF_M,
           );
           parts.push(box(0.05, 0.05, height, sx, legY, ROOF_STANDOFF_M + height / 2, SUPPORT_COLOR));
+
+          // Engrave crisp white brand text directly into the front structural leg
+          if (sy === legYs[0] && height > 0.08) {
+            const legBrand = createPaintedBrandTextGeometry(0.018, 0.002, 0xffffff);
+            legBrand.applyMatrix4(new THREE.Matrix4().makeRotationX(Math.PI / 2));
+            legBrand.translate(sx, legY - 0.025 - 0.001, ROOF_STANDOFF_M + height * 0.5);
+            parts.push(legBrand);
+          }
         }
       }
     }
@@ -1509,6 +1558,16 @@ export function createSharedPanelSetFrameGeometry(
       unrotatedRail.translate(0, rowCenterY, centerH);
       parts.push(unrotatedRail);
 
+      // Engrave crisp white brand text directly into the front longitudinal rail geometry
+      if (r === 0 && dy === yOffsets[0]) {
+        const railBrand = createPaintedBrandTextGeometry(0.022, 0.002, 0xffffff);
+        railBrand.applyMatrix4(new THREE.Matrix4().makeRotationX(Math.PI / 2));
+        railBrand.translate(0, dy - railProfileW / 2 - 0.001, railCenterLocalZ);
+        railBrand.applyMatrix4(railTiltMatrix);
+        railBrand.translate(0, rowCenterY, centerH);
+        parts.push(railBrand);
+      }
+
       // Under-frame clamping brackets at module borders and table ends (strictly below railTopLocalZ)
       const clampH = 0.016;
       const clampCenterLocalZ = railTopLocalZ - clampH / 2;
@@ -1627,6 +1686,14 @@ export function createSharedPanelSetFrameGeometry(
             SUPPORT_COLOR,
           ),
         );
+
+        // Engrave crisp white brand text directly into the front structural post geometry
+        if (r === 0 && sy === rowSyPoints[0] && legHeight > 0.1) {
+          const postBrand = createPaintedBrandTextGeometry(0.018, 0.002, 0xffffff);
+          postBrand.applyMatrix4(new THREE.Matrix4().makeRotationX(Math.PI / 2));
+          postBrand.translate(lx, legY - legThickness / 2 - 0.001, ROOF_STANDOFF_M + legHeight * 0.5);
+          parts.push(postBrand);
+        }
 
         allBentLegYs.push(legY);
         rowLegs.push({ y: legY, zTop: topZ });
