@@ -3272,17 +3272,31 @@
 }
 
 /* Site3DViewer: fills the .stage-3d-viewport frame provided by its parent */
-.site-3d-viewer {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
+.site-3d-viewer,
+.model-viewport {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  overflow: hidden !important;
 }
 
-.site-3d-viewer canvas {
+.site-3d-viewer canvas,
+.model-viewport canvas {
   display: block;
-  width: 100%;
-  height: 100%;
+  width: 100% !important;
+  height: 100% !important;
   touch-action: none;
+}
+
+.design-view .stage-3d-viewport {
+  flex: 1 1 0;
+  height: 100% !important;
+  min-height: 0 !important;
+  aspect-ratio: auto !important;
+  margin-bottom: 0 !important;
+  position: relative;
+  overflow: hidden;
 }
 
 .site-3d-viewer__loading {

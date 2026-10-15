@@ -112,7 +112,7 @@ describe("ModelPanel default-collapsed inspector sections", () => {
     HTMLCanvasElement.prototype.getContext = originalGetContext;
   });
 
-  it("renders all 6 inspector sections collapsed by default in design mode", () => {
+  it("renders all 8 inspector sections collapsed by default in design mode", () => {
     const { container } = render(
       <ModelPanel
         vertices={TERRACE}
@@ -128,10 +128,12 @@ describe("ModelPanel default-collapsed inspector sections", () => {
     const sectionIds = [
       "metrics",
       "parapet",
-      "sun",
-      "weather",
       "obstacles",
+      "sun",
       "solar-design",
+      "shading-optimization",
+      "cable-recommendations",
+      "bom",
     ];
 
     sectionIds.forEach((id) => {
@@ -159,14 +161,14 @@ describe("ModelPanel default-collapsed inspector sections", () => {
       />,
     );
 
-    const weatherSection = container.querySelector('[data-section-id="weather"]')!;
-    const weatherHeader = weatherSection.querySelector<HTMLButtonElement>(".collapsible-section__header")!;
-    expect(weatherHeader).toHaveAttribute("aria-expanded", "false");
+    const sunSection = container.querySelector('[data-section-id="sun"]')!;
+    const sunHeader = sunSection.querySelector<HTMLButtonElement>(".collapsible-section__header")!;
+    expect(sunHeader).toHaveAttribute("aria-expanded", "false");
 
-    // Click to expand Weather
-    await userEvent.click(weatherHeader);
-    expect(weatherHeader).toHaveAttribute("aria-expanded", "true");
-    expect(weatherSection).toHaveClass("is-open");
+    // Click to expand Sun, Shadows & Weather
+    await userEvent.click(sunHeader);
+    expect(sunHeader).toHaveAttribute("aria-expanded", "true");
+    expect(sunSection).toHaveClass("is-open");
 
     // Click a weather preset inside
     const cloudyBtn = screen.getByRole("button", { name: "Cloudy" });
@@ -174,7 +176,7 @@ describe("ModelPanel default-collapsed inspector sections", () => {
     expect(cloudyBtn).toHaveClass("weather-preset-btn--active");
 
     // Section stays expanded
-    expect(weatherHeader).toHaveAttribute("aria-expanded", "true");
+    expect(sunHeader).toHaveAttribute("aria-expanded", "true");
 
     // Rerender with unchanged props does not forcibly collapse
     rerender(
@@ -188,7 +190,64 @@ describe("ModelPanel default-collapsed inspector sections", () => {
         backendReady={true}
       />,
     );
-    expect(weatherHeader).toHaveAttribute("aria-expanded", "true");
-    expect(weatherSection).toHaveClass("is-open");
+    expect(sunHeader).toHaveAttribute("aria-expanded", "true");
+    expect(sunSection).toHaveClass("is-open");
+  });
+
+  it("renders all 8 sections in the exact specified sequential order", () => {
+    const { container } = render(
+      <ModelPanel
+        vertices={TERRACE}
+        metrics={METRICS}
+        buildingHeight={15}
+        onSetHeight={vi.fn()}
+        onContinue={vi.fn()}
+        designMode={true}
+        backendReady={true}
+      />,
+    );
+
+    const sections = Array.from(container.querySelectorAll<HTMLElement>("section[data-section-id]"));
+    const renderedIds = sections.map((s) => s.getAttribute("data-section-id"));
+
+    expect(renderedIds).toEqual([
+      "metrics",
+      "parapet",
+      "obstacles",
+      "sun",
+      "solar-design",
+      "shading-optimization",
+      "cable-recommendations",
+      "bom",
+    ]);
+  });
+
+  it("expands the Bill of Quantities (BOQ) collapsible section and shows BOM content & CSV download", async () => {
+    const { container } = render(
+      <ModelPanel
+        vertices={TERRACE}
+        metrics={METRICS}
+        buildingHeight={15}
+        onSetHeight={vi.fn()}
+        onContinue={vi.fn()}
+        designMode={true}
+        backendReady={true}
+      />,
+    );
+
+    const bomSection = container.querySelector('[data-section-id="bom"]')!;
+    const bomHeader = bomSection.querySelector<HTMLButtonElement>(".collapsible-section__header")!;
+    expect(bomHeader).toHaveTextContent(/Bill of Quantities/i);
+
+    // Expand BOQ
+    await userEvent.click(bomHeader);
+    expect(bomHeader).toHaveAttribute("aria-expanded", "true");
+    expect(bomSection).toHaveClass("is-open");
+
+    // Check BOM card content
+    expect(screen.getByText("Bill of Materials (BOM)")).toBeInTheDocument();
+    expect(screen.getByText(/kWp System/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Download Bill of Materials \(CSV\)/i })).toBeInTheDocument();
   });
 });
+
