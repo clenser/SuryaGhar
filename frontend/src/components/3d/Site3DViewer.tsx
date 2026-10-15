@@ -74,6 +74,11 @@ import {
 import { validateTree, type Tree, type TreeType } from "../../lib/3d/treeTypes";
 import { fetchSatelliteGround } from "../../lib/3d/satelliteGround";
 import { exportSolarInstallation3D, type ExportResult } from "../../lib/3d/modelExport";
+import {
+  createSiteBranding,
+  updateBrandingAdaptiveLighting,
+  disposeBrandingGroup,
+} from "../../lib/3d/branding";
 import type { LngLat } from "../../lib/geo";
 import {
   SUN_UI_TICK_MS,
@@ -270,6 +275,10 @@ export interface Site3DViewerProps {
   onPanelSelect?: (info: { setId: string; panelIndex: number; panelId: string } | null) => void;
   /** Move solar panel callback */
   onMovePanel?: (setId: string, panelIndex: number, newX: number, newY: number) => void;
+  /** Move solar panel start callback */
+  onMovePanelStart?: (setId: string, panelIndex: number) => void;
+  /** Move solar panel end/commit callback */
+  onMovePanelEnd?: (setId: string, panelIndex: number) => void;
   /** Whether the building terrace is selected */
   selectedBuilding?: boolean;
   /** Callback when the building rooftop is clicked */
@@ -343,6 +352,8 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       selectedPanelInfo: _selectedPanelInfo = null,
       onPanelSelect,
       onMovePanel,
+      onMovePanelStart,
+      onMovePanelEnd,
       selectedBuilding: _selectedBuilding = false,
       onBuildingSelect,
       installationType = "rooftop",
@@ -374,6 +385,8 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
     const texturedGroundRef = useRef<{ mesh: THREE.Mesh; texture: THREE.CanvasTexture } | null>(null);
     /** Translucent usable-area boundary mesh for ground-mounted solar (Phase 2). */
     const usableAreaBoundaryRef = useRef<UsableAreaBoundaryMeshes | null>(null);
+    /** enerzyAI subtle geometry-based 3D branding group */
+    const brandingGroupRef = useRef<THREE.Group | null>(null);
     /**
      * Building volume in local metres, for camera containment. Rebuilt with
      * the mesh so a height or footprint change is picked up without a manual
@@ -464,6 +477,10 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
     onBuildingSelectRef.current = onBuildingSelect;
     const onMovePanelRef = useRef(onMovePanel);
     onMovePanelRef.current = onMovePanel;
+    const onMovePanelStartRef = useRef(onMovePanelStart);
+    onMovePanelStartRef.current = onMovePanelStart;
+    const onMovePanelEndRef = useRef(onMovePanelEnd);
+    onMovePanelEndRef.current = onMovePanelEnd;
     const [movingBanner, setMovingBanner] = useState<string | null>(null);
 
     /**
@@ -605,6 +622,11 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           cloudsRef.current = null;
         }
         disposeTexturedGround();
+        if (brandingGroupRef.current) {
+          sceneRef.current?.remove(brandingGroupRef.current);
+          disposeBrandingGroup(brandingGroupRef.current);
+          brandingGroupRef.current = null;
+        }
         if (rainRef.current) {
           sceneRef.current?.remove(rainRef.current.lines);
           rainRef.current.geom.dispose();
@@ -1250,6 +1272,42 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       }
     }, [layerVisibility?.electricityFlow]);
 
+    // enerzyAI 3D Scene Branding: building facade wordmark, rooftop paver mark,
+    // ground entrance mark, and mounting structure manufacturer badges.
+    useEffect(() => {
+      if (!isInitialized || !sceneRef.current) return;
+      const scene = sceneRef.current;
+
+      if (brandingGroupRef.current) {
+        scene.remove(brandingGroupRef.current);
+        disposeBrandingGroup(brandingGroupRef.current);
+        brandingGroupRef.current = null;
+      }
+
+      const sun = sunRef.current;
+      const sunState = sun ? sunStateAt(sun.samples, sun.timeMinutes) : null;
+      const isNight = Boolean(sunState ? (sunState.night || (sunState.elevationDeg ?? 0) <= 0) : false);
+
+      const brandingGroup = createSiteBranding({
+        localCoords,
+        buildingHeight: localCoords.height,
+        installationType,
+        isNight,
+        panelLayers,
+      });
+
+      brandingGroupRef.current = brandingGroup;
+      scene.add(brandingGroup);
+
+      return () => {
+        if (brandingGroupRef.current) {
+          scene.remove(brandingGroupRef.current);
+          disposeBrandingGroup(brandingGroupRef.current);
+          brandingGroupRef.current = null;
+        }
+      };
+    }, [localCoords, installationType, panelLayers, isInitialized]);
+
     // Manual panel placement preview: a translucent panel follows the pointer
     // on the roof plane, tinted green/red by the SAME validator a commit uses.
     //
@@ -1794,6 +1852,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           onTreeDragEndRef.current?.(cur.id);
         } else if (cur.type === "panel") {
           onMovePanelRef.current?.(cur.setId!, cur.panelIndex!, cur.origX, cur.origY);
+          onMovePanelEndRef.current?.(cur.setId!, cur.panelIndex!);
         }
         movingEntity = null;
         setMovingBanner(null);
@@ -1821,6 +1880,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
           onTreeDragEndRef.current?.(cur.id);
         } else if (cur.type === "panel") {
           onMovePanelRef.current?.(cur.setId!, cur.panelIndex!, placeX, placeY);
+          onMovePanelEndRef.current?.(cur.setId!, cur.panelIndex!);
         }
         movingEntity = null;
         setMovingBanner(null);
@@ -1906,7 +1966,8 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
               currentX: pHit.x,
               currentY: pHit.y,
             };
-            setMovingBanner(`Moving solar panel #${pHit.panelIndex + 1}. Left-click to place, Right-click or Esc to cancel.`);
+            onMovePanelStartRef.current?.(pHit.setId, pHit.panelIndex);
+            setMovingBanner(`Moving connected solar structure. Left-click to place, Right-click or Esc to cancel.`);
             if (controlsRef.current) controlsRef.current.enabled = false;
             canvas.style.cursor = "grabbing";
             return;
@@ -2272,6 +2333,9 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
         };
         applySunToScene(sunLight, ambient, state, hemi);
         applyWeatherPreset(sunLight, ambient, hemi, currentPreset, state);
+        if (brandingGroupRef.current) {
+          updateBrandingAdaptiveLighting(brandingGroupRef.current, state.night);
+        }
         renderer.shadowMap.needsUpdate = true;
       };
 
@@ -2430,16 +2494,20 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
       };
 
       handleResize();
+      const rafId = requestAnimationFrame(handleResize);
+      const timerId = setTimeout(handleResize, 80);
 
       const resizeObserver = new ResizeObserver(handleResize);
       resizeObserver.observe(container);
       window.addEventListener("resize", handleResize);
 
       return () => {
+        cancelAnimationFrame(rafId);
+        clearTimeout(timerId);
         resizeObserver.disconnect();
         window.removeEventListener("resize", handleResize);
       };
-    }, [isInitialized]);
+    }, [isInitialized, className]);
 
     // Imperative handle for parents that want to re-frame the camera.
     useEffect(() => {
@@ -2468,6 +2536,7 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
               panelGroups: panelGroupRef.current,
               treeGroup: treeGroupRef.current,
               usableAreaBoundary: usableAreaBoundaryRef.current?.group,
+              brandingGroup: brandingGroupRef.current,
             },
           });
         },
@@ -2501,7 +2570,17 @@ export const Site3DViewer = forwardRef<Site3DViewerHandle, Site3DViewerProps>(
     }
 
     return (
-      <div ref={containerRef} className={`site-3d-viewer ${className}`} style={{ ...style, position: "relative" }}>
+      <div
+        ref={containerRef}
+        className={`site-3d-viewer ${className}`}
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          ...style,
+        }}
+      >
         <canvas
           ref={canvasRef}
           aria-label="3D building model. Drag to rotate, scroll/pinch to zoom, click to select an obstacle."

@@ -15,7 +15,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, cloneElement, isValidElement, type ReactNode } from "react";
-import { RotateCcw, ArrowRight, Plus, Pencil, Trash2, AlertTriangle, Sun, TreePine, Eye, Moon, Grid3x3, X, Sparkles, Zap, Building2, Loader2, Download, Check } from "lucide-react";
+import { RotateCcw, ArrowRight, Plus, Pencil, Trash2, AlertTriangle, Sun, TreePine, Eye, Moon, Grid3x3, X, Sparkles, Zap, Building2, Loader2, Download, Check, FileSpreadsheet } from "lucide-react";
+import { downloadBillOfMaterialsCSV, generateBillOfMaterials } from "../../lib/solar/bom";
 import { BACKEND_WAITING_LABEL } from "../../hooks/useBackendStatus";
 import type { LngLat, PolygonMetrics } from "../../lib/geo";
 import { formatArea } from "../../lib/geo";
@@ -90,8 +91,9 @@ import {
   validatePanelPlacement,
   validateSetPlacement,
   type PanelSet,
+  type PlacedSetPanel,
 } from "../../lib/3d/panelSets";
-import { effectivePanelDims } from "../../lib/3d/panels";
+import { effectivePanelDims, effectiveColSpacingM, effectiveRowSpacingM } from "../../lib/3d/panels";
 import {
   clearSkyFallbackWeather,
   computePanelEnergy,
@@ -203,6 +205,15 @@ export function ModelPanel({
   // Imperative camera reset for the "return to default view" action.
   const viewerRef = useRef<Site3DViewerHandle | null>(null);
 
+  // When returning to design mode from presentation view, re-frame the camera to avoid clipped ground map
+  const prevFinalViewRef = useRef(finalView);
+  useEffect(() => {
+    if (prevFinalViewRef.current && !finalView) {
+      viewerRef.current?.resetCamera();
+    }
+    prevFinalViewRef.current = finalView;
+  }, [finalView]);
+
   // Obstacle editor state (application state, never Three.js objects).
   const [obstacleMode, setObstacleMode] = useState<"idle" | "adding" | "editing">("idle");
   const [obstacleDraft, setObstacleDraft] = useState<ObstacleDraft>(() => emptyObstacleDraft());
@@ -282,6 +293,90 @@ export function ModelPanel({
   const [manualStatus, setManualStatus] = useState<string | null>(null);
   /** Warning from the most recent auto-place or placement failure. */
   const [placeWarning, setPlaceWarning] = useState<string | null>(null);
+
+  /** Placement history tracking for Ctrl+Z (Undo) and Ctrl+Y (Redo) */
+  const historyRef = useRef<PanelSet[][]>([]);
+  const historyIndexRef = useRef<number>(-1);
+  const isUndoingOrRedoingRef = useRef<boolean>(false);
+  const dragStartSetsRef = useRef<PanelSet[] | null>(null);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+  const panelSetsRef = useRef<PanelSet[]>(panelSets);
+  useEffect(() => {
+    panelSetsRef.current = panelSets;
+  }, [panelSets]);
+
+  const pushHistory = useCallback((nextSets: PanelSet[]) => {
+    if (isUndoingOrRedoingRef.current) return;
+    const snapshot = JSON.parse(JSON.stringify(nextSets)) as PanelSet[];
+    const current = historyRef.current[historyIndexRef.current];
+    if (current && JSON.stringify(current) === JSON.stringify(snapshot)) {
+      return;
+    }
+    const nextHistory = historyRef.current.slice(0, historyIndexRef.current + 1);
+    nextHistory.push(snapshot);
+    if (nextHistory.length > 50) {
+      nextHistory.shift();
+    }
+    historyRef.current = nextHistory;
+    historyIndexRef.current = nextHistory.length - 1;
+    setCanUndo(historyIndexRef.current > 0);
+    setCanRedo(false);
+  }, []);
+
+  useEffect(() => {
+    if (historyRef.current.length === 0 && panelSets.length > 0) {
+      historyRef.current = [JSON.parse(JSON.stringify(panelSets))];
+      historyIndexRef.current = 0;
+      setCanUndo(false);
+      setCanRedo(false);
+    }
+  }, []);
+
+  const handleUndo = useCallback(() => {
+    if (historyIndexRef.current > 0) {
+      isUndoingOrRedoingRef.current = true;
+      historyIndexRef.current -= 1;
+      const targetSets = JSON.parse(JSON.stringify(historyRef.current[historyIndexRef.current])) as PanelSet[];
+      setPanelSets(targetSets);
+      setCanUndo(historyIndexRef.current > 0);
+      setCanRedo(historyIndexRef.current < historyRef.current.length - 1);
+      setManualStatus("Undone placement");
+      setTimeout(() => {
+        isUndoingOrRedoingRef.current = false;
+      }, 50);
+    }
+  }, []);
+
+  const handleRedo = useCallback(() => {
+    if (historyIndexRef.current < historyRef.current.length - 1) {
+      isUndoingOrRedoingRef.current = true;
+      historyIndexRef.current += 1;
+      const targetSets = JSON.parse(JSON.stringify(historyRef.current[historyIndexRef.current])) as PanelSet[];
+      setPanelSets(targetSets);
+      setCanUndo(historyIndexRef.current > 0);
+      setCanRedo(historyIndexRef.current < historyRef.current.length - 1);
+      setManualStatus("Redone placement");
+      setTimeout(() => {
+        isUndoingOrRedoingRef.current = false;
+      }, 50);
+    }
+  }, []);
+
+  const handleMovePanelStart = useCallback((_setId: string, _panelIndex: number) => {
+    dragStartSetsRef.current = JSON.parse(JSON.stringify(panelSetsRef.current));
+  }, []);
+
+  const handleMovePanelEnd = useCallback((_setId: string, _panelIndex: number) => {
+    if (dragStartSetsRef.current) {
+      const startJson = JSON.stringify(dragStartSetsRef.current);
+      const currentJson = JSON.stringify(panelSetsRef.current);
+      if (startJson !== currentJson) {
+        pushHistory(panelSetsRef.current);
+      }
+      dragStartSetsRef.current = null;
+    }
+  }, [pushHistory]);
 
   // M4 State: Shading analysis visualization and layout optimization
   const [shadingVisualizationActive, setShadingVisualizationActive] = useState(false);
@@ -371,6 +466,32 @@ export function ModelPanel({
   // re-subscribes whenever the mode flags change.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      // Ctrl+Z (Undo) and Ctrl+Y / Ctrl+Shift+Z (Redo)
+      if ((event.ctrlKey || event.metaKey) && !event.altKey) {
+        const target = event.target as HTMLElement | null;
+        const isInput =
+          target instanceof HTMLInputElement ||
+          target instanceof HTMLTextAreaElement ||
+          target?.isContentEditable;
+        if (!isInput) {
+          const key = event.key.toLowerCase();
+          if (key === "z") {
+            if (event.shiftKey) {
+              event.preventDefault();
+              handleRedo();
+            } else {
+              event.preventDefault();
+              handleUndo();
+            }
+            return;
+          } else if (key === "y") {
+            event.preventDefault();
+            handleRedo();
+            return;
+          }
+        }
+      }
+
       if (event.key !== "Escape") return;
       if (footPoints !== null) {
         cancelDrawing();
@@ -386,7 +507,7 @@ export function ModelPanel({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [footPoints, manualPlaceActive, treePlaceActive, obstacleMode, treeMode]);
+  }, [footPoints, manualPlaceActive, treePlaceActive, obstacleMode, treeMode, handleUndo, handleRedo]);
   // Repair an orphaned active-set id (remounts, races): the id must always
   // resolve, otherwise config edits would silently match nothing.
   useEffect(() => {
@@ -693,6 +814,17 @@ export function ModelPanel({
   const capacityKw = panelsEnabled
     ? totalSetsCapacityKw(panelSets)
     : 0;
+
+  const [isDownloadingBOM, setIsDownloadingBOM] = useState(false);
+
+  const bomSummary = useMemo(() => {
+    return generateBillOfMaterials({
+      panelCount: panelCount > 0 ? panelCount : 12,
+      panelTypeId: activeSet?.config.panelTypeId ?? "panel-550w",
+      mountingType: activeSet?.config.mounting ?? (installationType === "ground" ? "ground_fixed" : "tilted"),
+      installationType: installationType ?? "rooftop",
+    });
+  }, [panelCount, activeSet?.config.panelTypeId, activeSet?.config.mounting, installationType]);
 
   // Every placed panel with the set it belongs to, flattened for the energy
   // simulation (which prices every panel with the active set configuration).
@@ -1476,12 +1608,16 @@ export function ModelPanel({
       terrace: terraceRing, obstacles, parapetInsetM, parapetClearanceM, peers,
     });
     if (!result.valid) return result.error ?? "blocked";
-    setPanelSets((sets) => sets.map((s) => s.id !== activeSetId ? s : {
-      ...s,
-      mode: "manual",
-      userModified: true,
-      panels: [...s.panels, { index: s.panels.length, x, y, rotationDeg }],
-    }));
+    setPanelSets((sets) => {
+      const updated: PanelSet[] = sets.map((s) => s.id !== activeSetId ? s : {
+        ...s,
+        mode: "manual",
+        userModified: true,
+        panels: [...s.panels, { index: s.panels.length, x, y, rotationDeg }],
+      });
+      pushHistory(updated);
+      return updated;
+    });
     return null;
   };
 
@@ -1525,12 +1661,16 @@ export function ModelPanel({
     if (!result.valid) return result.error;
     const startIndex = activeSet.panels.length;
     const committed = result.panels.map((p, i) => ({ ...p, index: startIndex + i }));
-    setPanelSets((sets) => sets.map((s) => s.id !== activeSetId ? s : {
-      ...s,
-      mode: "manual",
-      userModified: true,
-      panels: [...s.panels, ...committed],
-    }));
+    setPanelSets((sets) => {
+      const updated: PanelSet[] = sets.map((s) => s.id !== activeSetId ? s : {
+        ...s,
+        mode: "manual",
+        userModified: true,
+        panels: [...s.panels, ...committed],
+      });
+      pushHistory(updated);
+      return updated;
+    });
     setLastSetCommit({
       setId: activeSetId,
       indices: committed.map((p) => p.index),
@@ -1551,21 +1691,29 @@ export function ModelPanel({
     if (!lastSetCommit) return;
     const { setId, indices } = lastSetCommit;
     const doomed = new Set(indices);
-    setPanelSets((sets) => sets.map((s) => {
-      if (s.id !== setId) return s;
-      const kept = s.panels.filter((p) => !doomed.has(p.index));
-      return { ...s, panels: reindexSet(kept), userModified: true };
-    }));
+    setPanelSets((sets) => {
+      const updated = sets.map((s) => {
+        if (s.id !== setId) return s;
+        const kept = s.panels.filter((p) => !doomed.has(p.index));
+        return { ...s, panels: reindexSet(kept), userModified: true };
+      });
+      pushHistory(updated);
+      return updated;
+    });
     setLastSetCommit(null);
   };
 
   /** Remove the last panel of the active set (undo for accidental placement). */
   const handleUndoLastPanel = () => {
-    setPanelSets((sets) => sets.map((s) => s.id !== activeSetId ? s : {
-      ...s,
-      panels: s.panels.slice(0, -1),
-      userModified: true,
-    }));
+    setPanelSets((sets) => {
+      const updated = sets.map((s) => s.id !== activeSetId ? s : {
+        ...s,
+        panels: s.panels.slice(0, -1),
+        userModified: true,
+      });
+      pushHistory(updated);
+      return updated;
+    });
   };
 
   // Obstacles that no longer satisfy the rules (e.g. the terrace changed).
@@ -1821,6 +1969,9 @@ export function ModelPanel({
     const rx = Math.round(x * 100) / 100;
     const ry = Math.round(y * 100) / 100;
     setPanelSets((sets) => {
+      if (!dragStartSetsRef.current) {
+        dragStartSetsRef.current = JSON.parse(JSON.stringify(sets));
+      }
       let targetSet = sets.find((s) => s.id === setId);
       if (!targetSet) {
         targetSet =
@@ -1828,13 +1979,57 @@ export function ModelPanel({
           sets.find((s) => s.panels.length > panelIndex) ??
           sets[0];
       }
-      if (!targetSet) return sets;
+      if (!targetSet || !targetSet.panels[panelIndex]) return sets;
       const targetId = targetSet.id;
+      const refPanel = targetSet.panels[panelIndex];
+      const dx = rx - refPanel.x;
+      const dy = ry - refPanel.y;
+      if (Math.abs(dx) < 1e-4 && Math.abs(dy) < 1e-4) return sets;
+
+      // Identify all panels belonging to this connected structure
+      let isConnected: (p: PlacedSetPanel, idx: number) => boolean;
+      if (refPanel.tableId) {
+        const targetTableId = refPanel.tableId;
+        isConnected = (p) => p.tableId === targetTableId;
+      } else {
+        const dims = effectivePanelDims(targetSet.config);
+        const stepU = dims.widthM + effectiveColSpacingM(targetSet.config);
+        const stepV = dims.lengthM + effectiveRowSpacingM(targetSet.config);
+        const clusterDist = Math.max(stepU, stepV) * 1.35;
+        const clusterDistSq = clusterDist * clusterDist;
+
+        const connectedIndices = new Set<number>([panelIndex]);
+        const queue = [panelIndex];
+        while (queue.length > 0) {
+          const curIdx = queue.pop()!;
+          const curP = targetSet.panels[curIdx];
+          for (let j = 0; j < targetSet.panels.length; j++) {
+            if (connectedIndices.has(j)) continue;
+            const cand = targetSet.panels[j];
+            const dX = cand.x - curP.x;
+            const dY = cand.y - curP.y;
+            if (dX * dX + dY * dY <= clusterDistSq) {
+              connectedIndices.add(j);
+              queue.push(j);
+            }
+          }
+        }
+        isConnected = (_p, idx) => connectedIndices.has(idx);
+      }
+
+      const updatedPanels = targetSet.panels.map((p, idx) => {
+        if (isConnected(p, idx)) {
+          return {
+            ...p,
+            x: Math.round((p.x + dx) * 100) / 100,
+            y: Math.round((p.y + dy) * 100) / 100,
+          };
+        }
+        return p;
+      });
+
       return sets.map((s) => {
         if (s.id !== targetId) return s;
-        const updatedPanels = s.panels.map((p, idx) =>
-          idx === panelIndex ? { ...p, x: rx, y: ry } : p,
-        );
         return {
           ...s,
           panels: updatedPanels,
@@ -1967,19 +2162,20 @@ export function ModelPanel({
     setFootError(null);
   };
 
-  const isValidateStage = stage === "validate";
-  const isReadOnlyViewport = isValidateStage || finalView;
+  const isValidateStage = stage === "validate" && Boolean(validationPanel) && !finalView;
+  const isPresentation = finalView || (stage === "validate" && !validationPanel);
+  const isReadOnlyViewport = isValidateStage || isPresentation;
 
   return (
     <div
-      className={`stage-card${finalView ? " stage-card--final-view" : ""}${isValidateStage ? " stage-card--validate-workspace" : ""}`}
+      className={`stage-card${isPresentation ? " stage-card--final-view" : ""}${isValidateStage ? " stage-card--validate-workspace" : ""}`}
     >
-      <div className={`design-layout${finalView ? " design-layout--final" : ""}`}>
-        <div className={`design-view${finalView ? " design-view--full" : ""}`}>
+      <div className={`design-layout${isPresentation ? " design-layout--final" : ""}`}>
+        <div className={`design-view${isPresentation ? " design-view--full" : ""}`}>
       {/* 3D design viewport: the dedicated inspection scene (rotation +
           elevation + zoom, building stays centred). Satellite ground texture
           replaces the void with the actual site context. */}
-      <div className={`stage-3d-viewport${finalView ? " stage-3d-viewport--full" : ""}`}>
+      <div className={`stage-3d-viewport${isPresentation ? " stage-3d-viewport--full" : ""}`}>
         <Site3DViewer
           ref={viewerRef}
           localCoords={model.coords}
@@ -2005,6 +2201,8 @@ export function ModelPanel({
           onTreeDragMove={isReadOnlyViewport ? undefined : handleTreeDragMove}
           onTreeDragEnd={isReadOnlyViewport ? undefined : handleTreeDragEnd}
           onMovePanel={isReadOnlyViewport ? undefined : handleMovePanel}
+          onMovePanelStart={isReadOnlyViewport ? undefined : handleMovePanelStart}
+          onMovePanelEnd={isReadOnlyViewport ? undefined : handleMovePanelEnd}
           manualPanelPreview={
             !isReadOnlyViewport && manualPlaceActive && panelsEnabled && activeSet
               ? {
@@ -2062,9 +2260,9 @@ export function ModelPanel({
           onDeleteObstacle={isReadOnlyViewport ? undefined : handleDeleteObstacle}
           onDeleteTree={isReadOnlyViewport ? undefined : handleDeleteTree}
           installationType={installationType}
-          className={`model-viewport${finalView ? " model-viewport--final" : ""}`}
+          className={`model-viewport${isPresentation ? " model-viewport--final" : ""}`}
         />
-        {finalView && (
+        {isPresentation && (
           <FinalModelControls
             weatherPreset={weatherPreset}
             onWeatherPresetChange={setWeatherPreset}
@@ -2084,7 +2282,7 @@ export function ModelPanel({
           />
         )}
         {/* Viewport Toolbar - floating contextual tools anchored to viewport */}
-        {!finalView && designMode && !isValidateStage && (
+        {!isPresentation && designMode && !isValidateStage && (
           <ViewportToolbar
             activeTool={activeTool}
             onToolChange={handleToolChange}
@@ -2103,11 +2301,9 @@ export function ModelPanel({
             hasSelectedObject={selectedObstacleId !== null || selectedTreeId !== null || selectedPanelInfo !== null || selectedBuilding}
             natureActive={natureActive}
             onToggleNature={handleToggleNature}
-            onExport3DModel={handleExport3DModel}
-            isExporting3D={isExporting3D}
           />
         )}
-        {!finalView && designMode && !isValidateStage && activeTool === "select" && (
+        {!isPresentation && designMode && !isValidateStage && activeTool === "select" && (
           <ObjectDetailsHUD
             activeTool={activeTool}
             onToolChange={handleToolChange}
@@ -2135,7 +2331,7 @@ export function ModelPanel({
       </div>
 
       {/* Viewport hint + camera/design-mode actions */}
-      {!finalView && !designMode && !isValidateStage && (
+      {!isPresentation && !designMode && !isValidateStage && (
         <div className="viewer-footer" style={{ marginBottom: "var(--space-3)" }}>
           <p className="viewer-help">
             <RotateCcw size={14} strokeWidth={1.75} aria-hidden="true" />
@@ -2176,7 +2372,7 @@ export function ModelPanel({
       )}
 
         </div>
-        {!finalView && (
+        {!isPresentation && (
         <div className={`design-side${isValidateStage ? " design-side--validate" : ""}`}>
         {isValidateStage ? (
           <div className="inspector-panel inspector-panel--validate" style={{ flex: 1 }}>
@@ -2385,74 +2581,7 @@ export function ModelPanel({
             </div>
           </CollapsibleSection>
 
-          {/* Sun & Shadows */}
-          <CollapsibleSection
-            id="sun"
-            title="Sun & Shadows"
-            defaultOpen={false}
-            icon={<Moon size={14} strokeWidth={1.75} aria-hidden="true" />}
-          >
-            <SunControls
-              date={sun.date}
-              timeMinutes={sun.timeMinutes}
-              playing={sun.playing}
-              state={sun.state}
-              timezoneLabel={timezoneLabel}
-              dateTimeLabel={dateTimeLabel}
-              speed={sun.speed}
-              onSpeedChange={sun.setSpeed}
-              onDateChange={sun.setDate}
-              onTimeChange={(mins) => {
-                if (shadingVisualizationActive && heatmapMode === "annual") {
-                  setHeatmapMode("instantaneous");
-                }
-                sun.setTime(mins);
-              }}
-              onTogglePlay={() => {
-                if (!sun.playing && shadingVisualizationActive) {
-                  setHeatmapMode("instantaneous");
-                }
-                sun.togglePlay();
-              }}
-            />
-            
-          </CollapsibleSection>
-
-          {/* Weather */}
-          <CollapsibleSection
-            id="weather"
-            title="Weather"
-            defaultOpen={false}
-            icon={<Sun size={14} strokeWidth={1.75} aria-hidden="true" />}
-          >
-            <div className="weather-preset-controls">
-              <div className="weather-preset-btn-group" role="group" aria-label="Weather presets">
-                <button
-                  type="button"
-                  className={"weather-preset-btn" + (weatherPreset === "sunny" ? " weather-preset-btn--active" : "")}
-                  onClick={() => setWeatherPreset("sunny")}
-                  title="Sunny: clear daylight with direct shadows"
-                >Sunny</button>
-                <button
-                  type="button"
-                  className={"weather-preset-btn" + (weatherPreset === "cloudy" ? " weather-preset-btn--active" : "")}
-                  onClick={() => setWeatherPreset("cloudy")}
-                  title="Cloudy: soft diffuse lighting"
-                >Cloudy</button>
-                <button
-                  type="button"
-                  className={"weather-preset-btn" + (weatherPreset === "rainy" ? " weather-preset-btn--active" : "")}
-                  onClick={() => setWeatherPreset("rainy")}
-                  title="Rainy: overcast lighting with light rain visualization"
-                >Rainy</button>
-              </div>
-            </div>
-            <p className="panel-group__hint" style={{ marginTop: "var(--space-2)" }}>
-              Visual simulation only: adjusts 3D lighting without affecting deterministic solar yield calculations.
-            </p>
-          </CollapsibleSection>
-
-{/* Rooftop Obstacles */}
+          {/* Trees & Obstacles */}
           <CollapsibleSection
             id="obstacles"
             title="Trees & Obstacles"
@@ -2857,6 +2986,94 @@ export function ModelPanel({
             )}
           </CollapsibleSection>
 
+          {/* 4. Sun, Shadows & Weather */}
+          <CollapsibleSection
+            id="sun"
+            title="Sun, Shadows & Weather"
+            defaultOpen={false}
+            icon={<Moon size={14} strokeWidth={1.75} aria-hidden="true" />}
+          >
+            <SunControls
+              date={sun.date}
+              timeMinutes={sun.timeMinutes}
+              playing={sun.playing}
+              state={sun.state}
+              timezoneLabel={timezoneLabel}
+              dateTimeLabel={dateTimeLabel}
+              speed={sun.speed}
+              onSpeedChange={sun.setSpeed}
+              onDateChange={sun.setDate}
+              onTimeChange={(mins) => {
+                if (shadingVisualizationActive && heatmapMode === "annual") {
+                  setHeatmapMode("instantaneous");
+                }
+                sun.setTime(mins);
+              }}
+              onTogglePlay={() => {
+                if (!sun.playing && shadingVisualizationActive) {
+                  setHeatmapMode("instantaneous");
+                }
+                sun.togglePlay();
+              }}
+            />
+
+            {/* Weather & Lighting Preset Controls */}
+            <div
+              style={{
+                marginTop: "var(--space-3)",
+                paddingTop: "var(--space-3)",
+                borderTop: "1px solid var(--color-border)",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginBottom: "var(--space-2)",
+                }}
+              >
+                <span style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--color-text)" }}>
+                  Weather &amp; Atmosphere
+                </span>
+                <span style={{ fontSize: "0.72rem", color: "var(--color-text-muted)" }}>
+                  Lighting simulation
+                </span>
+              </div>
+              <div className="weather-preset-controls">
+                <div className="weather-preset-btn-group" role="group" aria-label="Weather presets">
+                  <button
+                    type="button"
+                    className={"weather-preset-btn" + (weatherPreset === "sunny" ? " weather-preset-btn--active" : "")}
+                    onClick={() => setWeatherPreset("sunny")}
+                    title="Sunny: clear daylight with direct shadows"
+                  >
+                    Sunny
+                  </button>
+                  <button
+                    type="button"
+                    className={"weather-preset-btn" + (weatherPreset === "cloudy" ? " weather-preset-btn--active" : "")}
+                    onClick={() => setWeatherPreset("cloudy")}
+                    title="Cloudy: soft diffuse lighting"
+                  >
+                    Cloudy
+                  </button>
+                  <button
+                    type="button"
+                    className={"weather-preset-btn" + (weatherPreset === "rainy" ? " weather-preset-btn--active" : "")}
+                    onClick={() => setWeatherPreset("rainy")}
+                    title="Rainy: overcast lighting with light rain visualization"
+                  >
+                    Rainy
+                  </button>
+                </div>
+              </div>
+              <p className="panel-group__hint" style={{ marginTop: "var(--space-2)", fontSize: "0.75rem" }}>
+                Visual simulation only: adjusts 3D lighting without affecting deterministic solar yield calculations.
+              </p>
+            </div>
+          </CollapsibleSection>
+
           {/* Solar Panel Design */}
           <CollapsibleSection
             id="solar-design"
@@ -2888,6 +3105,10 @@ export function ModelPanel({
                   onAutoPlace={handleAutoPlaceSet}
                   onAutoPlaceAll={handleAutoPlaceAll}
                   onUndoLast={handleUndoLastPanel}
+                  onUndo={handleUndo}
+                  onRedo={handleRedo}
+                  canUndo={canUndo}
+                  canRedo={canRedo}
                   isPlacing={isPlacing}
                   manualPlaceActive={manualPlaceActive}
                   onToggleManualPlace={() => setManualPlaceActive((v) => !v)}
@@ -2946,25 +3167,7 @@ export function ModelPanel({
             )}
           </CollapsibleSection>
 
-          {/* Cable Specification Advisor */}
-          <CollapsibleSection
-            id="cable-recommendations"
-            title="Cable Recommendations"
-            defaultOpen={false}
-            icon={<Zap size={14} strokeWidth={1.75} aria-hidden="true" />}
-          >
-            {cableReport ? (
-              <CableAdvisorSection report={cableReport} hasPlacedPanels={panelCount > 0} />
-            ) : (
-              <div className="panel-group">
-                <p className="panel-group__hint">
-                  Enable solar panels to view electrical cable specifications and sizing recommendations.
-                </p>
-              </div>
-            )}
-          </CollapsibleSection>
-
-          {/* M4: Annual Shading Analysis & Optimization */}
+          {/* 6. M4: Annual Shading Analysis & Optimization */}
           <CollapsibleSection
             id="shading-optimization"
             title="Annual Shading & Optimization"
@@ -2996,6 +3199,149 @@ export function ModelPanel({
               isNight={Boolean(sun.state?.night || (sun.state?.elevationDeg ?? 0) <= 0)}
               isSimulatingSun={sun.playing}
             />
+          </CollapsibleSection>
+
+          {/* 7. Cable Specification Advisor */}
+          <CollapsibleSection
+            id="cable-recommendations"
+            title="Cable Recommendations"
+            defaultOpen={false}
+            icon={<Zap size={14} strokeWidth={1.75} aria-hidden="true" />}
+          >
+            {cableReport ? (
+              <CableAdvisorSection report={cableReport} hasPlacedPanels={panelCount > 0} />
+            ) : (
+              <div className="panel-group">
+                <p className="panel-group__hint">
+                  Enable solar panels to view electrical cable specifications and sizing recommendations.
+                </p>
+              </div>
+            )}
+          </CollapsibleSection>
+
+          {/* 8. Bill of Quantities (BOQ / BOM) */}
+          <CollapsibleSection
+            id="bom"
+            title="Bill of Quantities (BOQ)"
+            defaultOpen={false}
+            icon={<FileSpreadsheet size={14} strokeWidth={1.75} aria-hidden="true" />}
+          >
+            <div
+              className="bom-card"
+              style={{
+                padding: "var(--space-3)",
+                border: "1px solid var(--color-border)",
+                borderRadius: "var(--radius-md)",
+                background: "var(--color-surface-muted)",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <FileSpreadsheet size={16} strokeWidth={2} style={{ color: "var(--color-primary, #10b981)" }} />
+                  <strong style={{ fontSize: "0.88rem" }}>Bill of Materials (BOM)</strong>
+                </div>
+                <span
+                  style={{
+                    fontSize: "0.72rem",
+                    fontWeight: 600,
+                    padding: "2px 8px",
+                    borderRadius: "999px",
+                    background: "rgba(16, 185, 129, 0.15)",
+                    color: "var(--color-primary, #10b981)",
+                  }}
+                >
+                  {bomSummary.totalCapacityKwp} kWp System
+                </span>
+              </div>
+              <p
+                className="stage-card__body"
+                style={{ fontSize: "0.8rem", marginBottom: "var(--space-2)", color: "var(--color-text-muted)" }}
+              >
+                Complete turnkey components list (ALMM solar modules, mounting structure, inverter, AC/DC cabling, protection boxes, earthing &amp; PM Surya Ghar subsidy) in CSV format.
+              </p>
+
+              {/* Financial & Capacity Summary Grid */}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(3, 1fr)",
+                  gap: "8px",
+                  background: "var(--color-surface)",
+                  padding: "8px 10px",
+                  borderRadius: "6px",
+                  border: "1px solid var(--color-border)",
+                  marginBottom: "12px",
+                  fontSize: "0.75rem",
+                }}
+              >
+                <div>
+                  <div style={{ color: "var(--color-text-muted)", fontSize: "0.7rem" }}>Modules</div>
+                  <strong style={{ color: "var(--color-text)" }}>
+                    {panelCount > 0 ? `${bomSummary.moduleCount} Nos` : `${bomSummary.moduleCount} Nos (Est.)`}
+                  </strong>
+                </div>
+                <div>
+                  <div style={{ color: "var(--color-text-muted)", fontSize: "0.7rem" }}>Est. Turnkey</div>
+                  <strong style={{ color: "var(--color-text)" }}>
+                    ₹{bomSummary.grossTotalInr.toLocaleString("en-IN")}
+                  </strong>
+                </div>
+                <div>
+                  <div style={{ color: "var(--color-text-muted)", fontSize: "0.7rem" }}>
+                    {bomSummary.subsidyInr > 0 ? "Net Payable" : "Total (INR)"}
+                  </div>
+                  <strong style={{ color: "var(--color-primary, #10b981)" }}>
+                    ₹{bomSummary.netPayableInr.toLocaleString("en-IN")}
+                  </strong>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="btn btn--secondary"
+                disabled={isDownloadingBOM}
+                onClick={() => {
+                  setIsDownloadingBOM(true);
+                  setTimeout(() => {
+                    try {
+                      downloadBillOfMaterialsCSV({
+                        panelCount: panelCount > 0 ? panelCount : 12,
+                        panelTypeId: activeSet?.config.panelTypeId ?? "panel-550w",
+                        mountingType: activeSet?.config.mounting ?? (installationType === "ground" ? "ground_fixed" : "tilted"),
+                        installationType: installationType ?? "rooftop",
+                      });
+                    } finally {
+                      setIsDownloadingBOM(false);
+                    }
+                  }, 150);
+                }}
+                title="Download Bill of Materials CSV"
+                style={{ width: "100%", justifyContent: "center" }}
+              >
+                {isDownloadingBOM ? (
+                  <Loader2 size={14} className="spin" aria-hidden="true" />
+                ) : (
+                  <Download size={14} strokeWidth={2} aria-hidden="true" />
+                )}
+                {isDownloadingBOM ? "Generating CSV…" : "Download Bill of Materials (CSV)"}
+              </button>
+
+              <button
+                type="button"
+                className="btn btn--secondary"
+                disabled={isExporting3D}
+                onClick={handleExport3DModel}
+                title="Export complete 3D solar installation as a GLB model"
+                style={{ width: "100%", justifyContent: "center", marginTop: "6px" }}
+              >
+                {isExporting3D ? (
+                  <Loader2 size={14} className="spin" aria-hidden="true" />
+                ) : (
+                  <Download size={14} strokeWidth={2} aria-hidden="true" />
+                )}
+                <span>{isExporting3D ? "Exporting GLB Model…" : "Export 3D Model (GLB)"}</span>
+              </button>
+            </div>
           </CollapsibleSection>
 
           </div>
@@ -3045,6 +3391,7 @@ export function ModelPanel({
               <button
                 type="button"
                 className="btn btn--primary"
+                aria-label="Continue to Validate &amp; Presentation View"
                 onClick={() => {
                   setIsContinuingValidate(true);
                   runWithYield(() => {
@@ -3056,14 +3403,14 @@ export function ModelPanel({
                   });
                 }}
                 disabled={!backendReady || isContinuingValidate}
-                title={!backendReady ? BACKEND_WAITING_LABEL : "Continue to surface validation"}
+                title={!backendReady ? BACKEND_WAITING_LABEL : "Proceed to Presentation View"}
               >
                 {isContinuingValidate ? (
                   <Loader2 size={15} className="spin" aria-hidden="true" />
                 ) : (
                   <ArrowRight size={15} strokeWidth={2} aria-hidden="true" />
                 )}
-                {isContinuingValidate ? "Loading Assessment…" : "Continue to Validate"}
+                {isContinuingValidate ? "Opening Presentation…" : "Presentation View"}
               </button>
             </div>
 

@@ -89,6 +89,12 @@ interface SolarPanelSectionProps {
   /** Undo the most recently committed whole set. */
   onUndoLastSet?: () => void;
   canUndoLastSet?: boolean;
+  /** Undo placement/move (Ctrl+Z) */
+  onUndo?: () => void;
+  /** Redo placement/move (Ctrl+Y) */
+  onRedo?: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
   panelCount: number;
   capacityKw: number;
   /** Zero-panel explanation, or an invalid-configuration error. */
@@ -288,6 +294,10 @@ export function SolarPanelSection({
   onRotateSet,
   onUndoLastSet,
   canUndoLastSet = false,
+  onUndo,
+  onRedo,
+  canUndo,
+  canRedo,
   panelCount,
   capacityKw,
   warning,
@@ -583,12 +593,23 @@ export function SolarPanelSection({
         <button
           type="button"
           className="btn btn--secondary"
-          onClick={onUndoLast}
-          disabled={isPlacing || !activeSet || activeSet.panels.length === 0}
-          title="Undo the most recent manual placement"
+          onClick={onUndo ?? onUndoLast}
+          disabled={isPlacing || (canUndo !== undefined ? !canUndo : (!activeSet || activeSet.panels.length === 0))}
+          title="Undo last placement or move (Ctrl+Z)"
         >
-          Undo last panel
+          Undo (Ctrl+Z)
         </button>
+        {onRedo && (
+          <button
+            type="button"
+            className="btn btn--secondary"
+            onClick={onRedo}
+            disabled={isPlacing || !canRedo}
+            title="Redo placement or move (Ctrl+Y)"
+          >
+            Redo (Ctrl+Y)
+          </button>
+        )}
       </div>
 
       {/* Manual placement mode. Two granularities share one roof-click stream:
