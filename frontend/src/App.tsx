@@ -23,9 +23,7 @@ import { BACKEND_WAITING_LABEL, useBackendReady } from "./hooks/useBackendStatus
 import { formatPlaceContext } from "./services/geocode";
 import { KOLKATA_PLACE } from "./config/locations";
 import { SelectionPanel } from "./components/selection/SelectionPanel";
-import { ValidatePanel } from "./components/analysis/ValidatePanel";
 import type { LocationResult } from "./types";
-import type { SegmentationModel } from "./services/analysis";
 import type { InstallationType } from "./lib/3d/panels";
 import { ensureBackendAwake } from "./services/backendStatus";
 
@@ -75,11 +73,7 @@ export default function App() {
   // Rooftop obstacles: application state, cleared with the selection so a new
   // site never inherits another rooftop's objects (AGENTS.md §40).
   const obstacleStore = useObstacles();
-  // Segmentation model persists across stages; validation only runs when the
-  // user clicks "Proceed with analysis". Default: Tiny (sam2_tiny).
-  const [segmentationModel, setSegmentationModel] = useState<SegmentationModel>("sam2_tiny");
-  // Validation state lives here so tab switches (which unmount ValidatePanel)
-  // never lose the result. Reset is the explicit way to clear it.
+  // Validation state lives here so tab switches never lose the result.
   const validation = useValidation();
   // Mobile bottom-sheet state. Desktop ignores it (CSS-gated below 600px).
   const sheetCtl = useBottomSheet("partial");
@@ -202,7 +196,6 @@ export default function App() {
     setParapetHeight(null);
     obstacleStore.clear();
     setNearbyBuildingFlow(null);
-    setSegmentationModel("sam2_tiny");
     setStage("select");
     setDesignMode(false);
     setFinalView(false);
@@ -458,7 +451,7 @@ export default function App() {
                   ? "Select"
                   : s === "model"
                     ? "Model & 3D"
-                    : "Validate",
+                    : "Validate / Presentation View",
               disabled:
                 s === "select"
                   ? false
@@ -468,10 +461,14 @@ export default function App() {
             onSelect={(id) => {
               const nextStage = id as Stage;
               setStage(nextStage);
-              setFinalView(false);
               if (nextStage === "select") {
                 setDesignMode(false);
+                setFinalView(false);
               } else if (nextStage === "validate") {
+                setDesignMode(true);
+                setFinalView(true);
+              } else if (nextStage === "model") {
+                setFinalView(false);
                 setDesignMode(true);
               }
             }}
@@ -683,7 +680,7 @@ export default function App() {
                     onSetParapetClearance={setParapetClearance}
                     onContinue={() => {
                       setDesignMode(true);
-                      setFinalView(false);
+                      setFinalView(true);
                       setStage("validate");
                     }}
                     backendReady={backendReady}
@@ -696,7 +693,11 @@ export default function App() {
                     onEnterDesign={() => setDesignMode(true)}
                     onExitDesign={() => setDesignMode(false)}
                     finalView={finalView}
-                    onBackToDesign={() => setFinalView(false)}
+                    onBackToDesign={() => {
+                      setFinalView(false);
+                      setStage("model");
+                      setDesignMode(true);
+                    }}
                     onBackToMap={() => {
                       setFinalView(false);
                       setDesignMode(false);
@@ -706,31 +707,7 @@ export default function App() {
                     hasAnalysisData={hasAnalysisData}
                     stage={stage === "validate" ? "validate" : "model"}
                     onStartAddNearbyBuilding={handleStartAddNearbyBuilding}
-                    validationPanel={
-                      <ValidatePanel
-                        snapshot={validation.snapshot}
-                        elapsed={validation.elapsed}
-                        segmentationModel={segmentationModel}
-                        onSegmentationModelChange={setSegmentationModel}
-                        onProceed={(model) => validation.proceed(selection.vertices, model)}
-                        onContinue={() => {
-                          setStage("model");
-                          setDesignMode(true);
-                          setFinalView(true);
-                        }}
-                        onRedraw={() => {
-                          setFinalView(false);
-                          setDesignMode(false);
-                          setStage("select");
-                        }}
-                        onBackToModel={() => {
-                          setStage("model");
-                          setFinalView(false);
-                        }}
-                        backendReady={backendReady}
-                        installationType={installationType}
-                      />
-                    }
+                    validationPanel={undefined}
                   />
                 </Suspense>
               )}
